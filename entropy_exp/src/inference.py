@@ -169,9 +169,9 @@ def run_inference(config: dict, dataset_name: str, max_samples: int = None):
         v_token_num = capture_cfg.get("v_token_num", 576)
         total_time = 0.0
 
-        for (input_ids, image_tensor, image_sizes), line in tqdm(
+        for sample_idx, ((input_ids, image_tensor, image_sizes), line) in enumerate(tqdm(
             zip(data_loader, questions), total=len(questions), desc=f"[{dataset_name}]"
-        ):
+        )):
             question_id = line["question_id"]
             image_file = line["image"]
 
@@ -223,8 +223,10 @@ def run_inference(config: dict, dataset_name: str, max_samples: int = None):
                 "question": line["text"],
             }
 
+            # Sanitize question_id: replace / with __ to avoid nested HDF5 groups
+            safe_qid = str(question_id).replace("/", "__")
             hook.save_sample(
-                sample_id=f"sample_{question_id}",
+                sample_id=f"sample_{sample_idx:06d}_{safe_qid}",
                 attentions=outputs.attentions,
                 v_token_start=v_token_start,
                 v_token_num=v_token_num,

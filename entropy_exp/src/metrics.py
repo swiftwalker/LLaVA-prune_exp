@@ -128,9 +128,39 @@ def topk_concentration(scores: np.ndarray, k: int = 64, axis: int = -1) -> np.nd
     return topk_sum / total_sum
 
 
+def matrix_rank(attn_matrix: np.ndarray, tol_ratio: float = 0.01) -> dict:
+    """
+    Compute the numerical rank of a 2D attention matrix.
+
+    Uses SVD to determine the effective rank. A singular value is considered
+    significant if it exceeds tol_ratio * max_singular_value.
+
+    Args:
+        attn_matrix: [L_t, L_v] text→vision attention matrix (head-averaged)
+        tol_ratio: threshold ratio relative to the largest singular value
+
+    Returns:
+        dict with keys:
+            - attn_rank: effective numerical rank
+            - attn_rank_ratio: rank / min(L_t, L_v), i.e. fraction of full rank
+            - attn_sv_top1_ratio: top singular value / sum, measures dominance
+    """
+    sv = np.linalg.svd(attn_matrix.astype(np.float32), compute_uv=False)
+    tol = tol_ratio * sv[0]
+    rank = int(np.sum(sv > tol))
+    min_dim = min(attn_matrix.shape)
+    sv_sum = float(sv.sum()) if sv.sum() > 0 else 1e-12
+    return {
+        "attn_rank": rank,
+        "attn_rank_ratio": rank / max(min_dim, 1),
+        "attn_sv_top1_ratio": float(sv[0]) / sv_sum,
+    }
+
+
 def compute_all_metrics(
     prune_scores: np.ndarray,
     topk_values: Optional[list] = None,
+    tv_attn: Optional[np.ndarray] = None,
 ) -> dict:
     """
     Compute all entropy/distribution metrics from prune scores.
@@ -138,9 +168,11 @@ def compute_all_metrics(
     Args:
         prune_scores: [L_v] importance scores per visual token (one layer, one sample)
         topk_values: list of K values for top-k concentration (default: [32, 64, 128])
+        tv_attn: optional [L_t, L_v] attention matrix for rank computation
 
     Returns:
-        dict with keys: shannon, renyi_2, gini, topk_{k} for each k
+        dict with keys: shannon, renyi_2, gini, topk_{k} for each k,
+                        and attn_rank, attn_rank_ratio, attn_sv_top1_ratio if tv_attn is provided
     """
     if topk_values is None:
         topk_values = [32, 64, 128]
@@ -156,6 +188,9 @@ def compute_all_metrics(
 
     for k in topk_values:
         results[f"topk_{k}"] = float(topk_concentration(prune_scores, k=k))
+
+    if tv_attn is not None:
+        results.update(matrix_rank(tv_attn))
 
     return results
 

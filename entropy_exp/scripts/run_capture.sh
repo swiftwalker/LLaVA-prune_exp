@@ -20,8 +20,6 @@ LLAVA_ROOT="$(dirname "$PROJECT_DIR")"
 
 cd "$LLAVA_ROOT"
 
-export CUDA_VISIBLE_DEVICES=0
-
 DATASET="${1:-mme}"
 MAX_SAMPLES="${2:-}"
 

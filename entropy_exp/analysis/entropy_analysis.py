@@ -44,12 +44,30 @@ def analyze_h5_file(h5_path: str, topk_values: list = None) -> pd.DataFrame:
 
     rows = []
 
-    with h5py.File(h5_path, 'r') as f:
-        sample_keys = [k for k in f.keys() if k.startswith("sample_")]
-        print(f"  Found {len(sample_keys)} samples in {os.path.basename(h5_path)}")
+    def _find_sample_groups(group, prefix=""):
+        """Recursively find groups that contain layer_* children (the actual sample data)."""
+        results = []
+        has_layers = any(k.startswith("layer_") for k in group.keys())
+        if has_layers:
+            results.append((prefix, group))
+        else:
+            for k in group.keys():
+                child = group[k]
+                if isinstance(child, h5py.Group):
+                    child_path = f"{prefix}/{k}" if prefix else k
+                    results.extend(_find_sample_groups(child, child_path))
+        return results
 
-        for sample_key in tqdm(sample_keys, desc="  Computing metrics"):
-            grp = f[sample_key]
+    with h5py.File(h5_path, 'r') as f:
+        # Find all sample groups, handling both flat (sample_xxx/layer_*)
+        # and nested (sample_xxx/subpath/layer_*) HDF5 structures
+        sample_entries = []
+        for k in f.keys():
+            if k.startswith("sample_"):
+                sample_entries.extend(_find_sample_groups(f[k], k))
+        print(f"  Found {len(sample_entries)} samples in {os.path.basename(h5_path)}")
+
+        for sample_key, grp in tqdm(sample_entries, desc="  Computing metrics"):
             question_id = grp.attrs.get("question_id", "")
             image_file = grp.attrs.get("image_file", "")
 
@@ -62,18 +80,24 @@ def analyze_h5_file(h5_path: str, topk_values: list = None) -> pd.DataFrame:
                 layer_idx = int(layer_key.split("_")[1])
                 layer_grp = grp[layer_key]
 
+                # Load tv_attn matrix for rank computation
+                tv_attn_2d = None
+                if "tv_attn" in layer_grp:
+                    tv_attn = layer_grp["tv_attn"][:]
+                    if tv_attn.ndim == 3:
+                        tv_attn_2d = tv_attn.mean(axis=0)  # head mean → [L_t, L_v]
+                    else:
+                        tv_attn_2d = tv_attn  # already [L_t, L_v]
+
                 # Use pre-computed prune_scores if available, else compute from tv_attn
                 if "prune_scores" in layer_grp:
                     prune_scores = layer_grp["prune_scores"][:]
-                elif "tv_attn" in layer_grp:
-                    tv_attn = layer_grp["tv_attn"][:]
-                    if tv_attn.ndim == 3:
-                        tv_attn = tv_attn.mean(axis=0)  # head mean
-                    prune_scores = tv_attn.mean(axis=0)  # text mean → [L_v]
+                elif tv_attn_2d is not None:
+                    prune_scores = tv_attn_2d.mean(axis=0)  # text mean → [L_v]
                 else:
                     continue
 
-                metrics = compute_all_metrics(prune_scores, topk_values)
+                metrics = compute_all_metrics(prune_scores, topk_values, tv_attn=tv_attn_2d)
 
                 row = {
                     "sample_id": sample_key,
@@ -97,8 +121,9 @@ def compute_entropy_delta(df: pd.DataFrame) -> pd.DataFrame:
     Adds columns: shannon_delta, renyi_2_delta, gini_delta.
     """
     df = df.sort_values(["sample_id", "layer"]).copy()
-    for metric in ["shannon", "renyi_2", "gini"]:
-        df[f"{metric}_delta"] = df.groupby("sample_id")[metric].diff()
+    for metric in ["shannon", "renyi_2", "gini", "attn_rank"]:
+        if metric in df.columns:
+            df[f"{metric}_delta"] = df.groupby("sample_id")[metric].diff()
     return df
 
 
@@ -110,7 +135,8 @@ def compute_summary_stats(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame indexed by layer with mean/std/median/min/max for each metric.
     """
     metrics = ["shannon", "renyi_2", "gini", "topk_32", "topk_64", "topk_128",
-               "shannon_delta", "renyi_2_delta", "gini_delta"]
+               "attn_rank", "attn_rank_ratio", "attn_sv_top1_ratio",
+               "shannon_delta", "renyi_2_delta", "gini_delta", "attn_rank_delta"]
     available_metrics = [m for m in metrics if m in df.columns]
 
     agg_funcs = ["mean", "std", "median", "min", "max"]
@@ -150,35 +176,62 @@ def main():
         print(f"\nProcessing: {h5_path}")
         df = analyze_h5_file(h5_path, args.topk)
         # Tag with source file
-        df["source_file"] = os.path.basename(h5_path)
-        # Extract dataset name from filename (e.g., gqa_20260305_120000.h5 → gqa)
         basename = os.path.basename(h5_path)
+        df["source_file"] = basename
+        # Extract dataset name from filename (e.g., gqa_20260305_120000.h5 → gqa)
         dataset_name = basename.split("_")[0] if "_" in basename else basename.replace(".h5", "")
         df["dataset"] = dataset_name
+
+        # Create per-file subdirectory: processed/<h5_stem>/
+        file_stem = basename.replace(".h5", "")
+        file_output_dir = os.path.join(args.output, file_stem)
+        os.makedirs(file_output_dir, exist_ok=True)
+
+        # Compute delta per file (groupby sample_id within this file)
+        df = compute_entropy_delta(df)
+
+        # Save per-file detailed results
+        detail_path = os.path.join(file_output_dir, "per_sample_layer.csv")
+        df.to_csv(detail_path, index=False)
+        print(f"  Detail: {detail_path}  ({len(df)} rows, {df['sample_id'].nunique()} samples × {df['layer'].nunique()} layers)")
+
+        # Save per-file summary
+        summary = compute_summary_stats(df)
+        summary_path = os.path.join(file_output_dir, "summary.csv")
+        summary.to_csv(summary_path)
+        print(f"  Summary: {summary_path}")
+
         all_dfs.append(df)
 
-    # Merge all
-    combined = pd.concat(all_dfs, ignore_index=True)
-    combined = compute_entropy_delta(combined)
+    # Cross-file aggregation (only when multiple files)
+    if len(all_dfs) > 1:
+        combined = pd.concat(all_dfs, ignore_index=True)
 
-    # Save per-sample detailed results
-    detail_path = os.path.join(args.output, "entropy_per_sample_layer.csv")
-    combined.to_csv(detail_path, index=False)
-    print(f"\nDetailed results: {detail_path}")
-    print(f"  {len(combined)} rows ({combined['sample_id'].nunique()} samples × {combined['layer'].nunique()} layers)")
+        # Save merged results under processed/merged/
+        merged_dir = os.path.join(args.output, "merged")
+        os.makedirs(merged_dir, exist_ok=True)
 
-    # Save per-layer summary (per dataset)
-    for dataset_name, ddf in combined.groupby("dataset"):
-        summary = compute_summary_stats(ddf)
-        summary_path = os.path.join(args.output, f"entropy_summary_{dataset_name}.csv")
-        summary.to_csv(summary_path)
-        print(f"  Summary ({dataset_name}): {summary_path}")
+        detail_all_path = os.path.join(merged_dir, "per_sample_layer.csv")
+        combined.to_csv(detail_all_path, index=False)
+        print(f"\nMerged detail: {detail_all_path}")
+        print(f"  {len(combined)} rows ({combined['sample_id'].nunique()} samples × {combined['layer'].nunique()} layers)")
 
-    # Save cross-dataset summary
-    summary_all = compute_summary_stats(combined)
-    summary_all_path = os.path.join(args.output, "entropy_summary_all.csv")
-    summary_all.to_csv(summary_all_path)
-    print(f"  Summary (all): {summary_all_path}")
+        # Save per-dataset summary
+        for ds_name, ddf in combined.groupby("dataset"):
+            ds_dir = os.path.join(merged_dir, ds_name)
+            os.makedirs(ds_dir, exist_ok=True)
+            summary = compute_summary_stats(ddf)
+            summary_path = os.path.join(ds_dir, "summary.csv")
+            summary.to_csv(summary_path)
+            print(f"  Summary ({ds_name}): {summary_path}")
+
+        # Save cross-dataset summary
+        summary_all = compute_summary_stats(combined)
+        summary_all_path = os.path.join(merged_dir, "summary.csv")
+        summary_all.to_csv(summary_all_path)
+        print(f"  Summary (all): {summary_all_path}")
+    else:
+        print("\nSingle file processed, skipping cross-file aggregation.")
 
 
 if __name__ == "__main__":
