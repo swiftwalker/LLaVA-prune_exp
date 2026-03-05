@@ -1,0 +1,179 @@
+"""
+Entropy and attention distribution metrics for entropy experiment.
+
+Computes Shannon entropy, Rényi entropy, Gini coefficient, and Top-K concentration
+from text→vision attention sub-matrices or prune scores.
+"""
+
+import numpy as np
+from typing import Optional
+
+
+def normalize_to_distribution(scores: np.ndarray, axis: int = -1, eps: float = 1e-12) -> np.ndarray:
+    """
+    Normalize scores to a valid probability distribution along the given axis.
+
+    Args:
+        scores: array of non-negative values
+        axis: axis along which to normalize
+        eps: small constant to avoid division by zero
+
+    Returns:
+        Normalized probability distribution (sums to 1 along axis)
+    """
+    scores = np.maximum(scores, 0)  # ensure non-negative
+    total = scores.sum(axis=axis, keepdims=True)
+    total = np.maximum(total, eps)
+    return scores / total
+
+
+def shannon_entropy(probs: np.ndarray, axis: int = -1) -> np.ndarray:
+    """
+    Compute Shannon entropy H(p) = -sum(p * log2(p)).
+
+    Args:
+        probs: probability distribution (should sum to 1 along axis)
+        axis: axis along which to compute entropy
+
+    Returns:
+        Entropy values. Shape is probs.shape with the specified axis removed.
+    """
+    p = np.clip(probs, 1e-12, 1.0)
+    return -np.sum(p * np.log2(p), axis=axis)
+
+
+def renyi_entropy(probs: np.ndarray, alpha: float = 2.0, axis: int = -1) -> np.ndarray:
+    """
+    Compute Rényi entropy H_α(p) = 1/(1-α) * log2(sum(p^α)).
+
+    For α=2, this is related to collision entropy.
+    More sensitive to concentrated distributions than Shannon entropy.
+
+    Args:
+        probs: probability distribution
+        alpha: order of Rényi entropy (must not be 1)
+        axis: axis along which to compute
+
+    Returns:
+        Rényi entropy values.
+    """
+    if abs(alpha - 1.0) < 1e-6:
+        return shannon_entropy(probs, axis=axis)
+
+    p = np.clip(probs, 1e-12, 1.0)
+    return (1.0 / (1.0 - alpha)) * np.log2(np.sum(p ** alpha, axis=axis))
+
+
+def gini_coefficient(scores: np.ndarray, axis: int = -1) -> np.ndarray:
+    """
+    Compute Gini coefficient measuring inequality of the distribution.
+    G = 0 means perfectly uniform, G → 1 means maximally concentrated.
+
+    Args:
+        scores: non-negative values (need not be normalized)
+        axis: axis along which to compute
+
+    Returns:
+        Gini coefficient values in [0, 1).
+    """
+    # Sort along axis
+    sorted_scores = np.sort(scores, axis=axis)
+    n = sorted_scores.shape[axis]
+    if n <= 1:
+        return np.zeros(sorted_scores.shape[:axis] + sorted_scores.shape[axis+1:])
+
+    # Gini = (2 * sum(i * x_i)) / (n * sum(x_i)) - (n+1)/n
+    indices = np.arange(1, n + 1)
+    # Reshape indices for broadcasting
+    shape = [1] * sorted_scores.ndim
+    shape[axis] = n
+    indices = indices.reshape(shape)
+
+    total = np.sum(sorted_scores, axis=axis, keepdims=True)
+    total = np.maximum(total, 1e-12)
+
+    weighted_sum = np.sum(indices * sorted_scores, axis=axis)
+    total_sum = total.squeeze(axis)
+
+    return (2.0 * weighted_sum) / (n * total_sum) - (n + 1.0) / n
+
+
+def topk_concentration(scores: np.ndarray, k: int = 64, axis: int = -1) -> np.ndarray:
+    """
+    Compute Top-K concentration: fraction of total mass in the top K values.
+
+    Args:
+        scores: non-negative values
+        k: number of top elements
+        axis: axis along which to compute
+
+    Returns:
+        Concentration ratio in [0, 1].
+    """
+    n = scores.shape[axis]
+    k = min(k, n)
+
+    # Partition to find top-k values
+    # np.partition is O(n) vs O(n log n) for full sort
+    neg_scores = -scores  # negate because partition gives smallest
+    partitioned = np.partition(neg_scores, k, axis=axis)
+    # Take the first k elements (which are the k largest after negation)
+    slices = [slice(None)] * scores.ndim
+    slices[axis] = slice(0, k)
+    topk_values = -partitioned[tuple(slices)]
+
+    topk_sum = np.sum(topk_values, axis=axis)
+    total_sum = np.maximum(np.sum(scores, axis=axis), 1e-12)
+
+    return topk_sum / total_sum
+
+
+def compute_all_metrics(
+    prune_scores: np.ndarray,
+    topk_values: Optional[list] = None,
+) -> dict:
+    """
+    Compute all entropy/distribution metrics from prune scores.
+
+    Args:
+        prune_scores: [L_v] importance scores per visual token (one layer, one sample)
+        topk_values: list of K values for top-k concentration (default: [32, 64, 128])
+
+    Returns:
+        dict with keys: shannon, renyi_2, gini, topk_{k} for each k
+    """
+    if topk_values is None:
+        topk_values = [32, 64, 128]
+
+    # Normalize to probability distribution
+    probs = normalize_to_distribution(prune_scores)
+
+    results = {
+        "shannon": float(shannon_entropy(probs)),
+        "renyi_2": float(renyi_entropy(probs, alpha=2.0)),
+        "gini": float(gini_coefficient(prune_scores)),
+    }
+
+    for k in topk_values:
+        results[f"topk_{k}"] = float(topk_concentration(prune_scores, k=k))
+
+    return results
+
+
+def compute_layer_metrics_batch(
+    prune_scores_per_layer: dict,
+    topk_values: Optional[list] = None,
+) -> dict:
+    """
+    Compute metrics for all layers of one sample.
+
+    Args:
+        prune_scores_per_layer: {layer_idx: np.ndarray of shape [L_v]}
+
+    Returns:
+        {layer_idx: {metric_name: value}}
+    """
+    results = {}
+    for layer_idx, scores in prune_scores_per_layer.items():
+        results[layer_idx] = compute_all_metrics(scores, topk_values)
+    return results

@@ -1,0 +1,45 @@
+# Entropy Experiment Configuration
+# ================================
+
+model:
+  path: "entropy_exp/models/llava-v1.5-7b"
+  name: "llava-v1.5-7b"
+  attn_implementation: "eager"  # eager: output full attn weights; sdpa: fast but no attn output
+
+inference:
+  temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
+  conv_mode: "vicuna_v1"
+  seed: 42
+
+capture:
+  mode: "capture"              # capture | prune (future)
+  layers: "all"                # all | list of int e.g. [2, 6, 15]
+  head_reduction: "none"       # none: keep all heads [H, Lt, Lv]; mean: average over heads [Lt, Lv]
+  precision: "fp16"
+  compression: "gzip"
+  compression_opts: 4
+  max_samples: null            # null = all samples; set to int for debugging
+  v_token_num: 576             # LLaVA-1.5 default: 24x24 patches
+
+datasets:
+  gqa:
+    question_file: "entropy_exp/eval_questions/gqa/llava_gqa_testdev_balanced.jsonl"
+    image_folder: "entropy_exp/datasets/gqa/images"
+    eval_script: "gqa"
+  mme:
+    question_file: "entropy_exp/eval_questions/MME/llava_mme.jsonl"
+    image_folder: "entropy_exp/datasets/MME_Benchmark_release_version"
+    eval_script: "mme"
+  pope:
+    question_file: "entropy_exp/eval_questions/pope/llava_pope_test.jsonl"
+    image_folder: "entropy_exp/datasets/pope/val2014"
+    eval_script: "pope"
+
+output:
+  base_dir: "entropy_exp/outputs"
+  raw_dir: "entropy_exp/outputs/raw"
+  processed_dir: "entropy_exp/outputs/processed"
+  answers_dir: "entropy_exp/outputs/answers"

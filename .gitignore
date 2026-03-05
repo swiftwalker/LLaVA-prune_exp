@@ -33,3 +33,25 @@ ckpts*
 
 # Demo
 serve_images/
+
+# Evaluation data (images, answers, tsv, etc.)
+playground/data/
+
+# Large binary / data files
+*.h5
+*.hdf5
+*.pth
+*.bin
+*.safetensors
+profile_*.json
+
+# Entropy experiment — symlinked data/model directories
+entropy_exp/models
+entropy_exp/datasets
+entropy_exp/eval_questions
+
+# Entropy experiment — outputs (HDF5, CSV, figures, answers)
+entropy_exp/outputs/raw/
+entropy_exp/outputs/processed/
+entropy_exp/outputs/answers/
+entropy_exp/outputs/figures/
