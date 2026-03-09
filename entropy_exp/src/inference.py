@@ -176,7 +176,11 @@ def run_inference(config: dict, dataset_name: str, max_samples: int = None):
             image_file = line["image"]
 
             # Locate image token position BEFORE multimodal preparation
-            v_token_start, _, text_token_start = locate_image_tokens(input_ids, IMAGE_TOKEN_INDEX)
+            v_token_start, _, text_token_start = locate_image_tokens(
+                input_ids, IMAGE_TOKEN_INDEX, v_token_num=v_token_num
+            )
+            # Expected sequence length after replacing one IMAGE token with v_token_num vision tokens
+            expected_seq_len = v_token_start + v_token_num + (input_ids.shape[1] - (v_token_start + 1))
 
             input_ids = input_ids.to(device='cuda', non_blocking=True)
             image_tensor = image_tensor.to(dtype=torch.float16, device='cuda', non_blocking=True)
@@ -198,6 +202,15 @@ def run_inference(config: dict, dataset_name: str, max_samples: int = None):
                 )
             t1 = time.time()
             total_time += (t1 - t0)
+
+            # Validate multimodal expansion length against prefill attention length
+            prefill_seq_len = outputs.attentions[0][0].shape[-1]
+            if prefill_seq_len != expected_seq_len:
+                raise RuntimeError(
+                    f"Expanded sequence length mismatch for question_id={question_id}: "
+                    f"expected {expected_seq_len}, got {prefill_seq_len}. "
+                    f"Check v_token_num (configured={v_token_num})."
+                )
 
             # Decode answer
             generated_ids = outputs.sequences

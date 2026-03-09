@@ -1,4 +1,13 @@
-# 熵变趋势分析实验 — 设计与实现文档
+# 实验设计与实现文档
+
+本文档覆盖两个阶段的实验：
+
+- **阶段 1（entropy-exp 分支）**：熵变趋势分析 — 捕获注意力数据、离线计算指标
+- **阶段 2（prune-exp 分支）**：视觉 token 剪枝实验 — 对比不同剪枝策略的性能与效率
+
+---
+
+# 阶段 1：熵变趋势分析
 
 ## 一、研究问题
 
@@ -69,18 +78,16 @@
 │   ├── metrics.py       # Shannon/Rényi 熵、Gini、Top-K 计算
 │   └── eval_datasets.py # GQA/MME/POPE 评测脚本整合
 ├── analysis/
-│   ├── entropy_analysis.py   # 离线指标提取（HDF5 → CSV）
-│   └── visualize.py          # 可视化绘图（6 种图表）
+│   └── entropy_analysis.py   # 离线指标提取（HDF5 → CSV）
 ├── outputs/
 │   ├── raw/             # HDF5 原始注意力数据
 │   ├── processed/       # 指标 CSV 文件
-│   ├── answers/         # 推理答案 JSONL（兼容现有评测）
-│   └── figures/         # 可视化图表
+│   └── answers/         # 推理答案 JSONL（兼容现有评测）
 ├── configs/
 │   └── default.yaml     # 实验配置文件
 └── scripts/
     ├── run_capture.sh   # 一键推理+捕获
-    ├── run_analysis.sh  # 一键离线分析+可视化
+    ├── run_analysis.sh  # 一键离线分析（不含可视化）
     └── run_eval.sh      # 一键评测
 ```
 
@@ -92,7 +99,7 @@
   - `extract_tv_submatrix()`: 从完整 attention `[B,H,L,L]` 中切出 `[H, L_t, L_v]` 或 `[L_t, L_v]`
   - `compute_prune_scores()`: head 均值 → text 均值 → 每个 visual token 的重要性分数 `[L_v]`
   - `save_sample()`: 处理 `model.generate()` 的 `output_attentions` 输出，仅取 prefill 阶段
-- **`locate_image_tokens()`**: 从 input_ids 中定位 IMAGE_TOKEN 位置，推算 `v_token_start` 和 `text_token_start`
+- **`locate_image_tokens()`**: 从 input_ids 中定位 IMAGE_TOKEN 位置，结合配置 `v_token_num` 推算 `v_token_start` 和 `text_token_start`
 
 #### `src/inference.py` — 推理主流程
 
@@ -111,21 +118,10 @@
 
 #### `analysis/entropy_analysis.py` — 离线分析
 
-- 读取 HDF5 → 对每个 (sample, layer) 计算全部指标 → 输出 `entropy_per_sample_layer.csv`
-- 计算层间熵变（差分）
-- 输出每数据集、全数据集的 summary 统计
-
-#### `analysis/visualize.py` — 可视化
-
-生成 6 类图表：
-
-| 图表 | 描述 | 对应问题 |
-|:---|:---|:---|
-| `*_overlay.png` | 样本级熵曲线叠加图 | Q2: 样本间一致性 |
-| `*_mean_band.png` | 均值±σ 带状图 | 整体趋势 |
-| `*_entropy_delta.png` | 熵变曲线 + 关键层分布直方图 | Q1: 最佳剪枝点 |
-| `cross_dataset_comparison.png` | 跨数据集对比 | Q2: 数据集间差异 |
-| `*_variance_analysis.png` | CV + 箱线图 | Q2: 图片vs模型主导 |
+- 读取 HDF5 → 对每个 (sample, layer) 计算全部指标 → 输出 `per_sample_layer.csv`
+- 计算层间熵变（差分）；多文件场景按 `sample_uid=source_file::sample_id` 分组，避免跨运行样本冲突
+- 输出每个 HDF5 文件、每数据集、全数据集的 summary 统计
+- 服务器端可视化已解耦到独立流程，本目录不再维护绘图脚本
 
 ### 3.4 数据流
 
@@ -139,9 +135,6 @@
 
 [分析]  entropy_analysis.py
    └──→ outputs/processed/*.csv   (每样本×每层的熵/Gini/TopK指标)
-
-[可视化]  visualize.py
-   └──→ outputs/figures/           (PNG 图表)
 ```
 
 ### 3.5 HDF5 存储结构
@@ -196,7 +189,7 @@ bash entropy_exp/scripts/run_capture.sh gqa
 bash entropy_exp/scripts/run_capture.sh all
 ```
 
-### 4.2 离线分析 + 可视化
+### 4.2 离线分析
 
 ```bash
 # 分析所有已捕获的 HDF5 文件
@@ -221,10 +214,9 @@ bash entropy_exp/scripts/run_eval.sh pope entropy_exp/outputs/answers/pope_*.jso
 python entropy_exp/src/inference.py --config entropy_exp/configs/default.yaml --dataset mme --max-samples 10
 
 # 分析
-python entropy_exp/analysis/entropy_analysis.py --h5 entropy_exp/outputs/raw/*.h5
-
-# 可视化
-python entropy_exp/analysis/visualize.py --csv entropy_exp/outputs/processed/entropy_per_sample_layer.csv
+python entropy_exp/analysis/entropy_analysis.py \
+    --h5 entropy_exp/outputs/raw/*.h5 \
+    --output entropy_exp/outputs/processed
 ```
 
 ---
@@ -239,7 +231,7 @@ python entropy_exp/analysis/visualize.py --csv entropy_exp/outputs/processed/ent
 | `capture.layers` | `all` | 捕获哪些层，可设为 `[2, 6, 15]` 减少存储 |
 | `capture.head_reduction` | `none` | `none` 保留全部 head，`mean` 做 head 均值 |
 | `capture.max_samples` | `null` | 限制样本数，`null` 表示全量 |
-| `capture.v_token_num` | `576` | LLaVA-1.5 视觉 token 数（24×24） |
+| `capture.v_token_num` | `576` | LLaVA-1.5 视觉 token 数（24×24），用于 image token 定位与序列长度一致性校验 |
 | `inference.temperature` | `0` | 确定性推理 |
 | `inference.seed` | `42` | 随机种子 |
 
@@ -258,3 +250,195 @@ python entropy_exp/analysis/visualize.py --csv entropy_exp/outputs/processed/ent
 ### 配置化层级控制
 
 通过 `capture.layers` 配置项控制捕获/剪枝的目标层，不硬编码。后续可以根据分析结果动态选择关键层。
+
+---
+---
+
+# 阶段 2：视觉 token 剪枝实验（prune-exp 分支）
+
+## 一、实验目标
+
+在固定剪枝层（第 2、3 层）的条件下，对比两种剪枝比例确定策略：
+
+| 方案 | 策略名 | 核心思路 |
+|:--|:--|:--|
+| **A** | `attn_score` | SparseVLM 风格：head 均值 → text 均值 → 每 visual token 重要性 |
+| **B** | `entropy` | 熵加权聚合：低熵 head 权重更高，可选动态调整剪枝比例 |
+
+### 评估维度
+
+| 维度 | 指标 | 说明 |
+|:--|:--|:--|
+| **性能** | GQA Accuracy / MME Score / POPE F1 | 剪枝后 answer 质量 vs baseline |
+| **效率** | prefill time / decode time / total time per sample | 同一 decode 路径，公平对比 |
+
+### 效率测量注意事项
+
+- **GPU**：独占显卡，避免资源抢占
+- **CPU**：整体占用控制在 80% 以下
+- **磁盘 I/O**：数据放 SSD 或预加载至内存
+
+---
+
+## 二、代码框架
+
+### 2.1 新增目录结构
+
+```
+entropy_exp/
+├── src/
+│   ├── strategies/              # NEW — 剪枝策略模块
+│   │   ├── __init__.py          # 策略注册表 + get_strategy()
+│   │   ├── base.py              # PruneStrategy 抽象基类
+│   │   ├── attn_score.py        # 方案 A：Attention Score
+│   │   └── entropy.py           # 方案 B：Entropy-weighted
+│   ├── pruner.py                # NEW — 核心剪枝引擎 VisualTokenPruner
+│   ├── prune_inference.py       # NEW — 剪枝推理主入口
+│   ├── hooks.py                 # 原有（兼容）
+│   ├── inference.py             # 原有（兼容）
+│   ├── metrics.py               # 原有（兼容）
+│   └── eval_datasets.py         # 原有（兼容）
+├── configs/
+│   ├── default.yaml             # 原有（capture 用）
+│   └── prune.yaml               # NEW — 剪枝实验配置
+├── scripts/
+│   ├── run_prune.sh             # NEW — 剪枝实验启动脚本
+│   ├── run_capture.sh           # 原有
+│   ├── run_analysis.sh          # 原有
+│   └── run_eval.sh              # 原有
+└── outputs/
+    ├── prune_stats/             # NEW — 剪枝统计 JSONL
+    ├── answers/                 # 共享（剪枝后的回答也存这里）
+    ├── raw/                     # 原有
+    └── processed/               # 原有
+```
+
+### 2.2 核心模块说明
+
+#### `strategies/base.py` — PruneStrategy 抽象基类
+
+```python
+class PruneStrategy(ABC):
+    def compute_importance(attn_weights, v_start, v_num, text_start, layer_idx) -> Tensor[L_v]
+    def get_prune_ratio(layer_idx, importance_scores) -> float     # 可覆写为动态比例
+    def compute_keep_mask(...) -> (keep_indices, info_dict)         # 模板方法
+```
+
+| 兼容性维度 | 实现方式 |
+|:--|:--|
+| 固定 / 动态剪枝层 | `VisualTokenPruner._determine_prune_layers()` 支持 `fixed`（配置列表） / `dynamic`（预留） |
+| 固定 / 动态剪枝比例 | `prune_layers` 与 `prune_ratio` 为等长列表，逐层配对；`get_prune_ratio()` 从 `prune_ratio_map` 查表，`EntropyStrategy` 可覆写为动态 |
+| 不同计算策略 | 通过策略注册表 `STRATEGY_REGISTRY` 按名称实例化 |
+| 与 capture 代码兼容 | 原有 `hooks.py`, `inference.py` 完全不修改 |
+
+#### `pruner.py` — VisualTokenPruner
+
+核心引擎，实现：
+
+1. **自定义 layer-by-layer prefill**：逐层运行 decoder layers，在指定层执行剪枝
+2. **KV cache 一致性**：剪枝后同步更新所有层（0 … prune_layer）的 KV cache
+3. **Greedy decode**：使用剪枝后的 KV cache 进行自回归生成
+
+关键方法：
+- `pruned_generate()`: 公开入口，返回 `(generated_ids, prune_info)`
+- `_pruned_prefill()`: 逐层 prefill，在 prune layer 调用策略计算 keep mask
+- `_prune_kv_cache()`: 从 DynamicCache 中移除被剪枝位置的 K/V
+
+#### `prune_inference.py` — 推理主入口
+
+- 复用 `VQADataset` + `locate_image_tokens()` 等已有逻辑
+- 调用 `model.prepare_inputs_labels_for_multimodal()` 获取合并 embeddings
+- 使用 `VisualTokenPruner.pruned_generate()` 进行剪枝推理
+- 输出兼容现有 eval 脚本的 answer JSONL
+- 额外输出逐样本 pruning statistics JSONL
+
+### 2.3 监控与记录
+
+每个样本的 pruning stats JSONL 包含：
+
+| 字段 | 说明 |
+|:--|:--|
+| `original_seq_len` | 剪枝前序列长度 |
+| `final_seq_len` | 剪枝后序列长度 |
+| `layer_N_ratio` | 第 N 层的实际剪枝比例 |
+| `layer_N_before` / `after` / `pruned` | 剪枝前/后 visual token 数量 |
+| `layer_N_importance` | (可选) 每个 visual token 的重要性分数 |
+| `layer_N_keep_indices` | (可选) 保留的 token 索引 |
+| `run_mode` | `prune` / `baseline` |
+| `strategy_requested` | 配置请求的策略名（如 `attn_score` / `entropy`） |
+| `effective_prune_ratio_map` | 实际生效的层→比例映射 |
+| `prefill_time` / `decode_time` / `total_time` | 计时信息 |
+
+补充：
+- 输出文件命名为 `dataset_<strategy>_<timestamp>.jsonl`；baseline 命名为 `dataset_baseline_<timestamp>.jsonl`
+
+---
+
+## 三、运行方法
+
+### 3.1 剪枝推理
+
+```bash
+# 快速验证（2 样本, attn_score 策略）
+bash entropy_exp/scripts/run_prune.sh attn_score mme 2
+
+# Entropy 策略，全量 POPE
+bash entropy_exp/scripts/run_prune.sh entropy pope
+
+# Baseline（无剪枝，同一 decode 路径）
+bash entropy_exp/scripts/run_prune.sh baseline mme 10
+
+# 一键对比：baseline + attn_score + entropy
+bash entropy_exp/scripts/run_prune.sh compare mme 10
+
+# 所有数据集
+bash entropy_exp/scripts/run_prune.sh attn_score all
+```
+
+### 3.2 评测
+
+```bash
+# 使用现有 eval 脚本
+bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/answers/gqa_attn_score_*.jsonl
+bash entropy_exp/scripts/run_eval.sh pope entropy_exp/outputs/answers/pope_entropy_*.jsonl
+```
+
+### 3.3 直接运行 Python
+
+```bash
+# 剪枝推理
+python entropy_exp/src/prune_inference.py \
+    --config entropy_exp/configs/prune.yaml \
+    --dataset mme --max-samples 10
+
+# baseline
+python entropy_exp/src/prune_inference.py \
+    --config entropy_exp/configs/prune.yaml \
+    --dataset mme --max-samples 10 --baseline
+```
+
+---
+
+## 四、配置说明
+
+配置文件：`entropy_exp/configs/prune.yaml`
+
+| 配置项 | 默认值 | 说明 |
+|:--|:--|:--|
+| `pruning.strategy` | `attn_score` | 策略选择：`attn_score` \| `entropy` |
+| `pruning.layer_selection` | `fixed` | 层选择方法：`fixed`（配置列表）\| `dynamic`（预留） |
+| `pruning.prune_layers` | `[2, 3]` | 剪枝层列表（0-indexed），与 `prune_ratio` 等长 |
+| `pruning.prune_ratio` | `[0.5, 0.5]` | 与 `prune_layers` 等长的剪枝比例列表（标量则广播到所有层） |
+| `pruning.entropy.dynamic_ratio` | `false` | 是否用熵动态调整比例 |
+| `pruning.entropy.dynamic_scale` | `0.5` | 动态调整的缩放系数 |
+| `capture.save_importance_scores` | `true` | 是否在 stats 中保存重要性分数 |
+| `capture.save_keep_indices` | `true` | 是否在 stats 中保存保留索引 |
+
+---
+
+## 五、后续扩展
+
+1. **动态层选择**：`layer_selection: "dynamic"` — 根据运行时熵变选择剪枝层
+2. **多层剪枝**：在多个层级上渐进剪枝
+3. **其他策略**：新增策略只需继承 `PruneStrategy` 并注册到 `STRATEGY_REGISTRY`
+4. **效率优化**：SDPA / FlashAttention 兼容（需实现无 `output_attentions` 的 score 计算路径）

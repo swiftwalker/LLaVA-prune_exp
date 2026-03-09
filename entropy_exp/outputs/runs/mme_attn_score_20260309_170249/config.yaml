@@ -1,0 +1,50 @@
+model:
+  path: entropy_exp/models/llava-v1.5-7b
+  name: llava-v1.5-7b
+  attn_implementation: eager
+inference:
+  temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
+  conv_mode: vicuna_v1
+  seed: 42
+pruning:
+  strategy: attn_score
+  layer_selection: fixed
+  prune_layers:
+  - 2
+  prune_ratio:
+  - 0.7
+  v_token_num: 576
+  max_samples: null
+  attn_score: {}
+  entropy:
+    dynamic_ratio: false
+    dynamic_scale: 0.5
+    max_prune_ratio: 0.9
+capture:
+  save_attention: true
+  save_importance_scores: true
+  save_keep_indices: true
+  precision: fp16
+  compression: gzip
+  compression_opts: 4
+datasets:
+  gqa:
+    question_file: entropy_exp/eval_questions/gqa/llava_gqa_testdev_balanced.jsonl
+    image_folder: entropy_exp/datasets/gqa/images
+  mme:
+    question_file: entropy_exp/eval_questions/MME/llava_mme.jsonl
+    image_folder: entropy_exp/datasets/MME_Benchmark_release_version
+  pope:
+    question_file: entropy_exp/eval_questions/pope/llava_pope_test.jsonl
+    image_folder: entropy_exp/datasets/pope/val2014
+output:
+  base_dir: entropy_exp/outputs
+_run_meta:
+  run_mode: prune
+  dataset: mme
+  max_samples: null
+  timestamp: '20260309_170249'
+  run_dir: /data_ssd/liuyu/LLaVA/entropy_exp/outputs/runs/mme_attn_score_20260309_170249

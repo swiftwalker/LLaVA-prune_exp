@@ -1,0 +1,56 @@
+# Pruning Experiment Configuration
+# ==================================
+# Two strategies are compared under the same pruning layer & evaluation:
+#   A) attn_score  — SparseVLM-style attention importance
+#   B) entropy     — entropy-weighted head aggregation
+
+model:
+  path: "entropy_exp/models/llava-v1.5-7b"
+  name: "llava-v1.5-7b"
+  attn_implementation: "eager"      # eager required for output_attentions
+
+inference:
+  temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
+  conv_mode: "vicuna_v1"
+  seed: 42
+
+pruning:
+  strategy: "attn_score"            # attn_score | entropy
+  # --- layer & ratio (paired lists of equal length) ---
+  layer_selection: "fixed"          # fixed | dynamic (placeholder)
+  prune_layers: [2, 3]             # 剪枝层列表 (0-indexed)
+  prune_ratio: [0.5, 0.5]          # 对应每层的剪枝比例（标量则广播到所有层）
+  v_token_num: 576                  # LLaVA-1.5: 24×24 patches
+  max_samples: null                 # null = all; int for debugging
+  # --- strategy-specific ---
+  attn_score: {}
+  entropy:
+    dynamic_ratio: false            # if true, ratio is modulated by entropy
+    dynamic_scale: 0.5
+    max_prune_ratio: 0.9
+
+capture:
+  save_attention: true             # save text→vision attention sub-matrices to captures.h5 (HDF5)
+  save_importance_scores: true      # save per-token importance scores in stats.jsonl
+  save_keep_indices: true           # save kept token indices in stats.jsonl
+  # HDF5 capture parameters (same as Phase 1)
+  precision: "fp16"                 # fp16 | fp32
+  compression: "gzip"
+  compression_opts: 4
+
+datasets:
+  gqa:
+    question_file: "entropy_exp/eval_questions/gqa/llava_gqa_testdev_balanced.jsonl"
+    image_folder: "entropy_exp/datasets/gqa/images"
+  mme:
+    question_file: "entropy_exp/eval_questions/MME/llava_mme.jsonl"
+    image_folder: "entropy_exp/datasets/MME_Benchmark_release_version"
+  pope:
+    question_file: "entropy_exp/eval_questions/pope/llava_pope_test.jsonl"
+    image_folder: "entropy_exp/datasets/pope/val2014"
+
+output:
+  base_dir: "entropy_exp/outputs"

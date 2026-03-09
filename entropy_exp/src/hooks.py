@@ -199,7 +199,11 @@ class AttentionCaptureHook:
         self.h5_file.flush()
 
 
-def locate_image_tokens(input_ids: torch.Tensor, image_token_index: int = -200) -> Tuple[int, int, int]:
+def locate_image_tokens(
+    input_ids: torch.Tensor,
+    image_token_index: int = -200,
+    v_token_num: int = 576,
+) -> Tuple[int, int, int]:
     """
     Determine v_token_start and text_token_start from the original input_ids
     BEFORE prepare_inputs_labels_for_multimodal replaces image tokens with embeddings.
@@ -211,12 +215,13 @@ def locate_image_tokens(input_ids: torch.Tensor, image_token_index: int = -200) 
 
     So:
       v_token_start = index of IMAGE_TOKEN in input_ids
-      v_token_num = 576
-      text_token_start = v_token_start + 576
+      v_token_num = configured visual token count
+      text_token_start = v_token_start + v_token_num
 
     Args:
         input_ids: [1, L] input token ids (before multimodal preparation)
         image_token_index: the sentinel token id for image placeholder (default: -200)
+        v_token_num: number of visual tokens after multimodal expansion
 
     Returns:
         (v_token_start, v_token_num, text_token_start)
@@ -228,15 +233,10 @@ def locate_image_tokens(input_ids: torch.Tensor, image_token_index: int = -200) 
 
     v_token_start = image_pos[0].item()
     # Count how many tokens come before the image token → that's the system prompt
-    # The image token is replaced by 576 vision embeddings
-    v_token_num = 576
+    # The image token is replaced by v_token_num vision embeddings
     # Text (question) tokens start right after vision tokens
     # But we need to account for the fact that IMAGE_TOKEN is 1 token in input_ids
-    # but becomes 576 tokens in the actual sequence.
-    # Tokens after IMAGE_TOKEN in input_ids:
-    num_tokens_after_image = ids.shape[0] - (v_token_start + 1)
+    # but becomes v_token_num tokens in the actual sequence.
     text_token_start = v_token_start + v_token_num
-    # Total sequence length after expansion:
-    total_seq_len = v_token_start + v_token_num + num_tokens_after_image
 
     return v_token_start, v_token_num, text_token_start

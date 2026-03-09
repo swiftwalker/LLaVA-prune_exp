@@ -120,10 +120,11 @@ def compute_entropy_delta(df: pd.DataFrame) -> pd.DataFrame:
     Compute layer-to-layer entropy change (delta) for each sample.
     Adds columns: shannon_delta, renyi_2_delta, gini_delta.
     """
-    df = df.sort_values(["sample_id", "layer"]).copy()
+    group_key = "sample_uid" if "sample_uid" in df.columns else "sample_id"
+    df = df.sort_values([group_key, "layer"]).copy()
     for metric in ["shannon", "renyi_2", "gini", "attn_rank"]:
         if metric in df.columns:
-            df[f"{metric}_delta"] = df.groupby("sample_id")[metric].diff()
+            df[f"{metric}_delta"] = df.groupby(group_key)[metric].diff()
     return df
 
 
@@ -178,6 +179,8 @@ def main():
         # Tag with source file
         basename = os.path.basename(h5_path)
         df["source_file"] = basename
+        # Unique sample identifier across multiple capture runs/files
+        df["sample_uid"] = df["source_file"].astype(str) + "::" + df["sample_id"].astype(str)
         # Extract dataset name from filename (e.g., gqa_20260305_120000.h5 → gqa)
         dataset_name = basename.split("_")[0] if "_" in basename else basename.replace(".h5", "")
         df["dataset"] = dataset_name
@@ -193,7 +196,10 @@ def main():
         # Save per-file detailed results
         detail_path = os.path.join(file_output_dir, "per_sample_layer.csv")
         df.to_csv(detail_path, index=False)
-        print(f"  Detail: {detail_path}  ({len(df)} rows, {df['sample_id'].nunique()} samples × {df['layer'].nunique()} layers)")
+        print(
+            f"  Detail: {detail_path}  "
+            f"({len(df)} rows, {df['sample_uid'].nunique()} samples × {df['layer'].nunique()} layers)"
+        )
 
         # Save per-file summary
         summary = compute_summary_stats(df)
@@ -214,7 +220,10 @@ def main():
         detail_all_path = os.path.join(merged_dir, "per_sample_layer.csv")
         combined.to_csv(detail_all_path, index=False)
         print(f"\nMerged detail: {detail_all_path}")
-        print(f"  {len(combined)} rows ({combined['sample_id'].nunique()} samples × {combined['layer'].nunique()} layers)")
+        print(
+            f"  {len(combined)} rows "
+            f"({combined['sample_uid'].nunique()} samples × {combined['layer'].nunique()} layers)"
+        )
 
         # Save per-dataset summary
         for ds_name, ddf in combined.groupby("dataset"):

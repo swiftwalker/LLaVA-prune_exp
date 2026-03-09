@@ -110,13 +110,24 @@ def topk_concentration(scores: np.ndarray, k: int = 64, axis: int = -1) -> np.nd
     Returns:
         Concentration ratio in [0, 1].
     """
+    axis = axis if axis >= 0 else scores.ndim + axis
     n = scores.shape[axis]
+    k = int(k)
+
+    if n == 0 or k <= 0:
+        out_shape = scores.shape[:axis] + scores.shape[axis + 1:]
+        return np.zeros(out_shape, dtype=np.float64)
+
     k = min(k, n)
+    if k == n:
+        topk_sum = np.sum(scores, axis=axis)
+        total_sum = np.maximum(np.sum(scores, axis=axis), 1e-12)
+        return topk_sum / total_sum
 
     # Partition to find top-k values
     # np.partition is O(n) vs O(n log n) for full sort
     neg_scores = -scores  # negate because partition gives smallest
-    partitioned = np.partition(neg_scores, k, axis=axis)
+    partitioned = np.partition(neg_scores, k - 1, axis=axis)
     # Take the first k elements (which are the k largest after negation)
     slices = [slice(None)] * scores.ndim
     slices[axis] = slice(0, k)

@@ -1,0 +1,96 @@
+"""
+Abstract base class for visual token pruning strategies.
+
+A strategy defines:
+  1. How to compute per-visual-token importance scores from attention weights.
+  2. How to determine the prune ratio (fixed or dynamic).
+"""
+
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Tuple
+
+import torch
+import numpy as np
+
+
+class PruneStrategy(ABC):
+    """Base class for visual token pruning strategies."""
+
+    def __init__(self, config: dict):
+        self.config = config
+
+    @abstractmethod
+    def compute_importance(
+        self,
+        attn_weights: torch.Tensor,
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+        layer_idx: int,
+    ) -> torch.Tensor:
+        """
+        Compute per-visual-token importance scores.
+
+        Args:
+            attn_weights: [B, H, L, L] post-softmax attention weights at the prune layer
+            v_token_start: start position of visual tokens in the sequence
+            v_token_num: number of visual tokens (e.g. 576)
+            text_token_start: start position of text tokens (= v_token_start + v_token_num)
+            layer_idx: current layer index
+
+        Returns:
+            torch.Tensor of shape [v_token_num] — importance score per visual token
+        """
+
+    def get_prune_ratio(self, layer_idx: int, importance_scores: torch.Tensor) -> float:
+        """
+        Get the fraction of visual tokens to REMOVE.
+
+        Looks up the per-layer ratio map first (populated by the Pruner),
+        then falls back to a scalar default.
+        Override for dynamic ratio computation.
+        """
+        ratio_map = self.config.get("prune_ratio_map")
+        if ratio_map and layer_idx in ratio_map:
+            return ratio_map[layer_idx]
+        return self.config.get("prune_ratio", 0.5)
+
+    def compute_keep_mask(
+        self,
+        attn_weights: torch.Tensor,
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+        layer_idx: int,
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        """
+        Compute which visual tokens to keep.
+
+        Returns:
+            keep_indices: 1D tensor of indices (relative to visual token block) to keep,
+                          sorted in ascending order to preserve spatial layout.
+            info: dict with pruning statistics for logging/analysis.
+        """
+        importance = self.compute_importance(
+            attn_weights, v_token_start, v_token_num, text_token_start, layer_idx
+        )
+
+        prune_ratio = self.get_prune_ratio(layer_idx, importance)
+
+        num_prune = int(v_token_num * prune_ratio)
+        num_keep = v_token_num - num_prune
+
+        # Keep the top-num_keep tokens by importance (preserve spatial order)
+        _, sorted_indices = importance.sort(descending=True)
+        keep_indices = sorted_indices[:num_keep].sort().values
+
+        info = {
+            "prune_ratio": prune_ratio,
+            "num_visual_before": v_token_num,
+            "num_visual_after": num_keep,
+            "num_pruned": num_prune,
+            "importance_scores": importance.detach().cpu().numpy(),
+            "keep_indices": keep_indices.detach().cpu().numpy(),
+        }
+
+        return keep_indices, info

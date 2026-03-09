@@ -20,7 +20,6 @@ cd "$LLAVA_ROOT"
 ARG="${1:-}"
 RAW_DIR="entropy_exp/outputs/raw"
 PROCESSED_DIR="entropy_exp/outputs/processed"
-FIGURES_DIR="entropy_exp/outputs/figures"
 
 # Step 1: Compute entropy metrics from HDF5 files
 echo "========================================"
