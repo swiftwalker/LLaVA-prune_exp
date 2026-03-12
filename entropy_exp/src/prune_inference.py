@@ -20,6 +20,7 @@ import json
 import time
 import datetime
 import yaml
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 import h5py
 import torch
 import numpy as np
@@ -202,6 +203,13 @@ def run_prune_inference(
     save_indices = capture_cfg.get("save_keep_indices", False)
     captures_h5_path = os.path.join(run_dir, "captures.h5") if save_attention else None
 
+    # Parse capture_layers: "all" -> None (means all), list -> set
+    capture_layers_cfg = capture_cfg.get("capture_layers", "all")
+    if capture_layers_cfg == "all" or capture_layers_cfg is None:
+        capture_layers_set = None  # None means all layers
+    else:
+        capture_layers_set = set(capture_layers_cfg)
+
     # --- save config snapshot (after --set overrides) ---
     config_snapshot = {
         **config,
@@ -311,6 +319,7 @@ def run_prune_inference(
             max_new_tokens=infer_cfg["max_new_tokens"],
             eos_token_id=eos_token_id,
             save_tv_attn=save_attention,
+            capture_layers=capture_layers_set,
         )
         t1 = time.time()
         total_time += (t1 - t0)
@@ -346,6 +355,9 @@ def run_prune_inference(
 
         # Per-layer pruning details
         for layer_idx, linfo in prune_info.get("layers", {}).items():
+            # Skip capture-only layers (no pruning stats)
+            if "prune_ratio" not in linfo:
+                continue
             sample_stats[f"layer_{layer_idx}_ratio"] = linfo["prune_ratio"]
             sample_stats[f"layer_{layer_idx}_before"] = linfo["num_visual_before"]
             sample_stats[f"layer_{layer_idx}_after"] = linfo["num_visual_after"]

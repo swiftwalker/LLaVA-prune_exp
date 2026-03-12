@@ -149,6 +149,7 @@ pruning:
 
 capture:
   save_attention: false             # 保存注意力矩阵到 captures.h5（HDF5）
+  capture_layers: "all"             # 捕获哪些层："all" 或层索引列表如 [0, 1, 2, 3]
   save_importance_scores: true      # 保存重要性分数到 stats.jsonl
   save_keep_indices: true           # 保存保留索引到 stats.jsonl
   precision: "fp16"                 # HDF5 存储精度
@@ -309,6 +310,7 @@ bash entropy_exp/scripts/run_prune.sh compare mme
 capture:
   # === 注意力捕获 → captures.h5（HDF5，与 Phase 1 格式一致）===
   save_attention: false           # 保存 text→vision 注意力子矩阵到 HDF5
+  capture_layers: "all"           # 捕获哪些层："all"（全部 32 层）或层索引列表
   precision: "fp16"               # fp16 | fp32
   compression: "gzip"
   compression_opts: 4
@@ -319,10 +321,32 @@ capture:
 ```
 
 **`save_attention: true`**（HDF5 捕获）：
-- 保存剪枝层的原始 text→vision 注意力子矩阵 `[H, L_t, L_v]` 以及 `prune_scores [L_v]`
+- 保存指定层的 text→vision 注意力子矩阵 `[H, L_t, L_v]`
+- 剪枝层同时保存 `prune_scores [L_v]`；非剪枝捕获层仅保存 `tv_attn`
 - 输出到 `captures.h5`，格式与 Phase 1 `AttentionCaptureHook` 完全一致
 - Phase 1 的分析脚本可直接处理此文件
 - 数据量较大，默认关闭
+
+**`capture_layers`**（捕获层控制）：
+- `"all"`（默认）：捕获全部 32 层的注意力，适合离线分析
+- 层索引列表如 `[0, 1, 2, 3]`：仅捕获指定层，减少磁盘占用
+- 与 `prune_layers` 独立：可以剪枝第 2、3 层，但捕获全部 32 层的注意力数据
+
+```bash
+# 捕获全部 32 层（默认）
+bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
+    --set capture.save_attention=true
+
+# 仅捕获前 4 层
+bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
+    --set capture.save_attention=true \
+    --set capture.capture_layers=[0,1,2,3]
+
+# 仅捕获剪枝层（与 prune_layers 相同）
+bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
+    --set capture.save_attention=true \
+    --set capture.capture_layers=[2,3]
+```
 
 **`save_importance_scores` / `save_keep_indices`**（JSONL 剪枝结果）：
 - 保存到 `stats.jsonl` 的对应字段中（轻量级）
@@ -413,7 +437,7 @@ bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_attn_score
 
 ### 4.4 captures.h5 — 注意力中间变量捕获（HDF5）
 
-仅当 `capture.save_attention: true` 时生成。保存剪枝层的 **text→vision 注意力子矩阵**，格式与 Phase 1 的 `AttentionCaptureHook` 输出完全一致：
+仅当 `capture.save_attention: true` 时生成。保存指定层的 **text→vision 注意力子矩阵**，格式与 Phase 1 的 `AttentionCaptureHook` 输出完全一致：
 
 ```
 captures.h5
@@ -421,14 +445,17 @@ captures.h5
     .attrs: question_id, image_file, v_token_start, v_token_num, text_token_start
     layer_{N}/
       tv_attn          # [H, L_t, L_v]  text→vision 注意力子矩阵 (gzip 压缩)
-      prune_scores     # [L_v]          每个 visual token 的重要性分数
+      prune_scores     # [L_v]          每个 visual token 的重要性分数（仅剪枝层）
 ```
 
+- **捕获范围**由 `capture.capture_layers` 控制：`"all"` 捕获全部 32 层，指定列表如 `[0, 1, 2, 3]` 则只捕获这些层
+- **剪枝层**：同时写入 `tv_attn` 和 `prune_scores`
+- **非剪枝捕获层**：仅写入 `tv_attn`（无 `prune_scores`）
 - **`tv_attn`**：原始 text→vision 注意力矩阵，`H`=注意力头数，`L_t`=文本 token 数，`L_v`=视觉 token 数（剪枝前）
 - **`prune_scores`**：从 `tv_attn` 计算得出的重要性分数，与 Phase 1 格式一致
 - Phase 1 的分析脚本可直接处理此文件
 
-> **注意**：注意力捕获数据量较大（每层 [32, ~60, 576] float16 ≈ 2.2MB），正式大规模实验时建议关闭以节省磁盘空间。
+> **注意**：注意力捕获数据量较大（每层 [32, ~60, 576] float16 ≈ 2.2MB），正式大规模实验时建议关闭或仅捕获关键层以节省磁盘空间。
 
 ---
 

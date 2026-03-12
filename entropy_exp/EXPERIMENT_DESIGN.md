@@ -307,10 +307,14 @@ entropy_exp/
 │   ├── run_analysis.sh          # 原有
 │   └── run_eval.sh              # 原有
 └── outputs/
-    ├── prune_stats/             # NEW — 剪枝统计 JSONL
-    ├── answers/                 # 共享（剪枝后的回答也存这里）
-    ├── raw/                     # 原有
-    └── processed/               # 原有
+    ├── runs/                    # NEW — 每次运行一个独立子目录
+    │   └── {dataset}_{strategy}_{YYYYMMDD_HHMMSS}/
+    │       ├── config.yaml      #   实验配置快照（含 --set 覆盖后的最终值）
+    │       ├── answers.jsonl    #   模型回答（兼容现有评测脚本）
+    │       ├── stats.jsonl      #   逐样本剪枝统计
+    │       └── captures.h5      #   注意力中间变量（HDF5，仅 save_attention=true）
+    ├── raw/                     # 原有（Phase 1 capture）
+    └── processed/               # 原有（Phase 1 分析结果）
 ```
 
 ### 2.2 核心模块说明
@@ -349,28 +353,48 @@ class PruneStrategy(ABC):
 - 复用 `VQADataset` + `locate_image_tokens()` 等已有逻辑
 - 调用 `model.prepare_inputs_labels_for_multimodal()` 获取合并 embeddings
 - 使用 `VisualTokenPruner.pruned_generate()` 进行剪枝推理
-- 输出兼容现有 eval 脚本的 answer JSONL
-- 额外输出逐样本 pruning statistics JSONL
+- 每次运行创建独立目录 `outputs/runs/{dataset}_{strategy}_{timestamp}/`
+- 输出 `config.yaml`（实验配置快照）、`answers.jsonl`（兼容评测）、`stats.jsonl`（剪枝统计）
+- 当 `capture.save_attention=true` 时，额外输出 `captures.h5`（HDF5 注意力数据）
+- 支持 `--set KEY=VALUE` 命令行覆盖任意配置项（点分隔嵌套 key，自动类型推导）
 
 ### 2.3 监控与记录
 
-每个样本的 pruning stats JSONL 包含：
+#### stats.jsonl — 剪枝统计
+
+每行一个样本，包含：
 
 | 字段 | 说明 |
 |:--|:--|
-| `original_seq_len` | 剪枝前序列长度 |
-| `final_seq_len` | 剪枝后序列长度 |
-| `layer_N_ratio` | 第 N 层的实际剪枝比例 |
-| `layer_N_before` / `after` / `pruned` | 剪枝前/后 visual token 数量 |
-| `layer_N_importance` | (可选) 每个 visual token 的重要性分数 |
-| `layer_N_keep_indices` | (可选) 保留的 token 索引 |
+| `sample_idx` | 样本序号 |
+| `question_id` / `image_file` | 样本标识 |
 | `run_mode` | `prune` / `baseline` |
 | `strategy_requested` | 配置请求的策略名（如 `attn_score` / `entropy`） |
 | `effective_prune_ratio_map` | 实际生效的层→比例映射 |
+| `prune_layers` | 剪枝层列表 |
+| `original_seq_len` / `final_seq_len` | 剪枝前/后序列长度 |
+| `num_generated_tokens` | 生成的新 token 数 |
 | `prefill_time` / `decode_time` / `total_time` | 计时信息 |
+| `layer_N_ratio` | 第 N 层的实际剪枝比例 |
+| `layer_N_before` / `after` / `pruned` | 剪枝前/后 visual token 数量 |
+| `layer_N_importance` | (`save_importance_scores` 开启时) 重要性分数 |
+| `layer_N_keep_indices` | (`save_keep_indices` 开启时) 保留的 token 索引 |
 
-补充：
-- 输出文件命名为 `dataset_<strategy>_<timestamp>.jsonl`；baseline 命名为 `dataset_baseline_<timestamp>.jsonl`
+#### captures.h5 — 注意力中间变量（HDF5）
+
+仅当 `capture.save_attention: true` 时生成，格式与 Phase 1 `AttentionCaptureHook` 一致：
+
+```
+captures.h5
+  /{sample_idx}_{question_id}/
+    .attrs: question_id, image_file, v_token_start, v_token_num, text_token_start
+    layer_{N}/
+      tv_attn          # [H, L_t, L_v]  text→vision 注意力子矩阵 (gzip)
+      prune_scores     # [L_v]          重要性分数（仅剪枝层）
+```
+
+- `capture_layers` 控制捕获哪些层的注意力：`"all"` 或指定层列表如 `[0, 1, 2, 3]`
+- 剪枝层同时写入 `tv_attn` 和 `prune_scores`；非剪枝捕获层仅写入 `tv_attn`
 
 ---
 
@@ -393,14 +417,21 @@ bash entropy_exp/scripts/run_prune.sh compare mme 10
 
 # 所有数据集
 bash entropy_exp/scripts/run_prune.sh attn_score all
+
+# 使用 --set 覆盖配置项
+bash entropy_exp/scripts/run_prune.sh entropy mme 10 \
+    --set pruning.prune_layers=[2,5,10] \
+    --set pruning.prune_ratio=[0.3,0.4,0.5]
 ```
+
+结果输出到 `outputs/runs/{dataset}_{strategy}_{YYYYMMDD_HHMMSS}/` 下。
 
 ### 3.2 评测
 
 ```bash
-# 使用现有 eval 脚本
-bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/answers/gqa_attn_score_*.jsonl
-bash entropy_exp/scripts/run_eval.sh pope entropy_exp/outputs/answers/pope_entropy_*.jsonl
+# 使用 run 目录下的 answers.jsonl
+bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_attn_score_*/answers.jsonl
+bash entropy_exp/scripts/run_eval.sh pope entropy_exp/outputs/runs/pope_entropy_*/answers.jsonl
 ```
 
 ### 3.3 直接运行 Python
@@ -415,6 +446,13 @@ python entropy_exp/src/prune_inference.py \
 python entropy_exp/src/prune_inference.py \
     --config entropy_exp/configs/prune.yaml \
     --dataset mme --max-samples 10 --baseline
+
+# 使用 --set 覆盖
+python entropy_exp/src/prune_inference.py \
+    --config entropy_exp/configs/prune.yaml \
+    --dataset mme \
+    --set pruning.strategy=entropy \
+    --set capture.capture_layers=[0,1,2,3]
 ```
 
 ---
@@ -431,8 +469,13 @@ python entropy_exp/src/prune_inference.py \
 | `pruning.prune_ratio` | `[0.5, 0.5]` | 与 `prune_layers` 等长的剪枝比例列表（标量则广播到所有层） |
 | `pruning.entropy.dynamic_ratio` | `false` | 是否用熵动态调整比例 |
 | `pruning.entropy.dynamic_scale` | `0.5` | 动态调整的缩放系数 |
+| `capture.save_attention` | `true` | 保存注意力矩阵到 captures.h5（HDF5） |
+| `capture.capture_layers` | `"all"` | 捕获哪些层：`"all"` 或层索引列表如 `[0, 1, 2, 3]` |
 | `capture.save_importance_scores` | `true` | 是否在 stats 中保存重要性分数 |
 | `capture.save_keep_indices` | `true` | 是否在 stats 中保存保留索引 |
+| `capture.precision` | `"fp16"` | HDF5 存储精度：`fp16` \| `fp32` |
+| `capture.compression` | `"gzip"` | HDF5 压缩方式 |
+| `capture.compression_opts` | `4` | 压缩等级 |
 
 ---
 

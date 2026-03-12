@@ -63,8 +63,9 @@ def analyze_h5_file(h5_path: str, topk_values: list = None) -> pd.DataFrame:
         # and nested (sample_xxx/subpath/layer_*) HDF5 structures
         sample_entries = []
         for k in f.keys():
-            if k.startswith("sample_"):
-                sample_entries.extend(_find_sample_groups(f[k], k))
+            obj = f[k]
+            if isinstance(obj, h5py.Group):
+                sample_entries.extend(_find_sample_groups(obj, k))
         print(f"  Found {len(sample_entries)} samples in {os.path.basename(h5_path)}")
 
         for sample_key, grp in tqdm(sample_entries, desc="  Computing metrics"):
@@ -176,19 +177,28 @@ def main():
     for h5_path in h5_files:
         print(f"\nProcessing: {h5_path}")
         df = analyze_h5_file(h5_path, args.topk)
-        # Tag with source file
         basename = os.path.basename(h5_path)
+
+        # Create per-file subdirectory: processed/<h5_stem>/
+        file_stem = basename.replace(".h5", "")
+        file_output_dir = os.path.join(args.output, file_stem)
+        os.makedirs(file_output_dir, exist_ok=True)
+
+        if df.empty:
+            detail_path = os.path.join(file_output_dir, "per_sample_layer.csv")
+            summary_path = os.path.join(file_output_dir, "summary.csv")
+            df.to_csv(detail_path, index=False)
+            pd.DataFrame().to_csv(summary_path, index=False)
+            print(f"  No analyzable samples found, wrote empty outputs to: {file_output_dir}")
+            continue
+
+        # Tag with source file
         df["source_file"] = basename
         # Unique sample identifier across multiple capture runs/files
         df["sample_uid"] = df["source_file"].astype(str) + "::" + df["sample_id"].astype(str)
         # Extract dataset name from filename (e.g., gqa_20260305_120000.h5 → gqa)
         dataset_name = basename.split("_")[0] if "_" in basename else basename.replace(".h5", "")
         df["dataset"] = dataset_name
-
-        # Create per-file subdirectory: processed/<h5_stem>/
-        file_stem = basename.replace(".h5", "")
-        file_output_dir = os.path.join(args.output, file_stem)
-        os.makedirs(file_output_dir, exist_ok=True)
 
         # Compute delta per file (groupby sample_id within this file)
         df = compute_entropy_delta(df)
@@ -208,6 +218,10 @@ def main():
         print(f"  Summary: {summary_path}")
 
         all_dfs.append(df)
+
+    if not all_dfs:
+        print("\nNo non-empty HDF5 files processed, skipping cross-file aggregation.")
+        return
 
     # Cross-file aggregation (only when multiple files)
     if len(all_dfs) > 1:

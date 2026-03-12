@@ -123,6 +123,7 @@ class VisualTokenPruner:
         max_new_tokens: int = 128,
         eos_token_id: int = 2,
         save_tv_attn: bool = False,
+        capture_layers: Optional[set] = None,
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
         Generate with visual token pruning.
@@ -135,6 +136,8 @@ class VisualTokenPruner:
             text_token_start: index of first text token after vision block
             max_new_tokens: maximum tokens to generate
             eos_token_id:   id of the EOS token for stopping
+            save_tv_attn:   if True, capture text→vision attention sub-matrices
+            capture_layers: set of layer indices to capture (None = all layers)
 
         Returns:
             (generated_ids [1, N], prune_info dict)
@@ -146,6 +149,7 @@ class VisualTokenPruner:
         hidden_states, past_kv, prune_info = self._pruned_prefill(
             inputs_embeds, v_token_start, v_token_num, text_token_start,
             save_tv_attn=save_tv_attn,
+            capture_layers=capture_layers,
         )
         t_prefill = time.time() - t0
 
@@ -204,6 +208,7 @@ class VisualTokenPruner:
         v_token_num: int,
         text_token_start: int,
         save_tv_attn: bool = False,
+        capture_layers: Optional[set] = None,
     ) -> Tuple[torch.Tensor, DynamicCache, Dict[str, Any]]:
         device = inputs_embeds.device
         dtype = inputs_embeds.dtype
@@ -221,7 +226,9 @@ class VisualTokenPruner:
         cur_text_start = text_token_start
 
         for layer_idx, layer in enumerate(self.model.model.layers):
-            need_attn = layer_idx in self.prune_layers
+            need_prune = layer_idx in self.prune_layers
+            need_capture = save_tv_attn and (capture_layers is None or layer_idx in capture_layers)
+            need_attn = need_prune or need_capture
 
             out = layer(
                 hidden_states,
@@ -234,12 +241,23 @@ class VisualTokenPruner:
 
             hidden_states = out[0]
 
-            if need_attn and cur_v_num > 0:
+            # Capture tv_attn for non-prune layers
+            if need_capture and not need_prune and cur_v_num > 0:
+                attn_weights = out[1]
+                if attn_weights is not None:
+                    v_end = cur_v_start + cur_v_num
+                    tv_attn = attn_weights[0, :, cur_text_start:, cur_v_start:v_end].cpu()
+                    prune_info["layers"][layer_idx] = {
+                        "layer_idx": layer_idx,
+                        "tv_attn": tv_attn,
+                    }
+
+            if need_prune and cur_v_num > 0:
                 attn_weights = out[1]  # [B, H, cur_len, cur_len]
 
                 if attn_weights is not None:
                     # Extract text→vision sub-matrix before pruning changes positions
-                    if save_tv_attn:
+                    if need_capture:
                         v_end = cur_v_start + cur_v_num
                         tv_attn = attn_weights[0, :, cur_text_start:, cur_v_start:v_end].cpu()
 
@@ -265,7 +283,7 @@ class VisualTokenPruner:
                         cur_v_num = len(keep_indices)
                         cur_text_start = cur_v_start + cur_v_num
 
-                    if save_tv_attn:
+                    if need_capture:
                         layer_info["tv_attn"] = tv_attn  # [H, L_t, L_v]
 
                     layer_info["layer_idx"] = layer_idx
