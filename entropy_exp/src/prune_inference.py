@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 import json
+import random
 import time
 import datetime
 import yaml
@@ -150,6 +151,24 @@ def apply_overrides(config: dict, overrides: list) -> dict:
     return config
 
 
+def get_primary_visible_cuda_device() -> str:
+    """Use only the first GPU from CUDA_VISIBLE_DEVICES inside this process."""
+    if not torch.cuda.is_available():
+        return "cpu"
+
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if visible:
+        first_visible = visible.split(",")[0].strip()
+        print(
+            f"[device] CUDA_VISIBLE_DEVICES={visible}; "
+            f"binding this run to the first visible GPU only (process-local cuda:0, physical GPU {first_visible})."
+        )
+    else:
+        print("[device] CUDA_VISIBLE_DEVICES is not set; binding this run to process-local cuda:0.")
+
+    return "cuda:0"
+
+
 # ---------------------------------------------------------------------------
 # Main inference loop with pruning
 # ---------------------------------------------------------------------------
@@ -238,11 +257,12 @@ def run_prune_inference(
     if attn_impl == "eager":
         load_kwargs["attn_implementation"] = "eager"
 
+    target_device = get_primary_visible_cuda_device()
     tokenizer, model, image_processor, context_len = load_pretrained_model(
-        model_path, None, model_name, **load_kwargs
+        model_path, None, model_name, device_map=target_device, device=target_device, **load_kwargs
     )
     model.eval()
-    print(f"Model loaded.  attn={attn_impl}")
+    print(f"Model loaded.  attn={attn_impl}, device={target_device}")
 
     # --- build pruner ---
     pruner = VisualTokenPruner(model, strategy, prune_cfg)
@@ -258,6 +278,8 @@ def run_prune_inference(
     if effective_max is not None:
         questions = questions[:effective_max]
     print(f"Using {len(questions)} samples")
+    if not questions:
+        raise ValueError(f"No samples found for dataset={dataset_name}.")
 
     # --- dataset & loader ---
     dataset = VQADataset(
@@ -280,51 +302,80 @@ def run_prune_inference(
     ):
         question_id = line["question_id"]
         image_file = line["image"]
+        retry_count = 0
+        while True:
+            input_ids_cuda = None
+            image_tensor_cuda = None
+            _input_ids = None
+            position_ids = None
+            attention_mask = None
+            inputs_embeds = None
+            generated_ids = None
 
-        v_token_start, _, text_token_start = locate_image_tokens(
-            input_ids, IMAGE_TOKEN_INDEX, v_token_num=v_token_num
-        )
-        expected_seq_len = v_token_start + v_token_num + (input_ids.shape[1] - (v_token_start + 1))
+            try:
+                v_token_start, _, text_token_start = locate_image_tokens(
+                    input_ids, IMAGE_TOKEN_INDEX, v_token_num=v_token_num
+                )
+                expected_seq_len = v_token_start + v_token_num + (input_ids.shape[1] - (v_token_start + 1))
 
-        # --- prepare multimodal embeddings ---
-        input_ids_cuda = input_ids.to(device='cuda', non_blocking=True)
-        image_tensor_cuda = image_tensor.to(dtype=torch.float16, device='cuda', non_blocking=True)
+                # --- prepare multimodal embeddings ---
+                input_ids_cuda = input_ids.to(device=target_device, non_blocking=True)
+                image_tensor_cuda = image_tensor.to(dtype=torch.float16, device=target_device, non_blocking=True)
 
-        (
-            _input_ids,
-            position_ids,
-            attention_mask,
-            _,
-            inputs_embeds,
-            _,
-        ) = model.prepare_inputs_labels_for_multimodal(
-            input_ids_cuda, None, None, None, None,
-            image_tensor_cuda, image_sizes=list(image_sizes),
-        )
-        if inputs_embeds.shape[1] != expected_seq_len:
-            raise RuntimeError(
-                f"Expanded sequence length mismatch for question_id={question_id}: "
-                f"expected {expected_seq_len}, got {inputs_embeds.shape[1]}. "
-                f"Check v_token_num (configured={v_token_num})."
-            )
+                (
+                    _input_ids,
+                    position_ids,
+                    attention_mask,
+                    _,
+                    inputs_embeds,
+                    _,
+                ) = model.prepare_inputs_labels_for_multimodal(
+                    input_ids_cuda, None, None, None, None,
+                    image_tensor_cuda, image_sizes=list(image_sizes),
+                )
+                if inputs_embeds.shape[1] != expected_seq_len:
+                    raise RuntimeError(
+                        f"Expanded sequence length mismatch for question_id={question_id}: "
+                        f"expected {expected_seq_len}, got {inputs_embeds.shape[1]}. "
+                        f"Check v_token_num (configured={v_token_num})."
+                    )
 
-        # --- generate with pruning ---
-        t0 = time.time()
-        generated_ids, prune_info = pruner.pruned_generate(
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
-            v_token_start=v_token_start,
-            v_token_num=v_token_num,
-            text_token_start=text_token_start,
-            max_new_tokens=infer_cfg["max_new_tokens"],
-            eos_token_id=eos_token_id,
-            save_tv_attn=save_attention,
-            capture_layers=capture_layers_set,
-        )
-        t1 = time.time()
-        total_time += (t1 - t0)
+                # --- generate with pruning ---
+                t0 = time.time()
+                generated_ids, prune_info = pruner.pruned_generate(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    v_token_start=v_token_start,
+                    v_token_num=v_token_num,
+                    text_token_start=text_token_start,
+                    max_new_tokens=infer_cfg["max_new_tokens"],
+                    eos_token_id=eos_token_id,
+                    save_tv_attn=save_attention,
+                    capture_layers=capture_layers_set,
+                )
+                t1 = time.time()
+                total_time += (t1 - t0)
 
-        answer_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
+                answer_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
+                break
+            except torch.cuda.OutOfMemoryError:
+                retry_count += 1
+                backoff_seconds = random.randint(1, 10)
+                print(
+                    f"[oom-retry] CUDA OOM on sample_idx={sample_idx}, question_id={question_id}, "
+                    f"retry={retry_count}. Backing off for {backoff_seconds}s before retry."
+                )
+                del generated_ids
+                del inputs_embeds
+                del attention_mask
+                del position_ids
+                del _input_ids
+                del image_tensor_cuda
+                del input_ids_cuda
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+                time.sleep(backoff_seconds)
 
         # --- write answer ---
         ans_file.write(json.dumps({
