@@ -33,7 +33,7 @@ pruning:
     max_prune_ratio: 0.9
 
 capture:
-  save_attention: true             # save text→vision attention sub-matrices to captures.h5 (HDF5)
+  save_attention: false             # save text→vision attention sub-matrices to captures.h5 (HDF5)
   capture_layers: "all"            # "all" or list of layer indices, e.g. [0, 1, 2, 3]
   save_importance_scores: true      # save per-token importance scores in stats.jsonl
   save_keep_indices: true           # save kept token indices in stats.jsonl

@@ -130,6 +130,50 @@ def parse_pope_metrics(stdout: str) -> dict:
     return metrics
 
 
+def add_pope_weighted_average(metrics: dict) -> dict:
+    category_metrics = {
+        key: value
+        for key, value in metrics.items()
+        if isinstance(value, dict) and "samples" in value
+    }
+    if not category_metrics:
+        return metrics
+
+    metric_keys = ("accuracy", "precision", "recall", "f1_score", "yes_ratio")
+    total_samples = sum(item["samples"] for item in category_metrics.values())
+    if total_samples <= 0:
+        return metrics
+
+    weighted_average = {"samples": total_samples}
+    for metric_key in metric_keys:
+        weighted_sum = 0.0
+        has_value = False
+        for item in category_metrics.values():
+            if metric_key not in item:
+                continue
+            weighted_sum += item[metric_key] * item["samples"]
+            has_value = True
+        if has_value:
+            weighted_average[metric_key] = weighted_sum / total_samples
+
+    metrics["weighted_average"] = weighted_average
+    return metrics
+
+
+def format_pope_weighted_average(weighted_average: dict) -> str:
+    return "\n".join(
+        [
+            f"Category: weighted_average, # samples: {weighted_average['samples']}",
+            f"Accuracy: {weighted_average['accuracy']}",
+            f"Precision: {weighted_average['precision']}",
+            f"Recall: {weighted_average['recall']}",
+            f"F1 score: {weighted_average['f1_score']}",
+            f"Yes ratio: {weighted_average['yes_ratio']}",
+            "====================================",
+        ]
+    )
+
+
 def infer_dataset_from_config(config_file: str) -> str | None:
     in_run_meta = False
     run_meta_indent = None
@@ -296,8 +340,20 @@ def eval_pope(answers_file: str, output_dir: str) -> dict:
     )
     emit_process_output(result, os.path.join(output_dir, "stdout.txt"))
 
+    metrics = add_pope_weighted_average(parse_pope_metrics(result.stdout or ""))
+    weighted_average = metrics.get("weighted_average")
+    if weighted_average:
+        weighted_output = format_pope_weighted_average(weighted_average)
+        print(weighted_output)
+        stdout_path = os.path.join(output_dir, "stdout.txt")
+        with open(stdout_path, "a", encoding="utf-8") as f:
+            if result.stdout and not result.stdout.endswith("\n"):
+                f.write("\n")
+            f.write(weighted_output)
+            f.write("\n")
+
     return {
-        "metrics": parse_pope_metrics(result.stdout or ""),
+        "metrics": metrics,
     }
 
 
