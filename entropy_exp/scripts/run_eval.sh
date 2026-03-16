@@ -23,12 +23,15 @@ ARG2="${2:-}"
 ARG3="${3:-}"
 RUNS_DIR="entropy_exp/outputs/runs"
 EVAL_DIR="entropy_exp/outputs/eval"
-DEFAULT_LLAVA_PYTHON="/home/liuyu/miniconda3/envs/llava/bin/python"
 
-if [ -x "$DEFAULT_LLAVA_PYTHON" ]; then
-    PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_LLAVA_PYTHON}"
+if [ -n "${PYTHON_BIN:-}" ]; then
+    :
+elif [ -x "/data_ssd/liuyu/miniconda3/envs/llava/bin/python" ]; then
+    PYTHON_BIN="/data_ssd/liuyu/miniconda3/envs/llava/bin/python"
+elif [ -x "/home/liuyu/miniconda3/envs/llava/bin/python" ]; then
+    PYTHON_BIN="/home/liuyu/miniconda3/envs/llava/bin/python"
 else
-    PYTHON_BIN="${PYTHON_BIN:-python}"
+    PYTHON_BIN="$(command -v python)"
 fi
 
 run_eval_for_run() {
