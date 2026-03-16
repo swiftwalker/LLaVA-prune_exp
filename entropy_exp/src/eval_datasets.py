@@ -1,5 +1,7 @@
 """Evaluation integration for legacy answers files and run-local outputs."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
