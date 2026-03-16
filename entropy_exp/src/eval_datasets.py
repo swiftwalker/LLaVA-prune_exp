@@ -174,10 +174,8 @@ def format_pope_weighted_average(weighted_average: dict) -> str:
     )
 
 
-def infer_dataset_from_config(config_file: str) -> str | None:
-    in_run_meta = False
-    run_meta_indent = None
-
+def infer_config_value(config_file: str, path: tuple[str, ...]) -> str | None:
+    stack: list[tuple[int, str]] = []
     with open(config_file, "r", encoding="utf-8") as f:
         for raw_line in f:
             if not raw_line.strip() or raw_line.lstrip().startswith("#"):
@@ -185,22 +183,43 @@ def infer_dataset_from_config(config_file: str) -> str | None:
 
             stripped = raw_line.strip()
             indent = len(raw_line) - len(raw_line.lstrip(" "))
+            while stack and indent <= stack[-1][0]:
+                stack.pop()
 
-            if stripped == "_run_meta:":
-                in_run_meta = True
-                run_meta_indent = indent
+            if ":" not in stripped:
                 continue
 
-            if in_run_meta:
-                if indent <= run_meta_indent:
-                    in_run_meta = False
-                elif stripped.startswith("dataset:"):
-                    return stripped.split(":", 1)[1].strip().strip("'\"")
+            key, value = stripped.split(":", 1)
+            key = key.strip()
+            value = value.strip()
 
-            if stripped.startswith("dataset:"):
-                return stripped.split(":", 1)[1].strip().strip("'\"")
+            current_path = tuple(item[1] for item in stack) + (key,)
+            if value:
+                if current_path == path:
+                    return value.strip("'\"")
+                continue
+
+            stack.append((indent, key))
 
     return None
+
+
+def infer_dataset_from_config(config_file: str) -> str | None:
+    return infer_config_value(config_file, ("_run_meta", "dataset")) or infer_config_value(
+        config_file, ("dataset",)
+    )
+
+
+def resolve_config_path(path: str | None) -> str | None:
+    if path is None or path.lower() == "null":
+        return None
+    if os.path.isabs(path):
+        return os.path.abspath(path)
+
+    root_relative = os.path.abspath(os.path.join(LLAVA_ROOT, path))
+    if os.path.exists(root_relative):
+        return root_relative
+    return os.path.abspath(path)
 
 
 def infer_run_metadata(run_dir: str) -> tuple[str, str, str, str]:
@@ -267,7 +286,7 @@ def eval_gqa(answers_file: str, output_dir: str) -> dict:
     }
 
 
-def eval_mme(answers_file: str, output_dir: str) -> dict:
+def eval_mme(answers_file: str, output_dir: str, mme_data_path: str | None = None) -> dict:
     eval_dir = os.path.join(LLAVA_ROOT, "entropy_exp", "eval_questions", "MME")
     convert_script = os.path.join(eval_dir, "convert_answer_to_mme.py")
     calc_script = os.path.join(eval_dir, "eval_tool", "calculation.py")
@@ -280,20 +299,19 @@ def eval_mme(answers_file: str, output_dir: str) -> dict:
     result_dir = ensure_dir(os.path.join(output_dir, "results"))
 
     print("Converting MME answers...")
-    subprocess.run(
-        [
-            sys.executable,
-            convert_script,
-            "--experiment",
-            os.path.basename(output_dir),
-            "--answer-file",
-            answers_file,
-            "--result-dir",
-            result_dir,
-        ],
-        cwd=eval_dir,
-        check=True,
-    )
+    convert_cmd = [
+        sys.executable,
+        convert_script,
+        "--experiment",
+        os.path.basename(output_dir),
+        "--answer-file",
+        answers_file,
+        "--result-dir",
+        result_dir,
+    ]
+    if mme_data_path:
+        convert_cmd.extend(["--data-path", mme_data_path])
+    subprocess.run(convert_cmd, cwd=eval_dir, check=True)
 
     print("Running MME evaluation...")
     result = subprocess.run(
@@ -309,10 +327,13 @@ def eval_mme(answers_file: str, output_dir: str) -> dict:
     )
     emit_process_output(result, os.path.join(output_dir, "stdout.txt"))
 
-    return {
+    summary = {
         "results_dir": result_dir,
         "metrics": parse_mme_metrics(result.stdout or ""),
     }
+    if mme_data_path:
+        summary["mme_data_path"] = mme_data_path
+    return summary
 
 
 def eval_pope(answers_file: str, output_dir: str) -> dict:
@@ -378,6 +399,8 @@ def main():
                         help="Path to the JSONL answers file from inference")
     parser.add_argument("--output-dir", type=str,
                         help="Directory to write evaluation artifacts")
+    parser.add_argument("--mme-data-path", type=str,
+                        help="Optional MME benchmark root directory override")
     parser.add_argument("--run-dir", type=str,
                         help="Run directory under entropy_exp/outputs/runs")
     args = parser.parse_args()
@@ -403,7 +426,18 @@ def main():
     output_dir = ensure_dir(os.path.abspath(output_dir))
     print(f"Writing evaluation artifacts to: {output_dir}")
 
-    summary = EVAL_FUNCTIONS[dataset](answers_file, output_dir)
+    mme_data_path = None
+    if dataset == "mme":
+        mme_data_path = resolve_config_path(args.mme_data_path)
+        if mme_data_path is None and config_file is not None:
+            mme_data_path = resolve_config_path(
+                infer_config_value(config_file, ("datasets", "mme", "image_folder"))
+            )
+        summary = eval_mme(answers_file, output_dir, mme_data_path=mme_data_path)
+    else:
+        if args.mme_data_path:
+            parser.error("--mme-data-path can only be used with --dataset mme or an MME run directory")
+        summary = EVAL_FUNCTIONS[dataset](answers_file, output_dir)
     summary.update(
         {
             "dataset": dataset,
