@@ -22,8 +22,23 @@ import time
 import datetime
 import yaml
 os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
+# Disable HuggingFace Hub file locks to avoid serialization when running
+# multiple experiments concurrently.  Models are already cached locally.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+# Limit PyTorch CPU threads to avoid contention across concurrent experiments.
+# Default is ALL cores (192 on this machine); N experiments = N*192 threads
+# thrashing on 384 cores.  4 threads per experiment is sufficient for the
+# GPU-bound inference workload here.
+_cpu_threads = os.environ.get("OMP_NUM_THREADS")
+if _cpu_threads is None:
+    os.environ["OMP_NUM_THREADS"] = "4"
+    os.environ.setdefault("MKL_NUM_THREADS", "4")
 import h5py
 import torch
+if _cpu_threads is None:
+    torch.set_num_threads(4)
+    torch.set_num_interop_threads(2)
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
@@ -286,7 +301,8 @@ def run_prune_inference(
         questions, image_folder, tokenizer, image_processor,
         model.config, infer_cfg["conv_mode"],
     )
-    data_loader = DataLoader(dataset, batch_size=1, num_workers=4, shuffle=False, collate_fn=collate_fn)
+    num_workers = int(os.environ.get("DATALOADER_NUM_WORKERS", "0"))
+    data_loader = DataLoader(dataset, batch_size=1, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
 
     v_token_num = prune_cfg.get("v_token_num", 576)
     eos_token_id = tokenizer.eos_token_id or 2
@@ -452,7 +468,8 @@ def run_prune_inference(
                     layer_grp.create_dataset(
                         "prune_scores", data=np.asarray(scores, dtype=np.float32),
                     )
-            h5_file.flush()
+            if sample_idx % 50 == 0:
+                h5_file.flush()
 
         all_stats.append(sample_stats)
 

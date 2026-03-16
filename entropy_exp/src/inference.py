@@ -14,7 +14,17 @@ import json
 import time
 import datetime
 import yaml
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+_cpu_threads = os.environ.get("OMP_NUM_THREADS")
+if _cpu_threads is None:
+    os.environ["OMP_NUM_THREADS"] = "4"
+    os.environ.setdefault("MKL_NUM_THREADS", "4")
 import torch
+if _cpu_threads is None:
+    torch.set_num_threads(4)
+    torch.set_num_interop_threads(2)
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
@@ -157,8 +167,9 @@ def run_inference(config: dict, dataset_name: str, max_samples: int = None):
         questions, image_folder, tokenizer, image_processor,
         model.config, infer_cfg["conv_mode"]
     )
+    num_workers = int(os.environ.get("DATALOADER_NUM_WORKERS", "0"))
     data_loader = DataLoader(
-        dataset, batch_size=1, num_workers=4, shuffle=False, collate_fn=collate_fn
+        dataset, batch_size=1, num_workers=num_workers, shuffle=False, collate_fn=collate_fn
     )
 
     # Open HDF5 and answer file
