@@ -31,6 +31,9 @@ bash entropy_exp/scripts/run_prune.sh entropy pope
 # 用 random 策略跑 MME（由 inference.seed 控制可复现）
 bash entropy_exp/scripts/run_prune.sh random mme 10
 
+# 用 sparsevlm 策略跑 MME（text rater + text->vision attention）
+bash entropy_exp/scripts/run_prune.sh sparsevlm mme 10
+
 # 跑无剪枝 baseline（使用同一 decode 路径，计时公平）
 bash entropy_exp/scripts/run_prune.sh baseline mme 10
 
@@ -45,7 +48,7 @@ bash entropy_exp/scripts/run_prune.sh attn_score all
 
 | 位置 | 参数 | 可选值 | 说明 |
 |:--|:--|:--|:--|
-| $1 | strategy | `attn_score` / `entropy` / `random` / `baseline` / `compare` | 剪枝策略，`random` 使用固定 seed 可复现，`compare` 会依次跑三种 |
+| $1 | strategy | `attn_score` / `entropy` / `random` / `sparsevlm` / `baseline` / `compare` | 剪枝策略，`random` 使用固定 seed 可复现，`sparsevlm` 使用 text raters，`compare` 会依次跑三种 |
 | $2 | dataset | `gqa` / `mme` / `pope` / `all` | 数据集 |
 | $3 | max_samples | 整数（可选） | 限制样本数，省略则跑全量 |
 | -- | `--set key=val` | 任意（可多次） | 覆盖 yaml 配置项，见 §1.3 |
@@ -115,6 +118,7 @@ bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
 | `[0.3,0.5]` | `[0.3, 0.5]` | list (JSON) |
 | `entropy` | `"entropy"` | str |
 | `random` | `"random"` | str |
+| `sparsevlm` | `"sparsevlm"` | str |
 
 ---
 
@@ -139,7 +143,7 @@ inference:
   seed: 42                          # 随机种子
 
 pruning:
-  strategy: "attn_score"            # 剪枝策略：attn_score / entropy / random
+  strategy: "attn_score"            # 剪枝策略：attn_score / entropy / random / sparsevlm
   layer_selection: "fixed"          # 层选择方法
   prune_layers: [2, 3]             # 剪枝层列表
   prune_ratio: [0.5, 0.5]          # 对应每层的剪枝比例
@@ -151,6 +155,10 @@ pruning:
     dynamic_scale: 0.5
     max_prune_ratio: 0.9
   random: {}                        # random 策略额外参数（当前为空）
+  sparsevlm:                        # sparsevlm 策略额外参数
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
 
 capture:
   save_attention: false             # 保存注意力矩阵到 captures.h5（HDF5）
@@ -182,7 +190,7 @@ prune_ratio  →  决定「剪多少」（每层移除 visual token 的比例）
 prune.yaml
   ├─ pruning.strategy: "attn_score"     ─┐
   ├─ pruning.attn_score: {}              ─┤  ① get_strategy(name, config)
-  │  └─ (或 pruning.entropy/random: {})  ─┘     → 实例化对应策略
+  │  └─ (或 pruning.entropy/random/sparsevlm: {})  ─┘     → 实例化对应策略
   │
   ├─ pruning.prune_layers: [2, 3]       ─┐
   │                                       ├  ② VisualTokenPruner.__init__()
@@ -196,7 +204,7 @@ prune.yaml
   strategy.compute_keep_mask(...)                 →  保留 top-K 个 token
 ```
 
-**关键点**：`strategy` 只决定 importance 怎么算，`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。`random` 会根据 `inference.seed` 生成可复现的随机重要性分数，再按同样的 top-K 流程保留 token。
+**关键点**：`strategy` 只决定 importance 怎么算，`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。`random` 会根据 `inference.seed` 生成可复现的随机重要性分数，`sparsevlm` 会先选 text raters，再用当前层的 text->vision attention 给 visual token 打分。
 
 ### 2.3 典型配置示例
 
@@ -258,6 +266,21 @@ pruning:
 
 在相同的 `inference.seed` 下，多次运行会得到相同的随机保留结果。
 
+#### 示例 6：sparsevlm text-rater 剪枝
+
+```yaml
+pruning:
+  strategy: "sparsevlm"
+  prune_layers: [8, 12, 16]
+  prune_ratio: [0.25, 0.5, 0.5]
+  sparsevlm:
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
+```
+
+该策略会先从文本 token 中选择 image-relevant raters，再基于每个剪枝层的 text->vision attention 计算 visual token 分数。
+
 ### 2.4 如何跑实验
 
 **方式 1：`--set` 覆盖（推荐，无需创建文件）**
@@ -282,6 +305,11 @@ bash entropy_exp/scripts/run_prune.sh attn_score mme \
 bash entropy_exp/scripts/run_prune.sh random mme \
     --set pruning.prune_layers=[2,3] \
     --set pruning.prune_ratio=[0.5,0.5]
+
+# 实验 E：sparsevlm，第 8/12/16 层按给定比例剪枝
+bash entropy_exp/scripts/run_prune.sh sparsevlm mme \
+    --set pruning.prune_layers=[8,12,16] \
+    --set pruning.prune_ratio=[0.25,0.5,0.5]
 ```
 
 **方式 2：修改 yaml**

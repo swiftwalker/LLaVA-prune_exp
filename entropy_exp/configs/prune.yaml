@@ -4,6 +4,7 @@
 #   A) attn_score  — SparseVLM-style attention importance
 #   B) entropy     — entropy-weighted head aggregation
 #   C) random      — uniform random token importance (seed-reproducible)
+#   D) sparsevlm   — text-rater-guided text->vision attention pruning
 
 model:
   path: "entropy_exp/models/llava-v1.5-7b"
@@ -19,7 +20,7 @@ inference:
   seed: 42
 
 pruning:
-  strategy: "attn_score"            # attn_score | entropy | random
+  strategy: "attn_score"            # attn_score | entropy | random | sparsevlm
   # --- layer & ratio (paired lists of equal length) ---
   layer_selection: "fixed"          # fixed | dynamic (placeholder)
   prune_layers: [2, 3]             # 剪枝层列表 (0-indexed)
@@ -33,6 +34,10 @@ pruning:
     dynamic_scale: 0.5
     max_prune_ratio: 0.9
   random: {}
+  sparsevlm:
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
 
 capture:
   save_attention: false             # save text→vision attention sub-matrices to captures.h5 (HDF5)

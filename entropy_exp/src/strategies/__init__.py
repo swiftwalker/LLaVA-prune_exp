@@ -3,11 +3,13 @@
 from .attn_score import AttnScoreStrategy
 from .entropy import EntropyStrategy
 from .random import RandomStrategy
+from .sparsevlm import SparseVLMStrategy
 
 STRATEGY_REGISTRY = {
     "attn_score": AttnScoreStrategy,
     "entropy": EntropyStrategy,
     "random": RandomStrategy,
+    "sparsevlm": SparseVLMStrategy,
 }
 
 

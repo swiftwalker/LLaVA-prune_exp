@@ -18,6 +18,24 @@ class PruneStrategy(ABC):
 
     def __init__(self, config: dict):
         self.config = config
+        self.sample_context: Optional[Dict[str, Any]] = None
+
+    def prepare_sample(
+        self,
+        inputs_embeds: torch.Tensor,
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+        text_token_ids: Optional[torch.Tensor] = None,
+        text_special_token_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, Any]:
+        """Prepare any per-sample state needed before layer-by-layer prefill."""
+        self.sample_context = None
+        return {}
+
+    def clear_sample(self):
+        """Clear any sample-local state cached on the strategy."""
+        self.sample_context = None
 
     def requires_attention(self) -> bool:
         """Whether this strategy needs attention weights to decide pruning."""
@@ -70,6 +88,7 @@ class PruneStrategy(ABC):
         text_token_start: int,
         layer_idx: int,
         device: Optional[torch.device] = None,
+        current_visual_embeds: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
         Compute which visual tokens to keep.

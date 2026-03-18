@@ -120,6 +120,8 @@ class VisualTokenPruner:
         v_token_start: int,
         v_token_num: int,
         text_token_start: int,
+        text_token_ids: Optional[torch.Tensor] = None,
+        text_special_token_mask: Optional[torch.Tensor] = None,
         max_new_tokens: int = 128,
         eos_token_id: int = 2,
         save_tv_attn: bool = False,
@@ -146,11 +148,19 @@ class VisualTokenPruner:
 
         # --- Pruned prefill ---
         t0 = time.time()
-        hidden_states, past_kv, prune_info = self._pruned_prefill(
-            inputs_embeds, v_token_start, v_token_num, text_token_start,
-            save_tv_attn=save_tv_attn,
-            capture_layers=capture_layers,
-        )
+        try:
+            hidden_states, past_kv, prune_info = self._pruned_prefill(
+                inputs_embeds,
+                v_token_start,
+                v_token_num,
+                text_token_start,
+                text_token_ids=text_token_ids,
+                text_special_token_mask=text_special_token_mask,
+                save_tv_attn=save_tv_attn,
+                capture_layers=capture_layers,
+            )
+        finally:
+            self.strategy.clear_sample()
         t_prefill = time.time() - t0
 
         # --- First token ---
@@ -207,6 +217,8 @@ class VisualTokenPruner:
         v_token_start: int,
         v_token_num: int,
         text_token_start: int,
+        text_token_ids: Optional[torch.Tensor] = None,
+        text_special_token_mask: Optional[torch.Tensor] = None,
         save_tv_attn: bool = False,
         capture_layers: Optional[set] = None,
     ) -> Tuple[torch.Tensor, DynamicCache, Dict[str, Any]]:
@@ -220,6 +232,16 @@ class VisualTokenPruner:
 
         past_kv = DynamicCache()
         prune_info: Dict[str, Any] = {"layers": {}}
+        sample_info = self.strategy.prepare_sample(
+            inputs_embeds=inputs_embeds,
+            v_token_start=v_token_start,
+            v_token_num=v_token_num,
+            text_token_start=text_token_start,
+            text_token_ids=text_token_ids,
+            text_special_token_mask=text_special_token_mask,
+        )
+        if sample_info:
+            prune_info["sample"] = sample_info
 
         cur_v_start = v_token_start
         cur_v_num = v_token_num
@@ -263,6 +285,7 @@ class VisualTokenPruner:
                 keep_indices, layer_info = self.strategy.compute_keep_mask(
                     attn_weights, cur_v_start, cur_v_num,
                     cur_text_start, layer_idx, device=device,
+                    current_visual_embeds=hidden_states[0, cur_v_start:cur_v_start + cur_v_num],
                 )
 
                 num_pruned = cur_v_num - len(keep_indices)

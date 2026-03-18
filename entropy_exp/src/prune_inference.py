@@ -106,6 +106,14 @@ def collate_fn(batch):
     return input_ids, image_tensors, image_sizes
 
 
+def build_text_special_token_mask(tokenizer, text_token_ids: torch.Tensor) -> torch.Tensor:
+    """Build a boolean mask over text-side token ids for tokenizer special tokens."""
+    special_ids = set(getattr(tokenizer, "all_special_ids", []) or [])
+    ids = text_token_ids.tolist()
+    mask = [int(token_id) in special_ids for token_id in ids]
+    return torch.tensor(mask, dtype=torch.bool, device=text_token_ids.device)
+
+
 def load_config(config_path: str) -> dict:
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
@@ -333,6 +341,8 @@ def run_prune_inference(
                 v_token_start, _, text_token_start = locate_image_tokens(
                     input_ids, IMAGE_TOKEN_INDEX, v_token_num=v_token_num
                 )
+                text_token_ids = input_ids[0, v_token_start + 1:].clone()
+                text_special_token_mask = build_text_special_token_mask(tokenizer, text_token_ids)
                 expected_seq_len = v_token_start + v_token_num + (input_ids.shape[1] - (v_token_start + 1))
 
                 # --- prepare multimodal embeddings ---
@@ -365,6 +375,8 @@ def run_prune_inference(
                     v_token_start=v_token_start,
                     v_token_num=v_token_num,
                     text_token_start=text_token_start,
+                    text_token_ids=text_token_ids,
+                    text_special_token_mask=text_special_token_mask,
                     max_new_tokens=infer_cfg["max_new_tokens"],
                     eos_token_id=eos_token_id,
                     save_tv_attn=save_attention,
@@ -433,8 +445,14 @@ def run_prune_inference(
 
             if save_importance:
                 sample_stats[f"layer_{layer_idx}_importance"] = linfo["importance_scores"].tolist()
+                if "text_relevance_scores" in linfo:
+                    sample_stats[f"layer_{layer_idx}_text_relevance_scores"] = linfo["text_relevance_scores"].tolist()
             if save_indices:
                 sample_stats[f"layer_{layer_idx}_keep_indices"] = linfo["keep_indices"].tolist()
+                if "rater_indices" in linfo:
+                    sample_stats[f"layer_{layer_idx}_rater_indices"] = linfo["rater_indices"].tolist()
+                if "pruned_indices" in linfo:
+                    sample_stats[f"layer_{layer_idx}_pruned_indices"] = linfo["pruned_indices"].tolist()
 
         # Write attention captures to HDF5 (same format as Phase 1)
         if h5_file is not None:
