@@ -261,6 +261,7 @@ def run_prune_inference(
 
     # --- seed ---
     seed = infer_cfg.get("seed", 42)
+    random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
 

@@ -8,6 +8,7 @@
 # Examples:
 #   bash scripts/run_prune.sh attn_score mme 10
 #   bash scripts/run_prune.sh entropy pope
+#   bash scripts/run_prune.sh random mme 10
 #   bash scripts/run_prune.sh baseline mme 10
 #   bash scripts/run_prune.sh compare mme 10
 #   bash scripts/run_prune.sh attn_score mme 10 --set pruning.prune_layers=[5] --set pruning.prune_ratio=[0.7]

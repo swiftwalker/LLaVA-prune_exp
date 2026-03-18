@@ -228,7 +228,7 @@ class VisualTokenPruner:
         for layer_idx, layer in enumerate(self.model.model.layers):
             need_prune = layer_idx in self.prune_layers
             need_capture = save_tv_attn and (capture_layers is None or layer_idx in capture_layers)
-            need_attn = need_prune or need_capture
+            need_attn = need_capture or (need_prune and self.strategy.requires_attention())
 
             out = layer(
                 hidden_states,
@@ -253,41 +253,40 @@ class VisualTokenPruner:
                     }
 
             if need_prune and cur_v_num > 0:
-                attn_weights = out[1]  # [B, H, cur_len, cur_len]
+                attn_weights = out[1] if need_attn else None
 
-                if attn_weights is not None:
-                    # Extract text→vision sub-matrix before pruning changes positions
-                    if need_capture:
-                        v_end = cur_v_start + cur_v_num
-                        tv_attn = attn_weights[0, :, cur_text_start:, cur_v_start:v_end].cpu()
+                # Extract text→vision sub-matrix before pruning changes positions
+                if need_capture:
+                    v_end = cur_v_start + cur_v_num
+                    tv_attn = attn_weights[0, :, cur_text_start:, cur_v_start:v_end].cpu()
 
-                    keep_indices, layer_info = self.strategy.compute_keep_mask(
-                        attn_weights, cur_v_start, cur_v_num,
-                        cur_text_start, layer_idx,
+                keep_indices, layer_info = self.strategy.compute_keep_mask(
+                    attn_weights, cur_v_start, cur_v_num,
+                    cur_text_start, layer_idx, device=device,
+                )
+
+                num_pruned = cur_v_num - len(keep_indices)
+                if num_pruned > 0:
+                    full_keep = self._build_full_keep_mask(
+                        hidden_states.shape[1], cur_v_start, cur_v_num,
+                        keep_indices, device,
                     )
 
-                    num_pruned = cur_v_num - len(keep_indices)
-                    if num_pruned > 0:
-                        full_keep = self._build_full_keep_mask(
-                            hidden_states.shape[1], cur_v_start, cur_v_num,
-                            keep_indices, device,
-                        )
+                    hidden_states = hidden_states[:, full_keep]
+                    self._prune_kv_cache(past_kv, full_keep, up_to_layer=layer_idx)
 
-                        hidden_states = hidden_states[:, full_keep]
-                        self._prune_kv_cache(past_kv, full_keep, up_to_layer=layer_idx)
+                    new_len = hidden_states.shape[1]
+                    position_ids = torch.arange(new_len, device=device, dtype=torch.long).unsqueeze(0)
+                    causal_mask = _make_causal_mask(new_len, dtype, device)
 
-                        new_len = hidden_states.shape[1]
-                        position_ids = torch.arange(new_len, device=device, dtype=torch.long).unsqueeze(0)
-                        causal_mask = _make_causal_mask(new_len, dtype, device)
+                    cur_v_num = len(keep_indices)
+                    cur_text_start = cur_v_start + cur_v_num
 
-                        cur_v_num = len(keep_indices)
-                        cur_text_start = cur_v_start + cur_v_num
+                if need_capture:
+                    layer_info["tv_attn"] = tv_attn  # [H, L_t, L_v]
 
-                    if need_capture:
-                        layer_info["tv_attn"] = tv_attn  # [H, L_t, L_v]
-
-                    layer_info["layer_idx"] = layer_idx
-                    prune_info["layers"][layer_idx] = layer_info
+                layer_info["layer_idx"] = layer_idx
+                prune_info["layers"][layer_idx] = layer_info
 
         hidden_states = self.model.model.norm(hidden_states)
 

@@ -7,7 +7,7 @@ A strategy defines:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Optional, Tuple
 
 import torch
 import numpy as np
@@ -19,24 +19,31 @@ class PruneStrategy(ABC):
     def __init__(self, config: dict):
         self.config = config
 
+    def requires_attention(self) -> bool:
+        """Whether this strategy needs attention weights to decide pruning."""
+        return True
+
     @abstractmethod
     def compute_importance(
         self,
-        attn_weights: torch.Tensor,
+        attn_weights: Optional[torch.Tensor],
         v_token_start: int,
         v_token_num: int,
         text_token_start: int,
         layer_idx: int,
+        device: Optional[torch.device] = None,
     ) -> torch.Tensor:
         """
         Compute per-visual-token importance scores.
 
         Args:
-            attn_weights: [B, H, L, L] post-softmax attention weights at the prune layer
+            attn_weights: [B, H, L, L] post-softmax attention weights at the prune layer,
+                or None for strategies that do not require them
             v_token_start: start position of visual tokens in the sequence
             v_token_num: number of visual tokens (e.g. 576)
             text_token_start: start position of text tokens (= v_token_start + v_token_num)
             layer_idx: current layer index
+            device: device for creating new tensors when attention is unavailable
 
         Returns:
             torch.Tensor of shape [v_token_num] — importance score per visual token
@@ -57,11 +64,12 @@ class PruneStrategy(ABC):
 
     def compute_keep_mask(
         self,
-        attn_weights: torch.Tensor,
+        attn_weights: Optional[torch.Tensor],
         v_token_start: int,
         v_token_num: int,
         text_token_start: int,
         layer_idx: int,
+        device: Optional[torch.device] = None,
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
         Compute which visual tokens to keep.
@@ -71,8 +79,13 @@ class PruneStrategy(ABC):
                           sorted in ascending order to preserve spatial layout.
             info: dict with pruning statistics for logging/analysis.
         """
+        if self.requires_attention() and attn_weights is None:
+            raise ValueError(
+                f"{self.__class__.__name__} requires attention weights, but none were provided"
+            )
+
         importance = self.compute_importance(
-            attn_weights, v_token_start, v_token_num, text_token_start, layer_idx
+            attn_weights, v_token_start, v_token_num, text_token_start, layer_idx, device=device
         )
 
         prune_ratio = self.get_prune_ratio(layer_idx, importance)

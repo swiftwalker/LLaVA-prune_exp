@@ -28,6 +28,9 @@ bash entropy_exp/scripts/run_prune.sh attn_score mme 10
 # 用 entropy 策略跑 POPE 全量
 bash entropy_exp/scripts/run_prune.sh entropy pope
 
+# 用 random 策略跑 MME（由 inference.seed 控制可复现）
+bash entropy_exp/scripts/run_prune.sh random mme 10
+
 # 跑无剪枝 baseline（使用同一 decode 路径，计时公平）
 bash entropy_exp/scripts/run_prune.sh baseline mme 10
 
@@ -42,7 +45,7 @@ bash entropy_exp/scripts/run_prune.sh attn_score all
 
 | 位置 | 参数 | 可选值 | 说明 |
 |:--|:--|:--|:--|
-| $1 | strategy | `attn_score` / `entropy` / `baseline` / `compare` | 剪枝策略，`compare` 会依次跑三种 |
+| $1 | strategy | `attn_score` / `entropy` / `random` / `baseline` / `compare` | 剪枝策略，`random` 使用固定 seed 可复现，`compare` 会依次跑三种 |
 | $2 | dataset | `gqa` / `mme` / `pope` / `all` | 数据集 |
 | $3 | max_samples | 整数（可选） | 限制样本数，省略则跑全量 |
 | -- | `--set key=val` | 任意（可多次） | 覆盖 yaml 配置项，见 §1.3 |
@@ -111,6 +114,7 @@ bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
 | `[2,5,10]` | `[2, 5, 10]` | list (JSON) |
 | `[0.3,0.5]` | `[0.3, 0.5]` | list (JSON) |
 | `entropy` | `"entropy"` | str |
+| `random` | `"random"` | str |
 
 ---
 
@@ -135,7 +139,7 @@ inference:
   seed: 42                          # 随机种子
 
 pruning:
-  strategy: "attn_score"            # 剪枝策略
+  strategy: "attn_score"            # 剪枝策略：attn_score / entropy / random
   layer_selection: "fixed"          # 层选择方法
   prune_layers: [2, 3]             # 剪枝层列表
   prune_ratio: [0.5, 0.5]          # 对应每层的剪枝比例
@@ -146,6 +150,7 @@ pruning:
     dynamic_ratio: false
     dynamic_scale: 0.5
     max_prune_ratio: 0.9
+  random: {}                        # random 策略额外参数（当前为空）
 
 capture:
   save_attention: false             # 保存注意力矩阵到 captures.h5（HDF5）
@@ -177,7 +182,7 @@ prune_ratio  →  决定「剪多少」（每层移除 visual token 的比例）
 prune.yaml
   ├─ pruning.strategy: "attn_score"     ─┐
   ├─ pruning.attn_score: {}              ─┤  ① get_strategy(name, config)
-  │  └─ (或 pruning.entropy: {...})      ─┘     → 实例化 AttnScoreStrategy / EntropyStrategy
+  │  └─ (或 pruning.entropy/random: {})  ─┘     → 实例化对应策略
   │
   ├─ pruning.prune_layers: [2, 3]       ─┐
   │                                       ├  ② VisualTokenPruner.__init__()
@@ -185,13 +190,13 @@ prune.yaml
                                                 → _build_layer_ratio_map()  将两者 zip 成
                                                   {2: 0.5, 3: 0.5} 并注入 strategy.config
 
-第 N 层有 output_attentions 时:
+第 N 层执行剪枝时:
   strategy.compute_importance(attn_weights, ...)  →  [576] 重要性分数
   strategy.get_prune_ratio(layer_idx, scores)     →  从 ratio_map 查出该层比例
   strategy.compute_keep_mask(...)                 →  保留 top-K 个 token
 ```
 
-**关键点**：`strategy` 只决定 importance 怎么算，`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。
+**关键点**：`strategy` 只决定 importance 怎么算，`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。`random` 会根据 `inference.seed` 生成可复现的随机重要性分数，再按同样的 top-K 流程保留 token。
 
 ### 2.3 典型配置示例
 
@@ -242,6 +247,17 @@ pruning:
 
 > **注意**：当 `prune_layers` 和 `prune_ratio` 都是列表时长度必须相等，否则启动时会报错。
 
+#### 示例 5：可复现的 random 剪枝
+
+```yaml
+pruning:
+  strategy: "random"
+  prune_layers: [2, 3]
+  prune_ratio: [0.5, 0.5]
+```
+
+在相同的 `inference.seed` 下，多次运行会得到相同的随机保留结果。
+
 ### 2.4 如何跑实验
 
 **方式 1：`--set` 覆盖（推荐，无需创建文件）**
@@ -261,6 +277,11 @@ bash entropy_exp/scripts/run_prune.sh entropy mme \
 bash entropy_exp/scripts/run_prune.sh attn_score mme \
     --set pruning.prune_layers=[5] \
     --set pruning.prune_ratio=[0.7]
+
+# 实验 D：random，第 2、3 层各剪 50%
+bash entropy_exp/scripts/run_prune.sh random mme \
+    --set pruning.prune_layers=[2,3] \
+    --set pruning.prune_ratio=[0.5,0.5]
 ```
 
 **方式 2：修改 yaml**
@@ -275,10 +296,11 @@ python entropy_exp/src/prune_inference.py \
 
 **方式 3：`compare` 一键对比**
 
-自动跑 baseline + attn_score + entropy，共享同一组 `prune_layers` / `prune_ratio`：
+自动跑 baseline + attn_score + entropy，共享同一组 `prune_layers` / `prune_ratio`。`random` 需要单独调用：
 
 ```bash
 bash entropy_exp/scripts/run_prune.sh compare mme
+bash entropy_exp/scripts/run_prune.sh random mme
 ```
 
 ### 2.5 其他参数速查
@@ -475,6 +497,10 @@ bash entropy_exp/scripts/run_prune.sh attn_score mme 2
 bash entropy_exp/scripts/run_prune.sh attn_score gqa
 # 评测时指定 run 目录下的 answers.jsonl
 bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_attn_score_*/answers.jsonl
+
+# random 策略同理
+bash entropy_exp/scripts/run_prune.sh random gqa
+bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_random_*/answers.jsonl
 ```
 
 ### 5.3 策略对比实验
@@ -514,6 +540,11 @@ bash entropy_exp/scripts/run_prune.sh entropy mme \
     --set pruning.entropy.dynamic_ratio=true \
     --set pruning.entropy.dynamic_scale=0.8 \
     --set pruning.entropy.max_prune_ratio=0.9
+
+# 实验 E：random（固定 seed，可复现实验）
+bash entropy_exp/scripts/run_prune.sh random mme \
+    --set pruning.prune_layers=[2,3] \
+    --set pruning.prune_ratio=[0.5,0.5]
 ```
 
 > **Tip**：把上述命令写成一个批跑脚本，就可以一次性提交多组实验。`--set` 优先级高于 yaml 文件中的值，不会修改原始 yaml。

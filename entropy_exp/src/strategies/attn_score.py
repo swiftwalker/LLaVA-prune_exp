@@ -5,7 +5,10 @@ Importance = mean over attention heads → mean over text query positions
 → per visual token importance score.
 """
 
+from typing import Optional
+
 import torch
+
 from .base import PruneStrategy
 
 
@@ -19,12 +22,15 @@ class AttnScoreStrategy(PruneStrategy):
 
     def compute_importance(
         self,
-        attn_weights: torch.Tensor,
+        attn_weights: Optional[torch.Tensor],
         v_token_start: int,
         v_token_num: int,
         text_token_start: int,
         layer_idx: int,
+        device: Optional[torch.device] = None,
     ) -> torch.Tensor:
+        if attn_weights is None:
+            raise ValueError("AttnScoreStrategy requires attention weights")
         # attn_weights: [B, H, L, L]  (post-softmax)
         v_end = v_token_start + v_token_num
         # text queries (rows) attending to visual keys (cols): [H, L_t, L_v]

@@ -9,7 +9,10 @@ Optionally supports dynamic prune ratio based on the overall concentration
 of importance scores.
 """
 
+from typing import Optional
+
 import torch
+
 from .base import PruneStrategy
 
 
@@ -25,12 +28,15 @@ class EntropyStrategy(PruneStrategy):
 
     def compute_importance(
         self,
-        attn_weights: torch.Tensor,
+        attn_weights: Optional[torch.Tensor],
         v_token_start: int,
         v_token_num: int,
         text_token_start: int,
         layer_idx: int,
+        device: Optional[torch.device] = None,
     ) -> torch.Tensor:
+        if attn_weights is None:
+            raise ValueError("EntropyStrategy requires attention weights")
         v_end = v_token_start + v_token_num
         # [H, L_t, L_v]
         tv = attn_weights[0, :, text_token_start:, v_token_start:v_end]
