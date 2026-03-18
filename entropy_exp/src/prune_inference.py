@@ -420,6 +420,7 @@ def run_prune_inference(
             "sample_idx": sample_idx,
             "run_mode": run_mode,
             "strategy_requested": strategy_name,
+            "prune_stage": prune_info.get("prune_stage", strategy.prune_stage()),
             "effective_prune_ratio_map": effective_ratio_map,
             "prune_layers": pruner.prune_layers,
             "question_id": str(question_id),
@@ -514,6 +515,7 @@ def run_prune_inference(
     print(f"\nDone! {len(questions)} samples processed.")
     print(f"  Run mode:          {run_mode}")
     print(f"  Strategy:          {strategy_name}")
+    print(f"  Prune stage:       {prune_info.get('prune_stage', strategy.prune_stage()) if questions else strategy.prune_stage()}")
     print(f"  Prune layer(s):    {pruner.prune_layers}")
     print(f"  Avg tokens pruned: {avg_pruned:.1f} / {v_token_num}")
     print(f"  Avg time/sample:   {avg_time:.3f}s")

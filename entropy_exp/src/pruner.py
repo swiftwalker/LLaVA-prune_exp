@@ -46,6 +46,51 @@ def _make_causal_mask(
     return mask.unsqueeze(0).unsqueeze(0)  # [1, 1, Q, KV]
 
 
+def _repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    """Repeat KV heads to match the number of attention heads."""
+    if n_rep == 1:
+        return hidden_states
+    batch_size, num_key_value_heads, seq_len, head_dim = hidden_states.shape
+    hidden_states = hidden_states[:, :, None, :, :].expand(
+        batch_size, num_key_value_heads, n_rep, seq_len, head_dim
+    )
+    return hidden_states.reshape(batch_size, num_key_value_heads * n_rep, seq_len, head_dim)
+
+
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """Rotate the last dimension by half for RoPE."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def _gather_rotary_cache(cache: torch.Tensor, position_ids: torch.Tensor) -> torch.Tensor:
+    if cache.dim() == 2:
+        gathered = cache.index_select(0, position_ids.reshape(-1))
+        return gathered.view(*position_ids.shape, cache.shape[-1]).unsqueeze(1)
+    if cache.dim() == 3 and cache.shape[0] == 1:
+        gathered = cache[0].index_select(0, position_ids.reshape(-1))
+        return gathered.view(*position_ids.shape, cache.shape[-1]).unsqueeze(1)
+    if cache.dim() == 4 and cache.shape[0] == 1 and cache.shape[1] == 1:
+        gathered = cache[0, 0].index_select(0, position_ids.reshape(-1))
+        return gathered.view(*position_ids.shape, cache.shape[-1]).unsqueeze(1)
+    raise NotImplementedError(f"Unsupported rotary cache shape: {tuple(cache.shape)}")
+
+
+def _apply_rotary_pos_emb(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    position_ids: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    cos = _gather_rotary_cache(cos, position_ids).to(dtype=query_states.dtype, device=query_states.device)
+    sin = _gather_rotary_cache(sin, position_ids).to(dtype=query_states.dtype, device=query_states.device)
+    query_states = (query_states * cos) + (_rotate_half(query_states) * sin)
+    key_states = (key_states * cos) + (_rotate_half(key_states) * sin)
+    return query_states, key_states
+
+
 # ---------------------------------------------------------------------------
 # Pruner
 # ---------------------------------------------------------------------------
@@ -231,7 +276,8 @@ class VisualTokenPruner:
         causal_mask = _make_causal_mask(seq_len, dtype, device)
 
         past_kv = DynamicCache()
-        prune_info: Dict[str, Any] = {"layers": {}}
+        prune_stage = self.strategy.prune_stage()
+        prune_info: Dict[str, Any] = {"layers": {}, "prune_stage": prune_stage}
         sample_info = self.strategy.prepare_sample(
             inputs_embeds=inputs_embeds,
             v_token_start=v_token_start,
@@ -250,6 +296,26 @@ class VisualTokenPruner:
         for layer_idx, layer in enumerate(self.model.model.layers):
             need_prune = layer_idx in self.prune_layers
             need_capture = save_tv_attn and (capture_layers is None or layer_idx in capture_layers)
+            if prune_stage == "pre" and need_prune and cur_v_num > 0:
+                hidden_states, position_ids, causal_mask, cur_v_num, cur_text_start, layer_info = self._run_pre_prune_layer(
+                    layer=layer,
+                    layer_idx=layer_idx,
+                    hidden_states=hidden_states,
+                    position_ids=position_ids,
+                    causal_mask=causal_mask,
+                    past_kv=past_kv,
+                    v_token_start=cur_v_start,
+                    v_token_num=cur_v_num,
+                    text_token_start=cur_text_start,
+                    need_capture=need_capture,
+                    dtype=dtype,
+                    device=device,
+                )
+                layer_info["layer_idx"] = layer_idx
+                layer_info["prune_stage"] = prune_stage
+                prune_info["layers"][layer_idx] = layer_info
+                continue
+
             need_attn = need_capture or (need_prune and self.strategy.requires_attention())
 
             out = layer(
@@ -309,6 +375,7 @@ class VisualTokenPruner:
                     layer_info["tv_attn"] = tv_attn  # [H, L_t, L_v]
 
                 layer_info["layer_idx"] = layer_idx
+                layer_info["prune_stage"] = prune_stage
                 prune_info["layers"][layer_idx] = layer_info
 
         hidden_states = self.model.model.norm(hidden_states)
@@ -322,6 +389,144 @@ class VisualTokenPruner:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _run_pre_prune_layer(
+        self,
+        layer,
+        layer_idx: int,
+        hidden_states: torch.Tensor,
+        position_ids: torch.Tensor,
+        causal_mask: torch.Tensor,
+        past_kv: DynamicCache,
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+        need_capture: bool,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int, Dict[str, Any]]:
+        tv_attn, importance_scores = self._compute_pre_prune_scores(
+            layer=layer,
+            hidden_states=hidden_states,
+            position_ids=position_ids,
+            attention_mask=causal_mask,
+            v_token_start=v_token_start,
+            v_token_num=v_token_num,
+            text_token_start=text_token_start,
+        )
+        keep_indices, layer_info = self.strategy.compute_keep_mask_from_importance(
+            importance_scores=importance_scores,
+            layer_idx=layer_idx,
+        )
+
+        num_pruned = v_token_num - len(keep_indices)
+        cur_v_num = v_token_num
+        cur_text_start = text_token_start
+        if num_pruned > 0:
+            full_keep = self._build_full_keep_mask(
+                hidden_states.shape[1], v_token_start, v_token_num, keep_indices, device
+            )
+            hidden_states = hidden_states[:, full_keep]
+            self._prune_kv_cache(past_kv, full_keep, up_to_layer=layer_idx - 1)
+            cur_v_num = len(keep_indices)
+            cur_text_start = v_token_start + cur_v_num
+            position_ids, causal_mask = self._refresh_sequence_state(
+                seq_len=hidden_states.shape[1],
+                dtype=dtype,
+                device=device,
+            )
+
+        out = layer(
+            hidden_states,
+            attention_mask=causal_mask,
+            position_ids=position_ids,
+            past_key_value=past_kv,
+            use_cache=True,
+            output_attentions=False,
+        )
+        hidden_states = out[0]
+
+        if need_capture:
+            layer_info["tv_attn"] = tv_attn.cpu()
+
+        return hidden_states, position_ids, causal_mask, cur_v_num, cur_text_start, layer_info
+
+    def _compute_pre_prune_scores(
+        self,
+        layer,
+        hidden_states: torch.Tensor,
+        position_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if hidden_states.shape[0] != 1:
+            raise NotImplementedError(
+                f"pre_attn_score only supports batch size 1, got batch={hidden_states.shape[0]}"
+            )
+        required_layer_attrs = ["input_layernorm", "self_attn"]
+        missing_layer_attrs = [name for name in required_layer_attrs if not hasattr(layer, name)]
+        if missing_layer_attrs:
+            raise NotImplementedError(
+                f"pre_attn_score requires a Llama-style decoder layer with {missing_layer_attrs}, "
+                f"but layer {type(layer).__name__} does not provide them"
+            )
+
+        attn_module = layer.self_attn
+        required_attn_attrs = ["q_proj", "k_proj", "rotary_emb", "num_heads", "head_dim"]
+        missing_attn_attrs = [name for name in required_attn_attrs if not hasattr(attn_module, name)]
+        if missing_attn_attrs:
+            raise NotImplementedError(
+                f"pre_attn_score requires a Llama-style self attention module with {missing_attn_attrs}, "
+                f"but {type(attn_module).__name__} does not provide them"
+            )
+
+        normed_hidden = layer.input_layernorm(hidden_states)
+        batch_size, seq_len, _ = normed_hidden.size()
+        num_heads = int(attn_module.num_heads)
+        head_dim = int(attn_module.head_dim)
+        num_key_value_heads = int(getattr(attn_module, "num_key_value_heads", num_heads))
+        num_key_value_groups = int(getattr(attn_module, "num_key_value_groups", max(num_heads // num_key_value_heads, 1)))
+
+        query_states = attn_module.q_proj(normed_hidden).view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
+        key_states = attn_module.k_proj(normed_hidden).view(
+            batch_size, seq_len, num_key_value_heads, head_dim
+        ).transpose(1, 2)
+
+        rotary_input = key_states
+        try:
+            cos, sin = attn_module.rotary_emb(rotary_input, seq_len=seq_len)
+        except TypeError:
+            cos, sin = attn_module.rotary_emb(rotary_input, seq_len)
+        query_states, key_states = _apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        key_states = _repeat_kv(key_states, num_key_value_groups)
+
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(head_dim)
+        if attention_mask is not None:
+            if attention_mask.dim() != 4:
+                raise NotImplementedError(
+                    f"pre_attn_score expects a 4D causal mask, got shape {tuple(attention_mask.shape)}"
+                )
+            attn_weights = attn_weights + attention_mask.to(dtype=attn_weights.dtype, device=attn_weights.device)
+            min_value = torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device, dtype=attn_weights.dtype)
+            attn_weights = torch.max(attn_weights, min_value)
+
+        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        v_end = v_token_start + v_token_num
+        tv_attn = attn_weights[0, :, text_token_start:, v_token_start:v_end]
+        importance_scores = tv_attn.mean(dim=0).mean(dim=0)
+        return tv_attn, importance_scores
+
+    @staticmethod
+    def _refresh_sequence_state(
+        seq_len: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        position_ids = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0)
+        causal_mask = _make_causal_mask(seq_len, dtype, device)
+        return position_ids, causal_mask
+
     @staticmethod
     def _build_full_keep_mask(
         seq_len: int,

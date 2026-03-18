@@ -41,6 +41,10 @@ class PruneStrategy(ABC):
         """Whether this strategy needs attention weights to decide pruning."""
         return True
 
+    def prune_stage(self) -> str:
+        """Whether pruning happens before or after the target layer forward."""
+        return "post"
+
     @abstractmethod
     def compute_importance(
         self,
@@ -80,6 +84,32 @@ class PruneStrategy(ABC):
             return ratio_map[layer_idx]
         return self.config.get("prune_ratio", 0.5)
 
+    def compute_keep_mask_from_importance(
+        self,
+        importance_scores: torch.Tensor,
+        layer_idx: int,
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        """Select kept visual tokens from externally computed importance scores."""
+        v_token_num = int(importance_scores.shape[0])
+        prune_ratio = self.get_prune_ratio(layer_idx, importance_scores)
+
+        num_prune = int(v_token_num * prune_ratio)
+        num_keep = v_token_num - num_prune
+
+        # Keep the top-num_keep tokens by importance (preserve spatial order)
+        _, sorted_indices = importance_scores.sort(descending=True)
+        keep_indices = sorted_indices[:num_keep].sort().values
+
+        info = {
+            "prune_ratio": prune_ratio,
+            "num_visual_before": v_token_num,
+            "num_visual_after": num_keep,
+            "num_pruned": num_prune,
+            "importance_scores": importance_scores.detach().cpu().numpy(),
+            "keep_indices": keep_indices.detach().cpu().numpy(),
+        }
+        return keep_indices, info
+
     def compute_keep_mask(
         self,
         attn_weights: Optional[torch.Tensor],
@@ -106,23 +136,4 @@ class PruneStrategy(ABC):
         importance = self.compute_importance(
             attn_weights, v_token_start, v_token_num, text_token_start, layer_idx, device=device
         )
-
-        prune_ratio = self.get_prune_ratio(layer_idx, importance)
-
-        num_prune = int(v_token_num * prune_ratio)
-        num_keep = v_token_num - num_prune
-
-        # Keep the top-num_keep tokens by importance (preserve spatial order)
-        _, sorted_indices = importance.sort(descending=True)
-        keep_indices = sorted_indices[:num_keep].sort().values
-
-        info = {
-            "prune_ratio": prune_ratio,
-            "num_visual_before": v_token_num,
-            "num_visual_after": num_keep,
-            "num_pruned": num_prune,
-            "importance_scores": importance.detach().cpu().numpy(),
-            "keep_indices": keep_indices.detach().cpu().numpy(),
-        }
-
-        return keep_indices, info
+        return self.compute_keep_mask_from_importance(importance, layer_idx)

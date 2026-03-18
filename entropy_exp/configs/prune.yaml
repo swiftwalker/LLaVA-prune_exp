@@ -2,9 +2,10 @@
 # ==================================
 # Two strategies are compared under the same pruning layer & evaluation:
 #   A) attn_score  — SparseVLM-style attention importance
-#   B) entropy     — entropy-weighted head aggregation
-#   C) random      — uniform random token importance (seed-reproducible)
-#   D) sparsevlm   — text-rater-guided text->vision attention pruning
+#   B) pre_attn_score — same aggregation, but prune before the target layer forward
+#   C) entropy     — entropy-weighted head aggregation
+#   D) random      — uniform random token importance (seed-reproducible)
+#   E) sparsevlm   — text-rater-guided text->vision attention pruning
 
 model:
   path: "entropy_exp/models/llava-v1.5-7b"
@@ -20,7 +21,7 @@ inference:
   seed: 42
 
 pruning:
-  strategy: "attn_score"            # attn_score | entropy | random | sparsevlm
+  strategy: "attn_score"            # attn_score | pre_attn_score | entropy | random | sparsevlm
   # --- layer & ratio (paired lists of equal length) ---
   layer_selection: "fixed"          # fixed | dynamic (placeholder)
   prune_layers: [2, 3]             # 剪枝层列表 (0-indexed)
@@ -29,6 +30,7 @@ pruning:
   max_samples: null                 # null = all; int for debugging
   # --- strategy-specific ---
   attn_score: {}
+  pre_attn_score: {}
   entropy:
     dynamic_ratio: false            # if true, ratio is modulated by entropy
     dynamic_scale: 0.5

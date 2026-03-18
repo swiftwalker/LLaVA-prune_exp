@@ -7,11 +7,11 @@
 #
 # Examples:
 #   bash scripts/run_prune.sh attn_score mme 10
+#   bash scripts/run_prune.sh pre_attn_score mme 10
 #   bash scripts/run_prune.sh entropy pope
 #   bash scripts/run_prune.sh random mme 10
 #   bash scripts/run_prune.sh sparsevlm mme 10
 #   bash scripts/run_prune.sh baseline mme 10
-#   bash scripts/run_prune.sh compare mme 10
 #   bash scripts/run_prune.sh attn_score mme 10 --set pruning.prune_layers=[5] --set pruning.prune_ratio=[0.7]
 # =============================================================================
 
@@ -23,9 +23,23 @@ LLAVA_ROOT="$(dirname "$PROJECT_DIR")"
 
 cd "$LLAVA_ROOT"
 
-STRATEGY="${1:?Usage: run_prune.sh <strategy|baseline|compare> <dataset|all> [max_samples] [--set ...]}"
-DATASET="${2:?Usage: run_prune.sh <strategy|baseline|compare> <dataset|all> [max_samples] [--set ...]}"
+STRATEGY="${1:?Usage: run_prune.sh <strategy|baseline> <dataset|all> [max_samples] [--set ...]}"
+DATASET="${2:?Usage: run_prune.sh <strategy|baseline> <dataset|all> [max_samples] [--set ...]}"
 shift 2
+
+case "$STRATEGY" in
+    baseline|attn_score|pre_attn_score|entropy|random|sparsevlm)
+        ;;
+    compare)
+        echo "Strategy 'compare' has been removed. Please run strategies explicitly." >&2
+        exit 1
+        ;;
+    *)
+        echo "Unknown strategy: $STRATEGY" >&2
+        echo "Supported strategies: baseline, attn_score, pre_attn_score, entropy, random, sparsevlm" >&2
+        exit 1
+        ;;
+esac
 
 # Parse optional max_samples (first positional arg that is a plain integer)
 MAX_SAMPLES=""
@@ -95,14 +109,7 @@ run_dataset() {
     fi
 }
 
-if [ "$STRATEGY" = "compare" ]; then
-    # Run baseline + all strategies on the given dataset(s)
-    for s in baseline attn_score entropy; do
-        run_dataset "$s" "$DATASET"
-    done
-else
-    run_dataset "$STRATEGY" "$DATASET"
-fi
+run_dataset "$STRATEGY" "$DATASET"
 
 echo ""
 echo "========================================"
