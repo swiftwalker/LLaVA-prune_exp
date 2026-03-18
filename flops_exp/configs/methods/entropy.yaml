@@ -1,0 +1,3 @@
+strategy: "entropy"
+config_path: "entropy_exp/configs/prune.yaml"
+

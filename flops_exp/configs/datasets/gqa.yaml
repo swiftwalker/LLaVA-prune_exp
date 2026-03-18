@@ -1,0 +1,7 @@
+dataset_name: "gqa"
+question_file: "entropy_exp/eval_questions/gqa/llava_gqa_testdev_balanced.jsonl"
+image_folder: "entropy_exp/datasets/gqa/images"
+text_field: "text"
+image_field: "image"
+id_field: "question_id"
+

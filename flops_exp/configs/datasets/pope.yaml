@@ -1,0 +1,7 @@
+dataset_name: "pope"
+question_file: "entropy_exp/eval_questions/pope/llava_pope_test.jsonl"
+image_folder: "entropy_exp/datasets/pope/val2014"
+text_field: "text"
+image_field: "image"
+id_field: "question_id"
+

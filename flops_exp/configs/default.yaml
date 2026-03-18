@@ -1,0 +1,14 @@
+model:
+  model_path: "entropy_exp/models/llava-v1.5-7b"
+  tokenizer_path: null
+  conv_mode: "vicuna_v1"
+
+input:
+  image_token_len: 576
+
+output:
+  base_dir: "flops_exp/outputs"
+
+evaluation:
+  default_length_stat: "mean"
+  include_decode: false

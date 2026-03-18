@@ -1,0 +1,7 @@
+dataset_name: "mme"
+question_file: "entropy_exp/eval_questions/MME/llava_mme.jsonl"
+image_folder: "entropy_exp/datasets/MME_Benchmark_release_version"
+text_field: "text"
+image_field: "image"
+id_field: "question_id"
+

@@ -57,3 +57,11 @@ entropy_exp/outputs/answers/
 entropy_exp/outputs/figures/
 entropy_exp/outputs/runs/
 entropy_exp/outputs/summary/
+
+# FLOPs experiment — generated outputs (keep placeholder .gitkeep files)
+flops_exp/outputs/batch_flops/*
+!flops_exp/outputs/batch_flops/.gitkeep
+flops_exp/outputs/flops/*
+!flops_exp/outputs/flops/.gitkeep
+flops_exp/outputs/text_stats/*
+!flops_exp/outputs/text_stats/.gitkeep
