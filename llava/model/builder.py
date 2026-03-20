@@ -26,12 +26,10 @@ from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, D
 def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", device="cuda", use_flash_attn=False, disable_mmap=True, **kwargs):
     kwargs = {"device_map": device_map, **kwargs}
     
-    # Optimize for NFS: disable mmap to avoid slow random I/O
+    # Keep safetensors disabled here if needed, but do not disable PyTorch's
+    # CUDA caching allocator: that hurts multi-process inference throughput.
     if disable_mmap:
         kwargs['use_safetensors'] = False
-        # Force PyTorch to use normal file I/O instead of mmap
-        import os
-        os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
 
     if device != "cuda":
         kwargs['device_map'] = {"": device}

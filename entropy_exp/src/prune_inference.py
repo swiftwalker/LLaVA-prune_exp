@@ -22,10 +22,6 @@ import time
 import datetime
 import yaml
 os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
-# Disable HuggingFace Hub file locks to avoid serialization when running
-# multiple experiments concurrently.  Models are already cached locally.
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 # Limit PyTorch CPU threads to avoid contention across concurrent experiments.
 # Default is ALL cores (192 on this machine); N experiments = N*192 threads
 # thrashing on 384 cores.  4 threads per experiment is sufficient for the
