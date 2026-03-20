@@ -15,8 +15,6 @@ import time
 import datetime
 import yaml
 os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 _cpu_threads = os.environ.get("OMP_NUM_THREADS")
 if _cpu_threads is None:
     os.environ["OMP_NUM_THREADS"] = "4"
