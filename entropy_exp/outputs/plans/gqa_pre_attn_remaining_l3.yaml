@@ -1,0 +1,41 @@
+label: "gqa-l3-remaining-plus-baseline"
+summary_output_dir: "entropy_exp/outputs/summary/gqa_l3_remaining_plus_baseline"
+evaluate: true
+summarize: true
+
+defaults:
+  max_samples: null
+  auto_gpu: false
+  extra_sets:
+    - "inference.seed=42"
+
+experiments:
+  - name: "gqa-baseline"
+    dataset: "gqa"
+    strategies:
+      - "baseline"
+    extra_sets: []
+
+  - name: "gqa-pre-attn-l3-r0p4"
+    dataset: "gqa"
+    strategies:
+      - "pre_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa-pre-attn-l3-r0p6"
+    dataset: "gqa"
+    strategies:
+      - "pre_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa-pre-attn-l3-r0p7"
+    dataset: "gqa"
+    strategies:
+      - "pre_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
