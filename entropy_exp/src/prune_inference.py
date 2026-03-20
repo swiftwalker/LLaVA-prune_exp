@@ -197,6 +197,8 @@ def _encode_run_name_value(value):
 
 
 def _encode_run_name_list(values) -> str:
+    if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+        values = [values]
     return "-".join(_encode_run_name_value(value) for value in values)
 
 
