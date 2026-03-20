@@ -56,6 +56,8 @@ entropy_exp/outputs/processed/
 entropy_exp/outputs/answers/
 entropy_exp/outputs/figures/
 entropy_exp/outputs/runs/
+entropy_exp/outputs/logs/
+entropy_exp/outputs/plans/
 entropy_exp/outputs/summary/
 
 # FLOPs experiment — generated outputs (keep placeholder .gitkeep files)
