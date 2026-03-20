@@ -188,6 +188,24 @@ def get_primary_visible_cuda_device() -> str:
     return "cuda:0"
 
 
+def _encode_run_name_value(value):
+    if isinstance(value, float):
+        text = format(value, "g")
+    else:
+        text = str(value)
+    return text.replace(".", "p")
+
+
+def _encode_run_name_list(values) -> str:
+    return "-".join(_encode_run_name_value(value) for value in values)
+
+
+def build_run_name(dataset_name: str, run_tag: str, prune_layers, prune_ratio, timestamp: str) -> str:
+    layers_part = f"l{_encode_run_name_list(prune_layers)}"
+    ratio_part = f"r{_encode_run_name_list(prune_ratio)}"
+    return f"{dataset_name}_{run_tag}_{layers_part}_{ratio_part}__{timestamp}"
+
+
 # ---------------------------------------------------------------------------
 # Main inference loop with pruning
 # ---------------------------------------------------------------------------
@@ -226,12 +244,32 @@ def run_prune_inference(
     image_folder = resolve(ds_cfg["image_folder"])
 
     # --- output paths: per-run directory ---
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Use readable settings in the run name and keep a microsecond timestamp
+    # suffix so concurrent launches remain unique.
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_tag = "baseline" if run_mode == "baseline" else strategy_name
-    run_name = f"{dataset_name}_{run_tag}_{timestamp}"
     base_dir = resolve(output_cfg.get("base_dir", "entropy_exp/outputs"))
-    run_dir = os.path.join(base_dir, "runs", run_name)
-    os.makedirs(run_dir, exist_ok=True)
+    runs_dir = os.path.join(base_dir, "runs")
+    os.makedirs(runs_dir, exist_ok=True)
+
+    base_run_name = build_run_name(
+        dataset_name=dataset_name,
+        run_tag=run_tag,
+        prune_layers=prune_cfg["prune_layers"],
+        prune_ratio=prune_cfg["prune_ratio"],
+        timestamp=timestamp,
+    )
+    run_name = base_run_name
+    run_dir = os.path.join(runs_dir, run_name)
+    suffix = 1
+    while True:
+        try:
+            os.makedirs(run_dir)
+            break
+        except FileExistsError:
+            run_name = f"{base_run_name}_{suffix:02d}"
+            run_dir = os.path.join(runs_dir, run_name)
+            suffix += 1
 
     answers_path = os.path.join(run_dir, "answers.jsonl")
     stats_path = os.path.join(run_dir, "stats.jsonl")
