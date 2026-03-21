@@ -51,6 +51,7 @@ entropy_exp/datasets
 entropy_exp/eval_questions
 
 # Entropy experiment — outputs (HDF5, CSV, figures, answers)
+entropy_exp/outputs/
 entropy_exp/outputs/raw/
 entropy_exp/outputs/processed/
 entropy_exp/outputs/answers/
