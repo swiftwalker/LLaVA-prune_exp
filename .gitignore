@@ -60,6 +60,7 @@ entropy_exp/outputs/runs/
 entropy_exp/outputs/logs/
 entropy_exp/outputs/plans/
 entropy_exp/outputs/summary/
+entropy_exp/plans/
 
 # FLOPs experiment — generated outputs (keep placeholder .gitkeep files)
 flops_exp/outputs/batch_flops/*
