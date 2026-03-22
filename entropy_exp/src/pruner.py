@@ -315,6 +315,23 @@ class VisualTokenPruner:
                 layer_info["prune_stage"] = prune_stage
                 prune_info["layers"][layer_idx] = layer_info
                 continue
+            if prune_stage == "masking" and need_prune and cur_v_num > 0:
+                hidden_states, layer_info = self._run_masking_prune_layer(
+                    layer=layer,
+                    layer_idx=layer_idx,
+                    hidden_states=hidden_states,
+                    position_ids=position_ids,
+                    causal_mask=causal_mask,
+                    past_kv=past_kv,
+                    v_token_start=cur_v_start,
+                    v_token_num=cur_v_num,
+                    text_token_start=cur_text_start,
+                    need_capture=need_capture,
+                )
+                layer_info["layer_idx"] = layer_idx
+                layer_info["prune_stage"] = prune_stage
+                prune_info["layers"][layer_idx] = layer_info
+                continue
 
             need_attn = need_capture or (need_prune and self.strategy.requires_attention())
 
@@ -450,6 +467,51 @@ class VisualTokenPruner:
 
         return hidden_states, position_ids, causal_mask, cur_v_num, cur_text_start, layer_info
 
+    def _run_masking_prune_layer(
+        self,
+        layer,
+        layer_idx: int,
+        hidden_states: torch.Tensor,
+        position_ids: torch.Tensor,
+        causal_mask: torch.Tensor,
+        past_kv: DynamicCache,
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+        need_capture: bool,
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        tv_attn, importance_scores = self._compute_pre_prune_scores(
+            layer=layer,
+            hidden_states=hidden_states,
+            position_ids=position_ids,
+            attention_mask=causal_mask,
+            v_token_start=v_token_start,
+            v_token_num=v_token_num,
+            text_token_start=text_token_start,
+        )
+        keep_indices, layer_info = self.strategy.compute_keep_mask_from_importance(
+            importance_scores=importance_scores,
+            layer_idx=layer_idx,
+        )
+
+        hidden_states = self._forward_masked_layer(
+            layer=layer,
+            layer_idx=layer_idx,
+            hidden_states=hidden_states,
+            attention_mask=causal_mask,
+            position_ids=position_ids,
+            past_kv=past_kv,
+            v_token_start=v_token_start,
+            v_token_num=v_token_num,
+            text_token_start=text_token_start,
+            keep_indices=keep_indices.to(device=hidden_states.device),
+        )
+
+        if need_capture:
+            layer_info["tv_attn"] = tv_attn.cpu()
+
+        return hidden_states, layer_info
+
     def _compute_pre_prune_scores(
         self,
         layer,
@@ -516,6 +578,130 @@ class VisualTokenPruner:
         tv_attn = attn_weights[0, :, text_token_start:, v_token_start:v_end]
         importance_scores = tv_attn.mean(dim=0).mean(dim=0)
         return tv_attn, importance_scores
+
+    def _forward_masked_layer(
+        self,
+        layer,
+        layer_idx: int,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        position_ids: torch.Tensor,
+        past_kv: DynamicCache,
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+        keep_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        if hasattr(layer, "forward_with_attention_logits_mask"):
+            return layer.forward_with_attention_logits_mask(
+                hidden_states=hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=past_kv,
+                use_cache=True,
+                v_token_start=v_token_start,
+                v_token_num=v_token_num,
+                text_token_start=text_token_start,
+                keep_indices=keep_indices,
+            )[0]
+
+        required_layer_attrs = ["input_layernorm", "self_attn", "post_attention_layernorm", "mlp"]
+        missing_layer_attrs = [name for name in required_layer_attrs if not hasattr(layer, name)]
+        if missing_layer_attrs:
+            raise NotImplementedError(
+                f"masking_attn_score requires a Llama-style decoder layer with {missing_layer_attrs}, "
+                f"but layer {type(layer).__name__} does not provide them"
+            )
+
+        attn_module = layer.self_attn
+        required_attn_attrs = [
+            "q_proj", "k_proj", "v_proj", "o_proj", "rotary_emb",
+            "num_heads", "head_dim",
+        ]
+        missing_attn_attrs = [name for name in required_attn_attrs if not hasattr(attn_module, name)]
+        if missing_attn_attrs:
+            raise NotImplementedError(
+                f"masking_attn_score requires a Llama-style self attention module with {missing_attn_attrs}, "
+                f"but {type(attn_module).__name__} does not provide them"
+            )
+
+        residual = hidden_states
+        hidden_states = layer.input_layernorm(hidden_states)
+
+        batch_size, seq_len, hidden_size = hidden_states.size()
+        num_heads = int(attn_module.num_heads)
+        head_dim = int(attn_module.head_dim)
+        num_key_value_heads = int(getattr(attn_module, "num_key_value_heads", num_heads))
+        num_key_value_groups = int(
+            getattr(attn_module, "num_key_value_groups", max(num_heads // num_key_value_heads, 1))
+        )
+
+        query_states = attn_module.q_proj(hidden_states).view(
+            batch_size, seq_len, num_heads, head_dim
+        ).transpose(1, 2)
+        key_states = attn_module.k_proj(hidden_states).view(
+            batch_size, seq_len, num_key_value_heads, head_dim
+        ).transpose(1, 2)
+        value_states = attn_module.v_proj(hidden_states).view(
+            batch_size, seq_len, num_key_value_heads, head_dim
+        ).transpose(1, 2)
+
+        rotary_input = value_states
+        try:
+            cos, sin = attn_module.rotary_emb(rotary_input, seq_len=seq_len)
+        except TypeError:
+            cos, sin = attn_module.rotary_emb(rotary_input, seq_len)
+        query_states, key_states = _apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+
+        if len(past_kv.key_cache) <= layer_idx:
+            past_kv.key_cache.append(key_states)
+            past_kv.value_cache.append(value_states)
+        else:
+            past_kv.key_cache[layer_idx] = key_states
+            past_kv.value_cache[layer_idx] = value_states
+        past_kv._seen_tokens = key_states.shape[2]
+
+        key_states_for_attn = _repeat_kv(key_states, num_key_value_groups)
+        value_states_for_attn = _repeat_kv(value_states, num_key_value_groups)
+
+        attn_weights = torch.matmul(query_states, key_states_for_attn.transpose(2, 3)) / math.sqrt(head_dim)
+        if attention_mask is not None:
+            if attention_mask.dim() != 4:
+                raise NotImplementedError(
+                    f"masking_attn_score expects a 4D causal mask, got shape {tuple(attention_mask.shape)}"
+                )
+            attn_weights = attn_weights + attention_mask.to(
+                dtype=attn_weights.dtype,
+                device=attn_weights.device,
+            )
+
+        masked_attn_bias = torch.zeros_like(attn_weights)
+        drop_mask = torch.ones(v_token_num, dtype=torch.bool, device=hidden_states.device)
+        drop_mask[keep_indices] = False
+        text_slice = slice(text_token_start, seq_len)
+        vision_drop_indices = (torch.arange(v_token_num, device=hidden_states.device)[drop_mask] + v_token_start)
+        if vision_drop_indices.numel() > 0:
+            min_value = torch.finfo(attn_weights.dtype).min
+            masked_attn_bias[:, :, text_slice, vision_drop_indices] = min_value
+            attn_weights = attn_weights + masked_attn_bias
+
+        min_value = torch.tensor(
+            torch.finfo(attn_weights.dtype).min,
+            device=attn_weights.device,
+            dtype=attn_weights.dtype,
+        )
+        attn_weights = torch.max(attn_weights, min_value)
+        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+
+        attn_output = torch.matmul(attn_weights, value_states_for_attn)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_size)
+        attn_output = attn_module.o_proj(attn_output)
+
+        hidden_states = residual + attn_output
+        residual = hidden_states
+        hidden_states = layer.post_attention_layernorm(hidden_states)
+        hidden_states = residual + layer.mlp(hidden_states)
+        return hidden_states
 
     @staticmethod
     def _refresh_sequence_state(

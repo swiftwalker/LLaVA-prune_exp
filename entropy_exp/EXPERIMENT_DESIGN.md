@@ -258,12 +258,14 @@ python entropy_exp/analysis/entropy_analysis.py \
 
 ## 一、实验目标
 
-在固定剪枝层（第 2、3 层）的条件下，对比两种剪枝比例确定策略：
+在固定剪枝层条件下，对比多种 visual token 剪枝策略，包括显式裁剪与 masking-based 隐式剪枝：
 
 | 方案 | 策略名 | 核心思路 |
 |:--|:--|:--|
 | **A** | `attn_score` | SparseVLM 风格：head 均值 → text 均值 → 每 visual token 重要性 |
-| **B** | `entropy` | 熵加权聚合：低熵 head 权重更高，可选动态调整剪枝比例 |
+| **B** | `pre_attn_score` | 与 `attn_score` 相同打分，但在目标层前物理裁剪 visual token，并同步更新前序 KV cache |
+| **C** | `masking_attn_score` | 与 `pre_attn_score` 相同打分，但仅在目标层的 text->vision attention logits 中屏蔽被剪枝 token，不改变 hidden states / position ids / KV cache 长度 |
+| **D** | `entropy` | 熵加权聚合：低熵 head 权重更高，可选动态调整剪枝比例 |
 
 ### 评估维度
 
@@ -291,7 +293,9 @@ entropy_exp/
 │   │   ├── __init__.py          # 策略注册表 + get_strategy()
 │   │   ├── base.py              # PruneStrategy 抽象基类
 │   │   ├── attn_score.py        # 方案 A：Attention Score
-│   │   └── entropy.py           # 方案 B：Entropy-weighted
+│   │   ├── pre_attn_score.py    # 方案 B：Pre-layer physical pruning
+│   │   ├── masking_attn_score.py # 方案 C：Layer-local logits masking
+│   │   └── entropy.py           # 方案 D：Entropy-weighted
 │   ├── pruner.py                # NEW — 核心剪枝引擎 VisualTokenPruner
 │   ├── prune_inference.py       # NEW — 剪枝推理主入口
 │   ├── hooks.py                 # 原有（兼容）
@@ -340,13 +344,13 @@ class PruneStrategy(ABC):
 核心引擎，实现：
 
 1. **自定义 layer-by-layer prefill**：逐层运行 decoder layers，在指定层执行剪枝
-2. **KV cache 一致性**：剪枝后同步更新所有层（0 … prune_layer）的 KV cache
+2. **KV cache 一致性**：显式剪枝策略会同步更新所有层（0 … prune_layer）的 KV cache；`masking_attn_score` 保留完整 KV cache
 3. **Greedy decode**：使用剪枝后的 KV cache 进行自回归生成
 
 关键方法：
 - `pruned_generate()`: 公开入口，返回 `(generated_ids, prune_info)`
-- `_pruned_prefill()`: 逐层 prefill，在 prune layer 调用策略计算 keep mask
-- `_prune_kv_cache()`: 从 DynamicCache 中移除被剪枝位置的 K/V
+- `_pruned_prefill()`: 逐层 prefill，在 prune layer 调用策略计算 keep mask，并根据 `prune_stage` 选择显式裁剪或 masking
+- `_prune_kv_cache()`: 从 DynamicCache 中移除被剪枝位置的 K/V（仅显式裁剪策略）
 
 #### `prune_inference.py` — 推理主入口
 
@@ -369,10 +373,11 @@ class PruneStrategy(ABC):
 | `sample_idx` | 样本序号 |
 | `question_id` / `image_file` | 样本标识 |
 | `run_mode` | `prune` / `baseline` |
-| `strategy_requested` | 配置请求的策略名（如 `attn_score` / `entropy`） |
+| `strategy_requested` | 配置请求的策略名（如 `attn_score` / `pre_attn_score` / `masking_attn_score` / `entropy`） |
+| `prune_stage` | `post` / `pre` / `masking`，表示剪枝动作在层内的施加方式 |
 | `effective_prune_ratio_map` | 实际生效的层→比例映射 |
 | `prune_layers` | 剪枝层列表 |
-| `original_seq_len` / `final_seq_len` | 剪枝前/后序列长度 |
+| `original_seq_len` / `final_seq_len` | 剪枝前/后序列长度；`masking_attn_score` 下二者相等 |
 | `num_generated_tokens` | 生成的新 token 数 |
 | `prefill_time` / `decode_time` / `total_time` | 计时信息 |
 | `layer_N_ratio` | 第 N 层的实际剪枝比例 |
@@ -406,14 +411,14 @@ captures.h5
 # 快速验证（2 样本, attn_score 策略）
 bash entropy_exp/scripts/run_prune.sh attn_score mme 2
 
+# 快速验证（2 样本, masking_attn_score 策略）
+bash entropy_exp/scripts/run_prune.sh masking_attn_score gqa 2
+
 # Entropy 策略，全量 POPE
 bash entropy_exp/scripts/run_prune.sh entropy pope
 
 # Baseline（无剪枝，同一 decode 路径）
 bash entropy_exp/scripts/run_prune.sh baseline mme 10
-
-# 一键对比：baseline + attn_score + entropy
-bash entropy_exp/scripts/run_prune.sh compare mme 10
 
 # 所有数据集
 bash entropy_exp/scripts/run_prune.sh attn_score all
@@ -463,10 +468,12 @@ python entropy_exp/src/prune_inference.py \
 
 | 配置项 | 默认值 | 说明 |
 |:--|:--|:--|
-| `pruning.strategy` | `attn_score` | 策略选择：`attn_score` \| `entropy` |
+| `pruning.strategy` | `attn_score` | 策略选择：`attn_score` \| `pre_attn_score` \| `masking_attn_score` \| `entropy` \| `random` \| `sparsevlm` |
 | `pruning.layer_selection` | `fixed` | 层选择方法：`fixed`（配置列表）\| `dynamic`（预留） |
 | `pruning.prune_layers` | `[2, 3]` | 剪枝层列表（0-indexed），与 `prune_ratio` 等长 |
 | `pruning.prune_ratio` | `[0.5, 0.5]` | 与 `prune_layers` 等长的剪枝比例列表（标量则广播到所有层） |
+| `pruning.pre_attn_score` | `{}` | 目标层前物理裁剪策略的额外参数（当前为空） |
+| `pruning.masking_attn_score` | `{}` | 目标层内 logits masking 策略的额外参数（当前为空） |
 | `pruning.entropy.dynamic_ratio` | `false` | 是否用熵动态调整比例 |
 | `pruning.entropy.dynamic_scale` | `0.5` | 动态调整的缩放系数 |
 | `capture.save_attention` | `true` | 保存注意力矩阵到 captures.h5（HDF5） |

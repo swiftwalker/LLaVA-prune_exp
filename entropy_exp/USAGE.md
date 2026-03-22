@@ -25,6 +25,9 @@ entropy_exp/eval_questions → /home/liuyu/data/SparseVLMs/eval
 # 用 attn_score 策略跑 MME，限 10 个样本（冒烟测试）
 bash entropy_exp/scripts/run_prune.sh attn_score mme 10
 
+# 用 masking_attn_score 策略跑 GQA，当前层 mask 掉被剪枝视觉 token
+bash entropy_exp/scripts/run_prune.sh masking_attn_score gqa 10
+
 # 用 entropy 策略跑 POPE 全量
 bash entropy_exp/scripts/run_prune.sh entropy pope
 
@@ -37,9 +40,6 @@ bash entropy_exp/scripts/run_prune.sh sparsevlm mme 10
 # 跑无剪枝 baseline（使用同一 decode 路径，计时公平）
 bash entropy_exp/scripts/run_prune.sh baseline mme 10
 
-# 一键对比：依次跑 baseline → attn_score → entropy（同一数据集）
-bash entropy_exp/scripts/run_prune.sh compare mme 10
-
 # 跑所有三个数据集
 bash entropy_exp/scripts/run_prune.sh attn_score all
 ```
@@ -48,7 +48,7 @@ bash entropy_exp/scripts/run_prune.sh attn_score all
 
 | 位置 | 参数 | 可选值 | 说明 |
 |:--|:--|:--|:--|
-| $1 | strategy | `attn_score` / `entropy` / `random` / `sparsevlm` / `baseline` / `compare` | 剪枝策略，`random` 使用固定 seed 可复现，`sparsevlm` 使用 text raters，`compare` 会依次跑三种 |
+| $1 | strategy | `attn_score` / `pre_attn_score` / `masking_attn_score` / `entropy` / `random` / `sparsevlm` / `baseline` | 剪枝策略；`pre_attn_score` 在目标层前物理裁剪，`masking_attn_score` 只在目标层 attention logits 中屏蔽被剪枝视觉 token，`random` 使用固定 seed 可复现，`sparsevlm` 使用 text raters |
 | $2 | dataset | `gqa` / `mme` / `pope` / `all` | 数据集 |
 | $3 | max_samples | 整数（可选） | 限制样本数，省略则跑全量 |
 | -- | `--set key=val` | 任意（可多次） | 覆盖 yaml 配置项，见 §1.3 |
@@ -117,6 +117,8 @@ bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
 | `[2,5,10]` | `[2, 5, 10]` | list (JSON) |
 | `[0.3,0.5]` | `[0.3, 0.5]` | list (JSON) |
 | `entropy` | `"entropy"` | str |
+| `pre_attn_score` | `"pre_attn_score"` | str |
+| `masking_attn_score` | `"masking_attn_score"` | str |
 | `random` | `"random"` | str |
 | `sparsevlm` | `"sparsevlm"` | str |
 
@@ -143,13 +145,15 @@ inference:
   seed: 42                          # 随机种子
 
 pruning:
-  strategy: "attn_score"            # 剪枝策略：attn_score / entropy / random / sparsevlm
+  strategy: "attn_score"            # 剪枝策略：attn_score / pre_attn_score / masking_attn_score / entropy / random / sparsevlm
   layer_selection: "fixed"          # 层选择方法
   prune_layers: [2, 3]             # 剪枝层列表
   prune_ratio: [0.5, 0.5]          # 对应每层的剪枝比例
   v_token_num: 576                  # 视觉 token 数量
   max_samples: null                 # 样本数限制
   attn_score: {}                    # attn_score 策略额外参数
+  pre_attn_score: {}                # pre_attn_score 策略额外参数
+  masking_attn_score: {}            # masking_attn_score 策略额外参数
   entropy:                          # entropy 策略额外参数
     dynamic_ratio: false
     dynamic_scale: 0.5
@@ -190,7 +194,8 @@ prune_ratio  →  决定「剪多少」（每层移除 visual token 的比例）
 prune.yaml
   ├─ pruning.strategy: "attn_score"     ─┐
   ├─ pruning.attn_score: {}              ─┤  ① get_strategy(name, config)
-  │  └─ (或 pruning.entropy/random/sparsevlm: {})  ─┘     → 实例化对应策略
+  │  └─ (或 pruning.pre_attn_score/masking_attn_score/entropy/random/sparsevlm: {})  ─┘
+  │                                              → 实例化对应策略
   │
   ├─ pruning.prune_layers: [2, 3]       ─┐
   │                                       ├  ② VisualTokenPruner.__init__()
@@ -204,7 +209,7 @@ prune.yaml
   strategy.compute_keep_mask(...)                 →  保留 top-K 个 token
 ```
 
-**关键点**：`strategy` 只决定 importance 怎么算，`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。`random` 会根据 `inference.seed` 生成可复现的随机重要性分数，`sparsevlm` 会先选 text raters，再用当前层的 text->vision attention 给 visual token 打分。
+**关键点**：`strategy` 只决定 importance 怎么算，以及剪枝动作如何施加；`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。`pre_attn_score` 会在目标层前物理裁剪 visual token 并同步更新前序 KV cache；`masking_attn_score` 会保留完整 hidden states / position ids / KV cache，只在目标层的 text->vision attention logits 中屏蔽被剪枝视觉 token。`random` 会根据 `inference.seed` 生成可复现的随机重要性分数，`sparsevlm` 会先选 text raters，再用当前层的 text->vision attention 给 visual token 打分。
 
 ### 2.3 典型配置示例
 
@@ -322,12 +327,16 @@ python entropy_exp/src/prune_inference.py \
     --dataset mme
 ```
 
-**方式 3：`compare` 一键对比**
+**方式 3：显式逐策略对比**
 
-自动跑 baseline + attn_score + entropy，共享同一组 `prune_layers` / `prune_ratio`。`random` 需要单独调用：
+当前不再提供 `compare` 一键模式，建议显式逐个策略运行，保证对比矩阵和输出目录更可控：
 
 ```bash
-bash entropy_exp/scripts/run_prune.sh compare mme
+bash entropy_exp/scripts/run_prune.sh baseline mme
+bash entropy_exp/scripts/run_prune.sh attn_score mme
+bash entropy_exp/scripts/run_prune.sh pre_attn_score mme
+bash entropy_exp/scripts/run_prune.sh masking_attn_score mme
+bash entropy_exp/scripts/run_prune.sh entropy mme
 bash entropy_exp/scripts/run_prune.sh random mme
 ```
 
@@ -541,12 +550,18 @@ bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_random_*/a
 ### 5.3 策略对比实验
 
 ```bash
-# 一键跑 baseline + attn_score + entropy 三种，同一数据集
-bash entropy_exp/scripts/run_prune.sh compare mme
+# 显式跑多种策略，保证每个 run 目录和 override 可追踪
+bash entropy_exp/scripts/run_prune.sh baseline mme
+bash entropy_exp/scripts/run_prune.sh attn_score mme
+bash entropy_exp/scripts/run_prune.sh pre_attn_score mme
+bash entropy_exp/scripts/run_prune.sh masking_attn_score mme
+bash entropy_exp/scripts/run_prune.sh entropy mme
 
 # 分别评测（每种策略生成独立的 run 目录）
 bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_baseline_*/answers.jsonl
 bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_attn_score_*/answers.jsonl
+bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_pre_attn_score_*/answers.jsonl
+bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_masking_attn_score_*/answers.jsonl
 bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_entropy_*/answers.jsonl
 ```
 

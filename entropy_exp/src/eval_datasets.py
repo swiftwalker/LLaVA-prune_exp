@@ -311,7 +311,11 @@ def eval_mme(answers_file: str, output_dir: str, mme_data_path: str | None = Non
         "--result-dir",
         result_dir,
     ]
-    if mme_data_path:
+    supports_data_path = False
+    with open(convert_script, "r", encoding="utf-8") as f:
+        supports_data_path = "--data-path" in f.read()
+
+    if mme_data_path and supports_data_path:
         convert_cmd.extend(["--data-path", mme_data_path])
     subprocess.run(convert_cmd, cwd=eval_dir, check=True)
 
