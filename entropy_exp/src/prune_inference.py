@@ -55,6 +55,7 @@ from llava.mm_utils import tokenizer_image_token, process_images, get_model_name
 
 from hooks import locate_image_tokens
 from pruner import VisualTokenPruner
+from run_layout import build_run_dir, build_run_rel_dir
 from strategies import get_strategy
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
@@ -251,8 +252,6 @@ def run_prune_inference(
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_tag = "baseline" if run_mode == "baseline" else strategy_name
     base_dir = resolve(output_cfg.get("base_dir", "entropy_exp/outputs"))
-    runs_dir = os.path.join(base_dir, "runs")
-    os.makedirs(runs_dir, exist_ok=True)
 
     base_run_name = build_run_name(
         dataset_name=dataset_name,
@@ -262,7 +261,8 @@ def run_prune_inference(
         timestamp=timestamp,
     )
     run_name = base_run_name
-    run_dir = os.path.join(runs_dir, run_name)
+    strategy_branch = "baseline" if run_mode == "baseline" else strategy_name
+    run_dir = os.fspath(build_run_dir(base_dir, strategy_branch, dataset_name, run_name))
     suffix = 1
     while True:
         try:
@@ -270,7 +270,7 @@ def run_prune_inference(
             break
         except FileExistsError:
             run_name = f"{base_run_name}_{suffix:02d}"
-            run_dir = os.path.join(runs_dir, run_name)
+            run_dir = os.fspath(build_run_dir(base_dir, strategy_branch, dataset_name, run_name))
             suffix += 1
 
     answers_path = os.path.join(run_dir, "answers.jsonl")
@@ -294,8 +294,11 @@ def run_prune_inference(
         "_run_meta": {
             "run_mode": run_mode,
             "dataset": dataset_name,
+            "strategy": strategy_branch,
             "max_samples": max_samples,
             "timestamp": timestamp,
+            "run_name": run_name,
+            "run_rel_dir": build_run_rel_dir(base_dir, strategy_branch, dataset_name, run_name),
             "run_dir": run_dir,
         },
     }
