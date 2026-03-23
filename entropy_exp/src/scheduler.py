@@ -662,28 +662,25 @@ def collect_average_gpu_free_mib(sample_seconds: int) -> Dict[int, int]:
 
 def select_gpu_for_dispatch(
     gpu_cfg: GPUConfig,
-    running: Dict[str, Dict[str, Any]],
-) -> Tuple[Optional[int], Dict[int, int]]:
-    average_free_mib = collect_average_gpu_free_mib(gpu_cfg.sample_seconds)
+    provisional_reservations_by_gpu: Optional[Dict[int, int]] = None,
+) -> Tuple[Optional[int], Dict[int, int], Dict[int, int]]:
+    observed_free_mib = collect_average_gpu_free_mib(gpu_cfg.sample_seconds)
     reserve_per_job_mib = int(gpu_cfg.min_free_gib * 1024)
-    reserved_mib_by_gpu: Dict[int, int] = {}
-    for entry in running.values():
-        gpu_idx = int(entry["gpu"])
-        reserved_mib_by_gpu[gpu_idx] = reserved_mib_by_gpu.get(gpu_idx, 0) + reserve_per_job_mib
+    provisional_reservations_by_gpu = dict(provisional_reservations_by_gpu or {})
 
-    adjusted_free_mib = {
-        gpu: free_mib - reserved_mib_by_gpu.get(gpu, 0)
-        for gpu, free_mib in average_free_mib.items()
+    projected_free_mib = {
+        gpu: free_mib - provisional_reservations_by_gpu.get(gpu, 0)
+        for gpu, free_mib in observed_free_mib.items()
     }
     candidates = {
-        gpu: adjusted_free_mib[gpu]
-        for gpu in adjusted_free_mib
-        if adjusted_free_mib[gpu] >= reserve_per_job_mib
+        gpu: projected_free_mib[gpu]
+        for gpu in projected_free_mib
+        if projected_free_mib[gpu] >= reserve_per_job_mib
     }
     if not candidates:
-        return None, adjusted_free_mib
+        return None, observed_free_mib, projected_free_mib
     selected_gpu = max(candidates.items(), key=lambda item: (item[1], -item[0]))[0]
-    return selected_gpu, adjusted_free_mib
+    return selected_gpu, observed_free_mib, projected_free_mib
 
 
 def count_lines(path: Path) -> int:
@@ -1040,15 +1037,27 @@ class ExperimentScheduler:
         append_attempt_stub(self.state_dir, job, attempt, running_entry)
 
     def dispatch_available_jobs(self) -> None:
+        provisional_reservations_by_gpu: Dict[int, int] = {}
+        reserve_per_job_mib = int(self.plan.gpu.min_free_gib * 1024)
         while self.state["pending"] and len(self.state["running"]) < int(self.state["pool_size"]):
-            selected_gpu, adjusted_free = select_gpu_for_dispatch(self.plan.gpu, self.state["running"])
-            print(f"[scheduler] GPU adjusted free memory (MiB): {adjusted_free}")
+            selected_gpu, observed_free, projected_free = select_gpu_for_dispatch(
+                self.plan.gpu,
+                provisional_reservations_by_gpu=provisional_reservations_by_gpu,
+            )
+            print(f"[scheduler] GPU observed free memory (MiB): {observed_free}")
+            print(
+                "[scheduler] GPU projected free memory after provisional reservations (MiB): "
+                f"{projected_free}"
+            )
             if selected_gpu is None:
-                print("[scheduler] No GPU currently satisfies the 16 GiB availability threshold.")
+                print("[scheduler] No GPU currently satisfies the 16 GiB projected-free threshold this pass.")
                 break
 
             job_id = self.state["pending"].pop(0)
             self._launch_job(job_id, selected_gpu)
+            provisional_reservations_by_gpu[selected_gpu] = (
+                provisional_reservations_by_gpu.get(selected_gpu, 0) + reserve_per_job_mib
+            )
             save_state(self.state_dir, self.state)
 
     def run(self) -> None:

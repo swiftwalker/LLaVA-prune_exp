@@ -19,6 +19,8 @@ from entropy_exp.src.scheduler import (
     finalize_attempt_result,
     format_progress_line,
     load_scheduler_plan,
+    GPUConfig,
+    select_gpu_for_dispatch,
 )
 
 
@@ -219,6 +221,96 @@ class SchedulerFinalizeTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["validation"]["expected_answers"], 3)
             self.assertEqual(payload["validation"]["valid_answers"], 3)
+
+
+class SchedulerGpuSelectionTests(unittest.TestCase):
+    def test_running_jobs_do_not_reduce_observed_free_memory_again(self):
+        gpu_cfg = GPUConfig(
+            min_free_gib=16,
+            selection="max_free",
+            sample_seconds=3,
+            poll_interval_seconds=15,
+        )
+        observed = {
+            0: 41405,
+            1: 41287,
+            2: 41407,
+            3: 41389,
+            4: 26300,
+            5: 41387,
+            6: 41405,
+            7: 41287,
+        }
+
+        from unittest import mock
+
+        with mock.patch(
+            "entropy_exp.src.scheduler.collect_average_gpu_free_mib",
+            return_value=observed,
+        ):
+            selected_gpu, observed_free, projected_free = select_gpu_for_dispatch(
+                gpu_cfg,
+                provisional_reservations_by_gpu={},
+            )
+
+        self.assertEqual(observed_free, observed)
+        self.assertEqual(projected_free, observed)
+        self.assertEqual(selected_gpu, 2)
+
+    def test_provisional_reservation_blocks_second_launch_on_same_gpu_in_one_pass(self):
+        gpu_cfg = GPUConfig(
+            min_free_gib=16,
+            selection="max_free",
+            sample_seconds=3,
+            poll_interval_seconds=15,
+        )
+        observed = {0: 20000, 1: 18000}
+        reserve_per_job_mib = 16 * 1024
+
+        from unittest import mock
+
+        with mock.patch(
+            "entropy_exp.src.scheduler.collect_average_gpu_free_mib",
+            return_value=observed,
+        ):
+            selected_gpu, observed_free, projected_free = select_gpu_for_dispatch(
+                gpu_cfg,
+                provisional_reservations_by_gpu={},
+            )
+            self.assertEqual(selected_gpu, 0)
+            self.assertEqual(observed_free, observed)
+            self.assertEqual(projected_free[0], 20000)
+
+            selected_gpu_2, _, projected_free_2 = select_gpu_for_dispatch(
+                gpu_cfg,
+                provisional_reservations_by_gpu={0: reserve_per_job_mib},
+            )
+
+        self.assertEqual(projected_free_2[0], 20000 - reserve_per_job_mib)
+        self.assertEqual(selected_gpu_2, 1)
+
+    def test_tie_break_prefers_lower_gpu_index(self):
+        gpu_cfg = GPUConfig(
+            min_free_gib=16,
+            selection="max_free",
+            sample_seconds=3,
+            poll_interval_seconds=15,
+        )
+        observed = {0: 20000, 1: 20000}
+
+        from unittest import mock
+
+        with mock.patch(
+            "entropy_exp.src.scheduler.collect_average_gpu_free_mib",
+            return_value=observed,
+        ):
+            selected_gpu, _, projected_free = select_gpu_for_dispatch(
+                gpu_cfg,
+                provisional_reservations_by_gpu={},
+            )
+
+        self.assertEqual(projected_free, observed)
+        self.assertEqual(selected_gpu, 0)
 
 
 if __name__ == "__main__":
