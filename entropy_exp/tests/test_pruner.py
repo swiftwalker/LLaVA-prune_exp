@@ -23,7 +23,7 @@ class DynamicCache:
 
 sys.modules.setdefault("transformers", types.SimpleNamespace(DynamicCache=DynamicCache))
 
-from pruner import VisualTokenPruner
+from pruner import VisualTokenPruner, _required_rotary_seq_len
 from strategies.base import PruneStrategy
 from strategies.random import RandomStrategy
 
@@ -146,6 +146,11 @@ class PrunerAttentionRequirementTests(unittest.TestCase):
         self.assertEqual(model.model.layers[0].output_attentions_history, [True])
         self.assertIn("tv_attn", prune_info["layers"][0])
         self.assertEqual(tuple(prune_info["layers"][0]["tv_attn"].shape), (1, 1, 4))
+
+    def test_required_rotary_seq_len_uses_max_position_id(self):
+        position_ids = torch.tensor([[10, 11, 12, 15]], dtype=torch.long)
+        self.assertEqual(_required_rotary_seq_len(position_ids, 4), 16)
+        self.assertEqual(_required_rotary_seq_len(None, 4), 4)
 
     def test_physical_pruning_preserves_position_ids_and_decode_advances_from_last_original_index(self):
         model = DummyModel(num_layers=2)

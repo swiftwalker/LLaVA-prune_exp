@@ -54,7 +54,7 @@ from llava.utils import disable_torch_init
 from llava.mm_utils import tokenizer_image_token, process_images, get_model_name_from_path
 
 from hooks import locate_image_tokens
-from pruner import VisualTokenPruner
+from pruner import VisualTokenPruner, enable_sparse_position_ids_compat
 from run_layout import build_run_dir, build_run_rel_dir
 from strategies import get_strategy
 
@@ -324,6 +324,8 @@ def run_prune_inference(
     tokenizer, model, image_processor, context_len = load_pretrained_model(
         model_path, None, model_name, device_map=target_device, device=target_device, **load_kwargs
     )
+    if enable_sparse_position_ids_compat(model):
+        print("[position-ids] Enabled sparse position-id compatibility for Llama attention.")
     model.eval()
     print(f"Model loaded.  attn={attn_impl}, device={target_device}")
 

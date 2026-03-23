@@ -197,6 +197,8 @@ def encode_run_list(values: Any) -> str:
 
 
 def build_run_prefix(dataset: str, strategy: str, extra_sets: Iterable[str]) -> str:
+    if strategy == "baseline":
+        return f"{dataset}_baseline_"
     layers = parse_override_value(extra_sets, "pruning.prune_layers")
     ratios = parse_override_value(extra_sets, "pruning.prune_ratio")
     if not isinstance(layers, list) or not isinstance(ratios, list):
@@ -699,6 +701,7 @@ def validate_answers_file(run_dir: Path, dataset: str, repo_root: Path) -> Dict[
 
     config = load_yaml(config_path)
     dataset_cfg = (config.get("datasets") or {}).get(dataset) or {}
+    run_meta = config.get("_run_meta") or {}
     question_file = dataset_cfg.get("question_file")
     if not question_file:
         return {"ok": False, "reason": "missing_question_file"}
@@ -711,6 +714,9 @@ def validate_answers_file(run_dir: Path, dataset: str, repo_root: Path) -> Dict[
         return {"ok": False, "reason": f"missing_question_source:{question_path}"}
 
     expected_lines = count_lines(question_path)
+    max_samples = run_meta.get("max_samples")
+    if isinstance(max_samples, int) and max_samples > 0:
+        expected_lines = min(expected_lines, max_samples)
     valid_lines = 0
     try:
         with answers_path.open("r", encoding="utf-8") as handle:

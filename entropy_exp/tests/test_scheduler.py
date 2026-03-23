@@ -70,6 +70,43 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(jobs[0].run_prefix, "gqa_random_l1_r0p2__")
         self.assertIn("--no-auto-gpu", build_run_command(jobs[0]))
 
+    def test_baseline_prefix_is_broad_session_safe_prefix(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-baseline",
+                "pool_size": 1,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {
+                    "conda_sh": "/data/liuyu/anaconda3/etc/profile.d/conda.sh",
+                    "conda_env": "llava",
+                },
+                "defaults": {"max_samples": 5, "extra_sets": []},
+                "experiments": [
+                    {
+                        "name": "gqa_baseline_smoke",
+                        "dataset": "gqa",
+                        "strategies": ["baseline"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[1]",
+                            "pruning.prune_ratio=[0.2]",
+                        ],
+                    }
+                ],
+            }
+        )
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+        self.assertEqual(jobs[0].run_prefix, "gqa_baseline_")
+
     def test_retry_budget_and_progress_format(self):
         self.assertEqual(compute_retry_budget(324, 0.1, "ceil"), 33)
         state = {
@@ -110,7 +147,7 @@ class SchedulerFinalizeTests(unittest.TestCase):
             (run_dir / "config.yaml").write_text(
                 yaml.safe_dump(
                     {
-                        "_run_meta": {"dataset": "gqa"},
+                        "_run_meta": {"dataset": "gqa", "max_samples": 2},
                         "datasets": {"gqa": {"question_file": "entropy_exp/datasets/questions.jsonl"}},
                     },
                     sort_keys=False,
@@ -139,6 +176,49 @@ class SchedulerFinalizeTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["validation"]["expected_answers"], 2)
             self.assertEqual(payload["validation"]["valid_answers"], 2)
+
+    def test_finalize_attempt_uses_max_samples_for_expected_answers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "entropy_exp" / "outputs" / "runs" / "random" / "gqa").mkdir(parents=True)
+            (repo_root / "entropy_exp" / "datasets").mkdir(parents=True)
+            questions_path = repo_root / "entropy_exp" / "datasets" / "questions.jsonl"
+            questions_path.write_text("{}\n{}\n{}\n{}\n{}\n", encoding="utf-8")
+
+            run_dir = repo_root / "entropy_exp" / "outputs" / "runs" / "random" / "gqa" / "gqa_random_l1_r0p2__20260323_120000_000001"
+            run_dir.mkdir(parents=True)
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "_run_meta": {"dataset": "gqa", "max_samples": 3},
+                        "datasets": {"gqa": {"question_file": "entropy_exp/datasets/questions.jsonl"}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "answers.jsonl").write_text('{"ok": true}\n{"ok": true}\n{"ok": true}\n', encoding="utf-8")
+
+            state_dir = repo_root / "state"
+            state_dir.mkdir(parents=True)
+            result_path = finalize_attempt_result(
+                repo_root=repo_root,
+                state_dir=state_dir,
+                job_id="job_0001",
+                attempt=1,
+                run_prefix="gqa_random_l1_r0p2__",
+                dataset="gqa",
+                started_at=run_dir.stat().st_mtime,
+                exit_code=0,
+                log_path="/tmp/demo.log",
+                gpu=0,
+                tmux_session="sched_demo",
+                tmux_window="gqa_random_l1_r0p2_try1",
+            )
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["validation"]["expected_answers"], 3)
+            self.assertEqual(payload["validation"]["valid_answers"], 3)
 
 
 if __name__ == "__main__":
