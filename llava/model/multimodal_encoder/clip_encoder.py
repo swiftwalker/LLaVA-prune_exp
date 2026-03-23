@@ -1,7 +1,110 @@
+import os
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
 
 from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
+
+try:
+    from huggingface_hub import try_to_load_from_cache
+except Exception:  # pragma: no cover - optional import safety
+    try_to_load_from_cache = None
+
+
+_CLIP_REQUIRED_FILES = (
+    "config.json",
+    "preprocessor_config.json",
+    "pytorch_model.bin",
+)
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+_HF_ENDPOINT_KEY = "HF_ENDPOINT"
+_HF_MIRROR_ENDPOINT = "https://hf-mirror.com"
+
+
+def _restore_environment(saved_env: dict) -> None:
+    for key, value in saved_env.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+@contextmanager
+def _direct_hf_mirror_env():
+    """Temporarily disable proxy env vars while keeping HF mirror enabled."""
+    saved_env = {
+        key: os.environ.get(key)
+        for key in (*_PROXY_ENV_KEYS, "NO_PROXY", "no_proxy", _HF_ENDPOINT_KEY)
+    }
+    try:
+        for key in _PROXY_ENV_KEYS:
+            os.environ.pop(key, None)
+
+        no_proxy_values = []
+        for key in ("NO_PROXY", "no_proxy"):
+            raw = saved_env.get(key)
+            if raw:
+                no_proxy_values.extend(item for item in raw.split(",") if item)
+        if "hf-mirror.com" not in no_proxy_values:
+            no_proxy_values.append("hf-mirror.com")
+        joined_no_proxy = ",".join(no_proxy_values)
+        os.environ["NO_PROXY"] = joined_no_proxy
+        os.environ["no_proxy"] = joined_no_proxy
+        os.environ[_HF_ENDPOINT_KEY] = saved_env.get(_HF_ENDPOINT_KEY) or _HF_MIRROR_ENDPOINT
+        yield
+    finally:
+        _restore_environment(saved_env)
+
+
+def _resolve_cached_hf_snapshot(
+    repo_id: str,
+    required_files: Tuple[str, ...] = _CLIP_REQUIRED_FILES,
+) -> Optional[str]:
+    if try_to_load_from_cache is None:
+        return None
+
+    resolved_files = []
+    for filename in required_files:
+        cached_path = try_to_load_from_cache(repo_id, filename)
+        if cached_path is None or ".no_exist" in str(cached_path):
+            return None
+        resolved_files.append(Path(cached_path).resolve())
+
+    snapshot_dir = resolved_files[0].parent
+    if all((snapshot_dir / filename).exists() for filename in required_files):
+        return str(snapshot_dir)
+    return None
+
+
+def _resolve_vision_tower_source(vision_tower: str) -> Tuple[str, bool]:
+    if os.path.exists(vision_tower):
+        return vision_tower, True
+
+    local_snapshot = _resolve_cached_hf_snapshot(vision_tower)
+    if local_snapshot is not None:
+        return local_snapshot, True
+
+    return vision_tower, False
+
+
+def _load_pretrained_component(loader_cls, source: str, *, local_files_only: bool, **kwargs):
+    load_kwargs = dict(kwargs)
+    if local_files_only:
+        load_kwargs["local_files_only"] = True
+        return loader_cls.from_pretrained(source, **load_kwargs)
+
+    with _direct_hf_mirror_env():
+        return loader_cls.from_pretrained(source, **load_kwargs)
 
 
 class CLIPVisionTower(nn.Module):
@@ -11,23 +114,40 @@ class CLIPVisionTower(nn.Module):
         self.is_loaded = False
 
         self.vision_tower_name = vision_tower
+        self.vision_tower_source, self.vision_tower_local_only = _resolve_vision_tower_source(vision_tower)
         self.select_layer = args.mm_vision_select_layer
         self.select_feature = getattr(args, 'mm_vision_select_feature', 'patch')
+
+        if self.vision_tower_source != self.vision_tower_name:
+            print(f"[vision-tower] Using local cached CLIP assets: {self.vision_tower_source}")
 
         if not delay_load:
             self.load_model()
         elif getattr(args, 'unfreeze_mm_vision_tower', False):
             self.load_model()
         else:
-            self.cfg_only = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
+            self.cfg_only = _load_pretrained_component(
+                CLIPVisionConfig,
+                self.vision_tower_source,
+                local_files_only=self.vision_tower_local_only,
+            )
 
     def load_model(self, device_map=None):
         if self.is_loaded:
             print('{} is already loaded, `load_model` called again, skipping.'.format(self.vision_tower_name))
             return
 
-        self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self.image_processor = _load_pretrained_component(
+            CLIPImageProcessor,
+            self.vision_tower_source,
+            local_files_only=self.vision_tower_local_only,
+        )
+        self.vision_tower = _load_pretrained_component(
+            CLIPVisionModel,
+            self.vision_tower_source,
+            local_files_only=self.vision_tower_local_only,
+            device_map=device_map,
+        )
         self.vision_tower.requires_grad_(False)
 
         self.is_loaded = True
@@ -115,8 +235,17 @@ class CLIPVisionTowerS2(CLIPVisionTower):
             print('{} is already loaded, `load_model` called again, skipping.'.format(self.vision_tower_name))
             return
 
-        self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self.image_processor = _load_pretrained_component(
+            CLIPImageProcessor,
+            self.vision_tower_source,
+            local_files_only=self.vision_tower_local_only,
+        )
+        self.vision_tower = _load_pretrained_component(
+            CLIPVisionModel,
+            self.vision_tower_source,
+            local_files_only=self.vision_tower_local_only,
+            device_map=device_map,
+        )
         self.vision_tower.requires_grad_(False)
 
         self.image_processor.size['shortest_edge'] = self.s2_image_size
