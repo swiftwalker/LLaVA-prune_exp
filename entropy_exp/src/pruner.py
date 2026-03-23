@@ -162,6 +162,7 @@ class VisualTokenPruner:
         self,
         inputs_embeds: torch.Tensor,
         attention_mask: Optional[torch.Tensor],
+        position_ids: Optional[torch.Tensor],
         v_token_start: int,
         v_token_num: int,
         text_token_start: int,
@@ -178,6 +179,7 @@ class VisualTokenPruner:
         Args:
             inputs_embeds: [1, L, D] merged embeddings (system + vision + question)
             attention_mask: [1, L] or None
+            position_ids: [1, L] or None; if provided, preserved across physical pruning
             v_token_start:  index of first visual token
             v_token_num:    number of visual tokens (576)
             text_token_start: index of first text token after vision block
@@ -196,6 +198,7 @@ class VisualTokenPruner:
         try:
             hidden_states, past_kv, prune_info = self._pruned_prefill(
                 inputs_embeds,
+                position_ids,
                 v_token_start,
                 v_token_num,
                 text_token_start,
@@ -217,13 +220,14 @@ class VisualTokenPruner:
         # --- Autoregressive decode ---
         t1 = time.time()
         cache_len = past_kv.get_seq_length()  # after prefill
+        next_position_id = int(prune_info["final_position_ids"][-1]) + 1
 
         for step in range(max_new_tokens - 1):
             if next_token.item() == eos_token_id:
                 break
 
             token_embeds = self.model.model.embed_tokens(next_token)  # [1, 1, D]
-            pos_id = torch.tensor([[cache_len + step]], device=device, dtype=torch.long)
+            pos_id = torch.tensor([[next_position_id + step]], device=device, dtype=torch.long)
             causal_mask = _make_causal_mask(1, token_embeds.dtype, device, past_kv_len=cache_len + step)
 
             hidden = token_embeds
@@ -259,6 +263,7 @@ class VisualTokenPruner:
     def _pruned_prefill(
         self,
         inputs_embeds: torch.Tensor,
+        initial_position_ids: Optional[torch.Tensor],
         v_token_start: int,
         v_token_num: int,
         text_token_start: int,
@@ -272,7 +277,10 @@ class VisualTokenPruner:
         batch_size, seq_len, _ = inputs_embeds.shape
 
         hidden_states = inputs_embeds
-        position_ids = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0)
+        if initial_position_ids is None:
+            position_ids = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0)
+        else:
+            position_ids = initial_position_ids.to(device=device, dtype=torch.long).clone()
         causal_mask = _make_causal_mask(seq_len, dtype, device)
 
         past_kv = DynamicCache()
@@ -381,9 +389,11 @@ class VisualTokenPruner:
                     hidden_states = hidden_states[:, full_keep]
                     self._prune_kv_cache(past_kv, full_keep, up_to_layer=layer_idx)
 
-                    new_len = hidden_states.shape[1]
-                    position_ids = torch.arange(new_len, device=device, dtype=torch.long).unsqueeze(0)
-                    causal_mask = _make_causal_mask(new_len, dtype, device)
+                    position_ids, causal_mask = self._refresh_sequence_state(
+                        position_ids=position_ids[:, full_keep],
+                        dtype=dtype,
+                        device=device,
+                    )
 
                     cur_v_num = len(keep_indices)
                     cur_text_start = cur_v_start + cur_v_num
@@ -399,6 +409,7 @@ class VisualTokenPruner:
 
         prune_info["original_seq_len"] = seq_len
         prune_info["final_seq_len"] = hidden_states.shape[1]
+        prune_info["final_position_ids"] = position_ids[0].detach().cpu().tolist()
         prune_info["prune_layers"] = self.prune_layers
 
         return hidden_states, past_kv, prune_info
@@ -447,7 +458,7 @@ class VisualTokenPruner:
             cur_v_num = len(keep_indices)
             cur_text_start = v_token_start + cur_v_num
             position_ids, causal_mask = self._refresh_sequence_state(
-                seq_len=hidden_states.shape[1],
+                position_ids=position_ids[:, full_keep],
                 dtype=dtype,
                 device=device,
             )
@@ -705,13 +716,16 @@ class VisualTokenPruner:
 
     @staticmethod
     def _refresh_sequence_state(
-        seq_len: int,
+        position_ids: torch.Tensor,
         dtype: torch.dtype,
         device: torch.device,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        position_ids = torch.arange(seq_len, device=device, dtype=torch.long).unsqueeze(0)
+        if position_ids.dim() != 2:
+            raise ValueError(f"position_ids must be 2D [B, L], got shape {tuple(position_ids.shape)}")
+        preserved_position_ids = position_ids.to(device=device, dtype=torch.long)
+        seq_len = preserved_position_ids.shape[1]
         causal_mask = _make_causal_mask(seq_len, dtype, device)
-        return position_ids, causal_mask
+        return preserved_position_ids, causal_mask
 
     @staticmethod
     def _build_full_keep_mask(

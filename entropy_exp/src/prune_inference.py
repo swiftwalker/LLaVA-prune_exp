@@ -411,6 +411,7 @@ def run_prune_inference(
                 generated_ids, prune_info = pruner.pruned_generate(
                     inputs_embeds=inputs_embeds,
                     attention_mask=attention_mask,
+                    position_ids=position_ids,
                     v_token_start=v_token_start,
                     v_token_num=v_token_num,
                     text_token_start=text_token_start,

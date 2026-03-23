@@ -24,6 +24,7 @@ class DynamicCache:
 sys.modules.setdefault("transformers", types.SimpleNamespace(DynamicCache=DynamicCache))
 
 from pruner import VisualTokenPruner
+from strategies.base import PruneStrategy
 from strategies.random import RandomStrategy
 
 
@@ -31,6 +32,7 @@ class DummyLayer:
     def __init__(self, layer_idx: int):
         self.layer_idx = layer_idx
         self.output_attentions_history = []
+        self.position_ids_history = []
 
     def __call__(
         self,
@@ -42,6 +44,8 @@ class DummyLayer:
         output_attentions=False,
     ):
         self.output_attentions_history.append(output_attentions)
+        if position_ids is not None:
+            self.position_ids_history.append(position_ids.detach().clone())
         seq_len = hidden_states.shape[1]
         key = hidden_states.new_zeros((1, 1, seq_len, 1))
         value = hidden_states.new_zeros((1, 1, seq_len, 1))
@@ -65,11 +69,33 @@ class DummyBackbone:
     def __init__(self, num_layers: int):
         self.layers = [DummyLayer(i) for i in range(num_layers)]
         self.norm = torch.nn.Identity()
+        self.embed_tokens = torch.nn.Embedding(8, 4)
 
 
 class DummyModel:
     def __init__(self, num_layers: int):
         self.model = DummyBackbone(num_layers)
+        self.lm_head = torch.nn.Linear(4, 8, bias=False)
+        with torch.no_grad():
+            self.lm_head.weight.zero_()
+
+
+class FixedPostPruneStrategy(PruneStrategy):
+    def requires_attention(self) -> bool:
+        return False
+
+    def compute_importance(
+        self,
+        attn_weights,
+        v_token_start,
+        v_token_num,
+        text_token_start,
+        layer_idx,
+        device=None,
+    ):
+        if device is None:
+            device = torch.device("cpu")
+        return torch.arange(v_token_num, 0, -1, device=device, dtype=torch.float32)
 
 
 class PrunerAttentionRequirementTests(unittest.TestCase):
@@ -89,6 +115,7 @@ class PrunerAttentionRequirementTests(unittest.TestCase):
 
         hidden_states, past_kv, prune_info = pruner._pruned_prefill(
             inputs_embeds=torch.zeros((1, 6, 4)),
+            initial_position_ids=None,
             v_token_start=1,
             v_token_num=4,
             text_token_start=5,
@@ -108,6 +135,7 @@ class PrunerAttentionRequirementTests(unittest.TestCase):
 
         _, _, prune_info = pruner._pruned_prefill(
             inputs_embeds=torch.zeros((1, 6, 4)),
+            initial_position_ids=None,
             v_token_start=1,
             v_token_num=4,
             text_token_start=5,
@@ -118,6 +146,33 @@ class PrunerAttentionRequirementTests(unittest.TestCase):
         self.assertEqual(model.model.layers[0].output_attentions_history, [True])
         self.assertIn("tv_attn", prune_info["layers"][0])
         self.assertEqual(tuple(prune_info["layers"][0]["tv_attn"].shape), (1, 1, 4))
+
+    def test_physical_pruning_preserves_position_ids_and_decode_advances_from_last_original_index(self):
+        model = DummyModel(num_layers=2)
+        strategy = FixedPostPruneStrategy({"prune_ratio": [0.5]})
+        prune_config = {
+            "layer_selection": "fixed",
+            "prune_layers": [0],
+            "prune_ratio": [0.5],
+        }
+        pruner = VisualTokenPruner(model, strategy, prune_config)
+
+        _, prune_info = pruner.pruned_generate(
+            inputs_embeds=torch.zeros((1, 6, 4)),
+            attention_mask=None,
+            position_ids=torch.tensor([[10, 11, 12, 13, 14, 15]], dtype=torch.long),
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            max_new_tokens=2,
+            eos_token_id=7,
+        )
+
+        self.assertEqual(prune_info["final_position_ids"], [10, 11, 12, 15])
+        self.assertEqual(model.model.layers[0].position_ids_history[0].tolist(), [[10, 11, 12, 13, 14, 15]])
+        self.assertEqual(model.model.layers[1].position_ids_history[0].tolist(), [[10, 11, 12, 15]])
+        self.assertEqual(model.model.layers[0].position_ids_history[1].tolist(), [[16]])
+        self.assertEqual(model.model.layers[1].position_ids_history[1].tolist(), [[16]])
 
 
 if __name__ == "__main__":
