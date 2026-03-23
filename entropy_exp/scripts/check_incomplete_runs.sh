@@ -31,8 +31,8 @@ Usage:
 Options:
   --mode         preview problematic runs or delete them (default: preview)
   --runs-dir     directory containing run folders
-  --dataset      filter run directories by dataset prefix, for example gqa, mme, pope
-  --name-prefix  filter run directories by name prefix
+  --dataset      filter run directories by dataset metadata, for example gqa, mme, pope
+  --name-prefix  filter run directories by leaf run-name prefix
   -h, --help     show this help message
 EOF
 }
@@ -80,6 +80,18 @@ if [[ ! -d "$RUNS_DIR" ]]; then
     echo "Runs directory not found: $RUNS_DIR" >&2
     exit 1
 fi
+
+if [ -n "${PYTHON_BIN:-}" ]; then
+    :
+elif [ -x "/data_ssd/liuyu/miniconda3/envs/llava/bin/python" ]; then
+    PYTHON_BIN="/data_ssd/liuyu/miniconda3/envs/llava/bin/python"
+elif [ -x "/home/liuyu/miniconda3/envs/llava/bin/python" ]; then
+    PYTHON_BIN="/home/liuyu/miniconda3/envs/llava/bin/python"
+else
+    PYTHON_BIN="$(command -v python)"
+fi
+
+source "$SCRIPT_DIR/run_dir_common.sh"
 
 declare -A QUESTION_COUNT_CACHE=()
 declare -a RUN_DIRS=()
@@ -226,24 +238,19 @@ PY
 }
 
 discover_run_dirs() {
+    local -a helper_args=()
+    if [[ -n "$NAME_PREFIX" ]]; then
+        helper_args+=(--prefix "$NAME_PREFIX")
+    fi
+    if [[ -n "$DATASET_FILTER" ]]; then
+        helper_args+=(--dataset "$DATASET_FILTER")
+    fi
+
     local run_dir
     while IFS= read -r run_dir; do
         [[ -n "$run_dir" ]] || continue
-
-        if [[ -n "$NAME_PREFIX" && "$(basename "$run_dir")" != "$NAME_PREFIX"* ]]; then
-            continue
-        fi
-
-        if [[ ! -f "$run_dir/config.yaml" && ! -f "$run_dir/answers.jsonl" ]]; then
-            continue
-        fi
-
-        if [[ -n "$DATASET_FILTER" && "$(basename "$run_dir")" != "${DATASET_FILTER}_"* ]]; then
-            continue
-        fi
-
         RUN_DIRS+=("$run_dir")
-    done < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
+    done < <(run_dir_helper_list "${helper_args[@]}")
 }
 
 build_report() {

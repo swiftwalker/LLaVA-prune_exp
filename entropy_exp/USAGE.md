@@ -437,20 +437,23 @@ bash entropy_exp/scripts/run_capture.sh mme 10
 每次运行会创建一个独立的 **run 目录**，包含该次实验的完整配置、结果和中间变量：
 
 ```
-outputs/runs/{dataset}_{strategy}_l{layers}_r{ratios}__{YYYYMMDD_HHMMSS_microseconds}/
-  ├── config.yaml       # 实验配置快照（含 --set 覆盖后的最终值）
+outputs/runs/{strategy}/{dataset}/{dataset}_{strategy}_l{layers}_r{ratios}__{YYYYMMDD_HHMMSS_microseconds}/
+  ├── config.yaml        # 实验配置快照（含 --set 覆盖后的最终值）
   ├── answers.jsonl      # 模型回答（与评测脚本兼容）
   ├── stats.jsonl        # 每样本剪枝统计（timing, ratios, seq_len）
+  ├── eval/summary.json  # 评测结果
   └── captures.h5        # 注意力中间变量捕获（HDF5，与 Phase 1 格式一致）
                          # 仅当 capture.save_attention=true 时生成
 ```
 
-其中 `l{layers}` 和 `r{ratios}` 会把当前实验的剪枝层与比例编码进目录名，例如：
+其中 leaf `run_name` 保持不变，只是父目录层级改成了 `{strategy}/{dataset}`。例如：
 
 ```text
-pope_pre_attn_score_l2_r0p3__20260320_192913_375869
-pope_pre_attn_score_l2-3_r0p5-0p5__20260320_192913_486301
+outputs/runs/pre_attn_score/pope/pope_pre_attn_score_l2_r0p3__20260320_192913_375869
+outputs/runs/pre_attn_score/pope/pope_pre_attn_score_l2-3_r0p5-0p5__20260320_192913_486301
 ```
+
+`run_eval.sh`、`run_summary.sh`、`run_analysis.sh`、`check_incomplete_runs.sh` 会递归扫描 `outputs/runs/`，所以旧的 leaf `run_name` / prefix 用法仍然可用，例如 `pope_random_`、`mme_masking_attn_score_` 这类筛选方式不需要改。
 
 ### 4.1 config.yaml — 配置快照
 
@@ -458,7 +461,7 @@ pope_pre_attn_score_l2-3_r0p5-0p5__20260320_192913_486301
 
 ```bash
 python entropy_exp/src/prune_inference.py \
-    --config entropy_exp/outputs/runs/mme_attn_score_l2-3_r0p5-0p5__20260309_143000_123456/config.yaml \
+    --config entropy_exp/outputs/runs/attn_score/mme/mme_attn_score_l2-3_r0p5-0p5__20260309_143000_123456/config.yaml \
     --dataset mme
 ```
 

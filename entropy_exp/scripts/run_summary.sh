@@ -33,23 +33,7 @@ else
     PYTHON_BIN="$(command -v python)"
 fi
 
-resolve_run_dir() {
-    local input_path="$1"
-
-    if [ -d "$input_path" ] && [ -f "$input_path/config.yaml" ]; then
-        echo "$input_path"
-    elif [ -d "$RUNS_DIR/$input_path" ] && [ -f "$RUNS_DIR/$input_path/config.yaml" ]; then
-        echo "$RUNS_DIR/$input_path"
-    elif [ -f "$input_path" ] && [ "$(basename "$input_path")" = "answers.jsonl" ]; then
-        echo "$(dirname "$input_path")"
-    elif [ -f "$input_path" ] && [ "$(basename "$input_path")" = "summary.json" ]; then
-        echo "$(dirname "$(dirname "$input_path")")"
-    elif [ -d "$input_path" ] && [ -f "$input_path/summary.json" ]; then
-        echo "$(dirname "$input_path")"
-    else
-        return 1
-    fi
-}
+source "$SCRIPT_DIR/run_dir_common.sh"
 
 if [ $# -gt 2 ]; then
     echo "Usage: bash entropy_exp/scripts/run_summary.sh [runs|<run>|<prefix>|<answers.jsonl>|<eval/summary.json>] [output_dir]" >&2
@@ -62,15 +46,15 @@ RUN_DIRS=()
 
 if [ $# -eq 0 ] || [ "$ARG1" = "runs" ]; then
     OUTPUT_DIR="$ARG2"
-    mapfile -t RUN_DIRS < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec test -f "{}/config.yaml" ';' -print | sort)
-elif resolved_run_dir="$(resolve_run_dir "$ARG1" 2>/dev/null)"; then
+    mapfile -t RUN_DIRS < <(run_dirs_list_all "config.yaml")
+elif resolved_run_dir="$(run_dirs_resolve_summary_input "$ARG1" 2>/dev/null)"; then
     SELECTION_LABEL="$(basename "$resolved_run_dir")"
     OUTPUT_DIR="$ARG2"
     RUN_DIRS=("$resolved_run_dir")
 else
     SELECTION_LABEL="$ARG1"
     OUTPUT_DIR="$ARG2"
-    mapfile -t RUN_DIRS < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -name "${ARG1}*" -exec test -f "{}/config.yaml" ';' -print | sort)
+    mapfile -t RUN_DIRS < <(run_dirs_list_prefix "$ARG1" "config.yaml")
 fi
 
 if [ ${#RUN_DIRS[@]} -eq 0 ]; then

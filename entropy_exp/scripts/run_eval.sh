@@ -34,6 +34,8 @@ else
     PYTHON_BIN="$(command -v python)"
 fi
 
+source "$SCRIPT_DIR/run_dir_common.sh"
+
 run_eval_for_run() {
     local run_dir="$1"
     echo "========================================"
@@ -63,15 +65,11 @@ run_eval_legacy() {
 }
 
 if [ $# -eq 0 ] || [ "$ARG1" = "runs" ]; then
-    mapfile -t RUN_DIRS < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec test -f "{}/answers.jsonl" ';' -print | sort)
-elif [ -d "$ARG1" ] && [ -f "$ARG1/answers.jsonl" ]; then
-    RUN_DIRS=("$ARG1")
-elif [ -d "$RUNS_DIR/$ARG1" ] && [ -f "$RUNS_DIR/$ARG1/answers.jsonl" ]; then
-    RUN_DIRS=("$RUNS_DIR/$ARG1")
-elif [ -f "$ARG1" ] && [ "$(basename "$ARG1")" = "answers.jsonl" ]; then
-    RUN_DIRS=("$(dirname "$ARG1")")
+    mapfile -t RUN_DIRS < <(run_dirs_list_all "answers.jsonl")
+elif resolved_run_dir="$(run_dirs_resolve_input "$ARG1" "answers.jsonl" 2>/dev/null)"; then
+    RUN_DIRS=("$resolved_run_dir")
 elif [ $# -eq 1 ]; then
-    mapfile -t RUN_DIRS < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -name "${ARG1}*" -exec test -f "{}/answers.jsonl" ';' -print | sort)
+    mapfile -t RUN_DIRS < <(run_dirs_list_prefix "$ARG1" "answers.jsonl")
 else
     DATASET="$ARG1"
     ANSWERS_FILE="$ARG2"

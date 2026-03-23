@@ -357,7 +357,7 @@ class PruneStrategy(ABC):
 - 复用 `VQADataset` + `locate_image_tokens()` 等已有逻辑
 - 调用 `model.prepare_inputs_labels_for_multimodal()` 获取合并 embeddings
 - 使用 `VisualTokenPruner.pruned_generate()` 进行剪枝推理
-- 每次运行创建独立目录 `outputs/runs/{dataset}_{strategy}_{timestamp}/`
+- 每次运行创建独立目录 `outputs/runs/{strategy}/{dataset}/{dataset}_{strategy}_{timestamp}/`
 - 输出 `config.yaml`（实验配置快照）、`answers.jsonl`（兼容评测）、`stats.jsonl`（剪枝统计）
 - 当 `capture.save_attention=true` 时，额外输出 `captures.h5`（HDF5 注意力数据）
 - 支持 `--set KEY=VALUE` 命令行覆盖任意配置项（点分隔嵌套 key，自动类型推导）
@@ -429,7 +429,7 @@ bash entropy_exp/scripts/run_prune.sh entropy mme 10 \
     --set pruning.prune_ratio=[0.3,0.4,0.5]
 ```
 
-结果输出到 `outputs/runs/{dataset}_{strategy}_{YYYYMMDD_HHMMSS}/` 下。
+结果输出到 `outputs/runs/{strategy}/{dataset}/{dataset}_{strategy}_{YYYYMMDD_HHMMSS}/` 下。
 
 ### 3.2 评测
 
