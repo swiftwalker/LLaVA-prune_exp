@@ -425,3 +425,139 @@ _pruned_prefill()
 
 1. 它属于 `pre`、`post` 还是 `masking`
 2. 它修改的是 token 物理存在性，还是只修改 attention 边
+
+---
+
+## 11. `keep-position-ids` git 分支说明
+
+### 11.1 分支目的
+
+该分支名为：
+
+```text
+keep-position-ids
+```
+
+它基于当前 `entropy_exp` 剪枝框架，专门验证一个改动：
+
+- 在 **物理剪枝仍然发生** 的情况下
+- 不再把 surviving token 的 `position_ids` 重建为连续的 `0..new_len-1`
+- 而是保留它们在原始多模态序列中的位置编号
+
+换句话说，这个分支改的是：
+
+- **位置编号语义**
+
+但不改：
+
+- 策略本身的打分规则
+- 哪些 token 被删
+- `hidden_states` / `KV cache` 的物理裁剪行为
+- `masking_attn_score` 的 layer-local masking 路径
+
+### 11.2 代码层改动入口
+
+这个分支的核心改动都在下面两个文件：
+
+- `entropy_exp/src/pruner.py`
+- `entropy_exp/src/prune_inference.py`
+
+实现路径是：
+
+```text
+prune_inference.py
+  -> model.prepare_inputs_labels_for_multimodal()
+  -> 拿到上游返回的 position_ids
+  -> pruner.pruned_generate(..., position_ids=position_ids)
+
+pruner.py
+  -> _pruned_prefill(initial_position_ids)
+  -> 物理剪枝后 position_ids = position_ids[:, full_keep]
+  -> 只重建 causal_mask，不重建 position_ids
+  -> decode 时新 token 从 final_position_ids[-1] + 1 继续编号
+```
+
+### 11.3 与主分支行为的差异
+
+主分支（连续重建位置）在物理剪枝后会做：
+
+```text
+position_ids = [0, 1, ..., new_len-1]
+causal_mask  = new_len 对应的新 mask
+```
+
+`keep-position-ids` 分支则改为：
+
+```text
+position_ids = old_position_ids[:, full_keep]
+causal_mask  = new_len 对应的新 mask
+```
+
+因此当前分支采用的是下面这套兼容语义：
+
+- **序列物理长度**：跟着剪枝后的 `hidden_states / KV cache` 走
+- **RoPE 位置坐标**：沿用 surviving token 的原始位置编号
+
+举例：
+
+```text
+原始:
+tokens        = [BOS, V1, V2, V3, T1, T2]
+position_ids  = [10, 11, 12, 13, 14, 15]
+
+若剪掉 V3:
+tokens        = [BOS, V1, V2, T1, T2]
+position_ids  = [10, 11, 12, 14, 15]
+```
+
+这里可以看到：
+
+- 长度已经缩短
+- 但位置编号没有压紧成 `[0,1,2,3,4]`
+
+### 11.4 当前兼容性处理
+
+这个分支并不是简单地“保留 position_ids”而已，它同时做了三件兼容动作：
+
+1. **物理剪枝后按 `full_keep` 同步裁剪 `position_ids`**
+   - 这样 surviving token 和缩短后的 `hidden_states` 仍然一一对齐
+
+2. **物理剪枝后仍然重建 `causal_mask`**
+   - 因为 attention 的长度兼容取决于当前实际序列长度，而不是取决于原始位置编号
+
+3. **decode 时新 token 从最后一个保留位置继续编号**
+   - 不是从 `cache_len` 继续
+   - 而是从 `final_position_ids[-1] + 1` 继续
+
+所以这个分支本质上采用的是：
+
+- `length compatibility by compressed tensors`
+- `position semantics by preserved position ids`
+
+### 11.5 哪些策略受影响
+
+只影响会做 **物理剪枝** 的策略：
+
+- `attn_score`
+- `pre_attn_score`
+- `entropy`
+- `random`
+- `sparsevlm`
+
+不影响：
+
+- `masking_attn_score`
+
+原因是 `masking_attn_score` 不缩短序列，也就没有位置重建问题。
+
+### 11.6 这个分支适合回答的问题
+
+它主要用来区分下面两种效应：
+
+1. 性能变化来自 **token 真被删掉**
+2. 性能变化来自 **删掉 token 之后位置坐标也被压缩**
+
+因此它最适合与主分支做成对实验，用来观察：
+
+- 在同一套剪枝策略、同一套 layer/ratio 下
+- “连续重建位置” 与 “保留原始位置” 的结果差异
