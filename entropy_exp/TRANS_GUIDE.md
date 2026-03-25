@@ -8,7 +8,7 @@ re-discovering the recent project state.
 
 - Primary historical experiment branch: `keep-position-ids`
 - Current integration branch: `prune-exp-sync-non-position-id`
-- Current HEAD on this branch: `2dcd0d1`
+- Current HEAD when this document was last updated: `b95802a`
 
 ### What this branch contains
 
