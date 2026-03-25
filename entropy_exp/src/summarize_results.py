@@ -67,8 +67,11 @@ def primary_metric(dataset: str, metrics: dict[str, Any]) -> tuple[str, Any]:
     if dataset == "mme":
         return "overall_total_score", metrics.get("overall_total_score")
     if dataset == "pope":
+        macro_f1 = metrics.get("macro_f1")
+        if macro_f1 is not None:
+            return "macro_f1", macro_f1
         weighted_average = metrics.get("weighted_average", {})
-        return "weighted_f1_score", weighted_average.get("f1_score")
+        return "macro_f1", weighted_average.get("f1_score")
     if dataset == "gqa":
         return "accuracy", metrics.get("accuracy")
     return "unknown", None
@@ -117,7 +120,11 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
         "primary_metric_name": metric_name,
         "primary_metric_value": metric_value,
         "mme_overall_total_score": metrics.get("overall_total_score") if dataset == "mme" else None,
-        "pope_weighted_f1_score": metrics.get("weighted_average", {}).get("f1_score") if dataset == "pope" else None,
+        "pope_macro_f1": (
+            metrics.get("macro_f1", metrics.get("weighted_average", {}).get("f1_score"))
+            if dataset == "pope"
+            else None
+        ),
         "gqa_accuracy": metrics.get("accuracy") if dataset == "gqa" else None,
         "pruning_config": pruning,
         "eval_metrics": metrics,
@@ -164,7 +171,7 @@ def build_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "primary_metric_name": record["primary_metric_name"],
                 "primary_metric_value": csv_value(record["primary_metric_value"]),
                 "mme_overall_total_score": csv_value(record["mme_overall_total_score"]),
-                "pope_weighted_f1_score": csv_value(record["pope_weighted_f1_score"]),
+                "pope_macro_f1": csv_value(record["pope_macro_f1"]),
                 "gqa_accuracy": csv_value(record["gqa_accuracy"]),
                 "pruning_config_json": json_string(record["pruning_config"]),
             }
@@ -194,7 +201,7 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "primary_metric_name",
         "primary_metric_value",
         "mme_overall_total_score",
-        "pope_weighted_f1_score",
+        "pope_macro_f1",
         "gqa_accuracy",
         "pruning_config_json",
     ]
