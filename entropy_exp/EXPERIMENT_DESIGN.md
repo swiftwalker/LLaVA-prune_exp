@@ -271,7 +271,7 @@ python entropy_exp/analysis/entropy_analysis.py \
 
 | 维度 | 指标 | 说明 |
 |:--|:--|:--|
-| **性能** | GQA Accuracy / MME Score / POPE F1 | 剪枝后 answer 质量 vs baseline |
+| **性能** | GQA Accuracy / MME Score / POPE macro-F1 | 剪枝后 answer 质量 vs baseline；POPE 使用各 category F1 的简单平均 |
 | **效率** | prefill time / decode time / total time per sample | 同一 decode 路径，公平对比 |
 
 ### 效率测量注意事项
