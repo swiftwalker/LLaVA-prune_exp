@@ -1,5 +1,5 @@
 version: 1
-label: "keep-position-ids-all-strategies-all-datasets"
+label: "prune-exp-all-strategies-all-datasets"
 pool_size: 6
 
 gpu:
@@ -13,11 +13,11 @@ retry:
   rounding: "ceil"
 
 tmux:
-  session_name: "sched_keep_position_ids"
+  session_name: "sched_prune_exp"
   log_dir: "entropy_exp/outputs/logs/tmux"
 
 environment:
-  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
+  conda_sh: "/data_ssd/liuyu/miniconda3/etc/profile.d/conda.sh"
   conda_env: "llava"
 
 defaults:

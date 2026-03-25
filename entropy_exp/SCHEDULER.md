@@ -19,11 +19,11 @@
 ## 用法
 
 ```bash
-python entropy_exp/scripts/run_scheduler.py --plan entropy_exp/plans/keep_position_ids_all_strategies_all_datasets.yaml --dry-run
+python entropy_exp/scripts/run_scheduler.py --plan entropy_exp/plans/prune_exp_all_strategies_all_datasets.yaml --dry-run
 
-python entropy_exp/scripts/run_scheduler.py --plan entropy_exp/plans/keep_position_ids_all_strategies_all_datasets.yaml
+python entropy_exp/scripts/run_scheduler.py --plan entropy_exp/plans/prune_exp_all_strategies_all_datasets.yaml
 
-python entropy_exp/scripts/run_scheduler.py --state-dir entropy_exp/outputs/scheduler/keep-position-ids-all-strategies-all-datasets --resume
+python entropy_exp/scripts/run_scheduler.py --state-dir entropy_exp/outputs/scheduler/prune-exp-all-strategies-all-datasets --resume
 ```
 
 可选参数：
@@ -43,7 +43,7 @@ python entropy_exp/scripts/run_scheduler.py --state-dir entropy_exp/outputs/sche
 
 ```yaml
 version: 1
-label: "keep-position-ids-all-strategies-all-datasets"
+label: "prune-exp-all-strategies-all-datasets"
 pool_size: 6
 
 gpu:
@@ -57,11 +57,11 @@ retry:
   rounding: "ceil"
 
 tmux:
-  session_name: "sched_keep_position_ids"
+  session_name: "sched_prune_exp"
   log_dir: "entropy_exp/outputs/logs/tmux"
 
 environment:
-  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
+  conda_sh: "/data_ssd/liuyu/miniconda3/etc/profile.d/conda.sh"
   conda_env: "llava"
 
 defaults:
