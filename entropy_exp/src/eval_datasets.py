@@ -132,7 +132,7 @@ def parse_pope_metrics(stdout: str) -> dict:
     return metrics
 
 
-def add_pope_weighted_average(metrics: dict) -> dict:
+def add_pope_macro_f1(metrics: dict) -> dict:
     category_metrics = {
         key: value
         for key, value in metrics.items()
@@ -141,39 +141,16 @@ def add_pope_weighted_average(metrics: dict) -> dict:
     if not category_metrics:
         return metrics
 
-    metric_keys = ("accuracy", "precision", "recall", "f1_score", "yes_ratio")
-    total_samples = sum(item["samples"] for item in category_metrics.values())
-    if total_samples <= 0:
+    f1_scores = [item["f1_score"] for item in category_metrics.values() if "f1_score" in item]
+    if not f1_scores:
         return metrics
 
-    weighted_average = {"samples": total_samples}
-    for metric_key in metric_keys:
-        weighted_sum = 0.0
-        has_value = False
-        for item in category_metrics.values():
-            if metric_key not in item:
-                continue
-            weighted_sum += item[metric_key] * item["samples"]
-            has_value = True
-        if has_value:
-            weighted_average[metric_key] = weighted_sum / total_samples
-
-    metrics["weighted_average"] = weighted_average
+    metrics["macro_f1"] = sum(f1_scores) / len(f1_scores)
     return metrics
 
 
-def format_pope_weighted_average(weighted_average: dict) -> str:
-    return "\n".join(
-        [
-            f"Category: weighted_average, # samples: {weighted_average['samples']}",
-            f"Accuracy: {weighted_average['accuracy']}",
-            f"Precision: {weighted_average['precision']}",
-            f"Recall: {weighted_average['recall']}",
-            f"F1 score: {weighted_average['f1_score']}",
-            f"Yes ratio: {weighted_average['yes_ratio']}",
-            "====================================",
-        ]
-    )
+def format_pope_macro_f1(macro_f1: float) -> str:
+    return f"Macro-F1: {macro_f1:.6f}"
 
 
 def infer_config_value(config_file: str, path: tuple[str, ...]) -> str | None:
@@ -367,16 +344,16 @@ def eval_pope(answers_file: str, output_dir: str) -> dict:
     )
     emit_process_output(result, os.path.join(output_dir, "stdout.txt"))
 
-    metrics = add_pope_weighted_average(parse_pope_metrics(result.stdout or ""))
-    weighted_average = metrics.get("weighted_average")
-    if weighted_average:
-        weighted_output = format_pope_weighted_average(weighted_average)
-        print(weighted_output)
+    metrics = add_pope_macro_f1(parse_pope_metrics(result.stdout or ""))
+    macro_f1 = metrics.get("macro_f1")
+    if macro_f1 is not None:
+        macro_f1_output = format_pope_macro_f1(macro_f1)
+        print(macro_f1_output)
         stdout_path = os.path.join(output_dir, "stdout.txt")
         with open(stdout_path, "a", encoding="utf-8") as f:
             if result.stdout and not result.stdout.endswith("\n"):
                 f.write("\n")
-            f.write(weighted_output)
+            f.write(macro_f1_output)
             f.write("\n")
 
     return {
