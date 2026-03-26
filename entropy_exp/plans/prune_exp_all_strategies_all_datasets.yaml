@@ -3,7 +3,7 @@ label: "prune-exp-all-strategies-all-datasets"
 pool_size: 6
 
 gpu:
-  min_free_gib: 16
+  min_free_gib: 20
   selection: "max_free"
   sample_seconds: 3
   poll_interval_seconds: 15

@@ -8,8 +8,12 @@ import os
 import re
 import subprocess
 import sys
+from collections import OrderedDict
 
 LLAVA_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEFAULT_POPE_QUESTION_FILE = os.path.join(
+    LLAVA_ROOT, "entropy_exp", "eval_questions", "pope", "llava_pope_test.jsonl"
+)
 
 
 def ensure_dir(path: str) -> str:
@@ -153,6 +157,158 @@ def format_pope_macro_f1(macro_f1: float) -> str:
     return f"Macro-F1: {macro_f1:.6f}"
 
 
+def load_jsonl(path: str) -> list[dict]:
+    with open(path, "r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle]
+
+
+def normalize_pope_answer(text: str) -> str:
+    if text.find(".") != -1:
+        text = text.split(".")[0]
+    text = text.replace(",", "")
+    words = text.split(" ")
+    if "No" in words or "not" in words or "no" in words:
+        return "no"
+    return "yes"
+
+
+def normalize_pope_question_text(text: str) -> str:
+    return text.split("\n", 1)[0].strip()
+
+
+def make_pope_question_key(image: str | None, text: str | None) -> tuple[str, str]:
+    return (str(image or ""), normalize_pope_question_text(str(text or "")))
+
+
+def evaluate_pope_category(
+    answers: list[dict],
+    question_by_id: dict[int, dict],
+    label_by_question_id: dict[int, int],
+    label_by_question_key: dict[tuple[str, str], int],
+) -> dict | None:
+    pred_list: list[int] = []
+    label_list: list[int] = []
+
+    for answer in answers:
+        question_id = int(answer.get("question_id"))
+        question = question_by_id.get(question_id)
+        label = label_by_question_id.get(question_id)
+        if label is None and question is not None:
+            label = label_by_question_key.get(make_pope_question_key(question.get("image"), question.get("text")))
+        if label is None:
+            continue
+        pred_list.append(0 if normalize_pope_answer(str(answer.get("text", ""))) == "no" else 1)
+        label_list.append(label)
+
+    if not pred_list:
+        return None
+
+    yes_ratio = pred_list.count(1) / len(pred_list)
+    pos = 1
+    neg = 0
+    tp = tn = fp = fn = 0
+    for pred, label in zip(pred_list, label_list):
+        if pred == pos and label == pos:
+            tp += 1
+        elif pred == pos and label == neg:
+            fp += 1
+        elif pred == neg and label == neg:
+            tn += 1
+        elif pred == neg and label == pos:
+            fn += 1
+
+    precision = float(tp) / float(tp + fp) if (tp + fp) else 0.0
+    recall = float(tp) / float(tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    acc = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) else 0.0
+
+    return {
+        "samples": len(pred_list),
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "accuracy": acc,
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1,
+        "yes_ratio": yes_ratio,
+    }
+
+
+def evaluate_pope_answers(answers: list[dict], questions: list[dict], annotation_dir: str) -> tuple[str, dict]:
+    categories_in_order: list[str] = []
+    question_category_by_id: OrderedDict[int, str] = OrderedDict()
+    question_by_id: dict[int, dict] = {}
+    for question in questions:
+        category = question["category"]
+        question_id = int(question["question_id"])
+        question_category_by_id[question_id] = category
+        question_by_id[question_id] = question
+        if category not in categories_in_order:
+            categories_in_order.append(category)
+
+    answers_by_category: dict[str, list[dict]] = {category: [] for category in categories_in_order}
+    for answer in answers:
+        category = question_category_by_id.get(answer.get("question_id"))
+        if category is None:
+            continue
+        answers_by_category.setdefault(category, []).append(answer)
+
+    metrics: dict = {}
+    stdout_lines: list[str] = []
+    for category in categories_in_order:
+        label_file = os.path.join(annotation_dir, f"coco_pope_{category}.json")
+        if not os.path.exists(label_file):
+            raise FileNotFoundError(f"POPE annotation file not found: {label_file}")
+
+        label_by_question_id = {}
+        label_by_question_key = {}
+        for row in load_jsonl(label_file):
+            label = 1 if row["label"] != "no" else 0
+            label_by_question_id[int(row["question_id"])] = label
+            label_by_question_key[make_pope_question_key(row.get("image"), row.get("text"))] = label
+
+        category_metrics = evaluate_pope_category(
+            answers_by_category.get(category, []),
+            question_by_id,
+            label_by_question_id,
+            label_by_question_key,
+        )
+        if category_metrics is None:
+            continue
+
+        metrics[category] = {
+            "samples": category_metrics["samples"],
+            "accuracy": category_metrics["accuracy"],
+            "precision": category_metrics["precision"],
+            "recall": category_metrics["recall"],
+            "f1_score": category_metrics["f1_score"],
+            "yes_ratio": category_metrics["yes_ratio"],
+        }
+        stdout_lines.extend(
+            [
+                f"Category: {category}, # samples: {category_metrics['samples']}",
+                "TP\tFP\tTN\tFN\t",
+                f"{category_metrics['tp']}\t{category_metrics['fp']}\t{category_metrics['tn']}\t{category_metrics['fn']}",
+                f"Accuracy: {category_metrics['accuracy']}",
+                f"Precision: {category_metrics['precision']}",
+                f"Recall: {category_metrics['recall']}",
+                f"F1 score: {category_metrics['f1_score']}",
+                f"Yes ratio: {category_metrics['yes_ratio']}",
+                (
+                    f"{category_metrics['f1_score']:.3f}, {category_metrics['accuracy']:.3f}, "
+                    f"{category_metrics['precision']:.3f}, {category_metrics['recall']:.3f}, "
+                    f"{category_metrics['yes_ratio']:.3f}"
+                ),
+                "====================================",
+            ]
+        )
+
+    metrics = add_pope_macro_f1(metrics)
+    return "\n".join(stdout_lines).rstrip(), metrics
+
+
 def infer_config_value(config_file: str, path: tuple[str, ...]) -> str | None:
     stack: list[tuple[int, str]] = []
     with open(config_file, "r", encoding="utf-8") as f:
@@ -199,6 +355,20 @@ def resolve_config_path(path: str | None) -> str | None:
     if os.path.exists(root_relative):
         return root_relative
     return os.path.abspath(path)
+
+
+def infer_dataset_question_file(config_file: str, dataset: str) -> str | None:
+    return resolve_config_path(infer_config_value(config_file, ("datasets", dataset, "question_file")))
+
+
+def resolve_pope_question_file(config_file: str | None) -> str:
+    if config_file is not None:
+        question_file = infer_dataset_question_file(config_file, "pope")
+        if question_file is not None:
+            if not os.path.exists(question_file):
+                raise FileNotFoundError(f"POPE question file not found from run config: {question_file}")
+            return question_file
+    return DEFAULT_POPE_QUESTION_FILE
 
 
 def infer_run_metadata(run_dir: str) -> tuple[str, str, str, str]:
@@ -319,45 +489,37 @@ def eval_mme(answers_file: str, output_dir: str, mme_data_path: str | None = Non
     return summary
 
 
-def eval_pope(answers_file: str, output_dir: str) -> dict:
-    eval_script = os.path.join(LLAVA_ROOT, "llava", "eval", "eval_pope.py")
-    question_file = os.path.join(LLAVA_ROOT, "entropy_exp", "eval_questions", "pope", "llava_pope_test.jsonl")
+def eval_pope(answers_file: str, output_dir: str, question_file: str | None = None) -> dict:
+    question_file = question_file or DEFAULT_POPE_QUESTION_FILE
     annotation_dir = os.path.join(LLAVA_ROOT, "entropy_exp", "datasets", "pope", "coco")
 
-    if not os.path.exists(eval_script):
-        raise FileNotFoundError(f"POPE eval script not found: {eval_script}")
+    if not os.path.exists(question_file):
+        raise FileNotFoundError(f"POPE question file not found: {question_file}")
+    if not os.path.isdir(annotation_dir):
+        raise FileNotFoundError(f"POPE annotation directory not found: {annotation_dir}")
 
     print("Running POPE evaluation...")
-    result = subprocess.run(
-        [
-            sys.executable,
-            eval_script,
-            "--annotation-dir",
-            annotation_dir,
-            "--question-file",
-            question_file,
-            "--result-file",
-            answers_file,
-        ],
-        capture_output=True,
-        text=True,
+    stdout, metrics = evaluate_pope_answers(
+        answers=load_jsonl(answers_file),
+        questions=load_jsonl(question_file),
+        annotation_dir=annotation_dir,
     )
-    emit_process_output(result, os.path.join(output_dir, "stdout.txt"))
 
-    metrics = add_pope_macro_f1(parse_pope_metrics(result.stdout or ""))
+    stdout_path = os.path.join(output_dir, "stdout.txt")
+    if stdout:
+        print(stdout)
     macro_f1 = metrics.get("macro_f1")
     if macro_f1 is not None:
         macro_f1_output = format_pope_macro_f1(macro_f1)
         print(macro_f1_output)
-        stdout_path = os.path.join(output_dir, "stdout.txt")
-        with open(stdout_path, "a", encoding="utf-8") as f:
-            if result.stdout and not result.stdout.endswith("\n"):
-                f.write("\n")
-            f.write(macro_f1_output)
-            f.write("\n")
+        stdout = f"{stdout}\n{macro_f1_output}" if stdout else macro_f1_output
+
+    write_text(stdout_path, stdout + ("\n" if stdout else ""))
 
     return {
         "metrics": metrics,
+        "question_file": question_file,
+        "annotation_dir": annotation_dir,
     }
 
 
@@ -417,6 +579,14 @@ def main():
                 infer_config_value(config_file, ("datasets", "mme", "image_folder"))
             )
         summary = eval_mme(answers_file, output_dir, mme_data_path=mme_data_path)
+    elif dataset == "pope":
+        if args.mme_data_path:
+            parser.error("--mme-data-path can only be used with --dataset mme or an MME run directory")
+        summary = eval_pope(
+            answers_file,
+            output_dir,
+            question_file=resolve_pope_question_file(config_file),
+        )
     else:
         if args.mme_data_path:
             parser.error("--mme-data-path can only be used with --dataset mme or an MME run directory")

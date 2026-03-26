@@ -1,0 +1,41 @@
+version: 1
+label: "prune-exp-pope-all-strategies-1000-l2-r0p5-non-position-id"
+pool_size: 6
+
+gpu:
+  min_free_gib: 20
+  selection: "max_free"
+  sample_seconds: 3
+  poll_interval_seconds: 15
+
+retry:
+  budget_ratio: 0.1
+  rounding: "ceil"
+
+tmux:
+  session_name: "sched_pope_1000"
+  log_dir: "entropy_exp/outputs/logs/tmux"
+
+environment:
+  conda_sh: "/home/liuyu/miniconda3/etc/profile.d/conda.sh"
+  conda_env: "llava"
+
+defaults:
+  max_samples: 1000
+  extra_sets:
+    - "inference.seed=42"
+    - "pruning.layer_selection=fixed"
+
+experiments:
+  - name: "pope_l2_r0.5_s1000"
+    dataset: "pope"
+    strategies:
+      - "attn_score"
+      - "pre_attn_score"
+      - "masking_attn_score"
+      - "entropy"
+      - "random"
+      - "sparsevlm"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"

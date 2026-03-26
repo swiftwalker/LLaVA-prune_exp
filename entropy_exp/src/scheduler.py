@@ -686,6 +686,20 @@ def count_lines(path: Path) -> int:
         return sum(1 for _ in handle)
 
 
+def infer_expected_answers(config: Dict[str, Any], dataset: str, question_path: Path) -> int:
+    expected_lines = count_lines(question_path)
+    run_meta = config.get("_run_meta") or {}
+    pruning_cfg = config.get("pruning") or {}
+
+    max_samples = run_meta.get("max_samples")
+    if max_samples is None:
+        max_samples = pruning_cfg.get("max_samples")
+
+    if isinstance(max_samples, int) and max_samples > 0:
+        return min(expected_lines, max_samples)
+    return expected_lines
+
+
 def validate_answers_file(run_dir: Path, dataset: str, repo_root: Path) -> Dict[str, Any]:
     config_path = run_dir / "config.yaml"
     answers_path = run_dir / "answers.jsonl"
@@ -707,7 +721,7 @@ def validate_answers_file(run_dir: Path, dataset: str, repo_root: Path) -> Dict[
     if not question_path.is_file():
         return {"ok": False, "reason": f"missing_question_source:{question_path}"}
 
-    expected_lines = count_lines(question_path)
+    expected_lines = infer_expected_answers(config, dataset, question_path)
     valid_lines = 0
     try:
         with answers_path.open("r", encoding="utf-8") as handle:
@@ -827,7 +841,7 @@ def create_launcher_script(
     started_at = time.time()
     command_line = shlex.join(build_run_command(job))
     content = f"""#!/usr/bin/env bash
-set -u
+set -o pipefail
 JOB_EXIT_CODE=0
 
 if [[ -f {shlex.quote(env_cfg.conda_sh)} ]]; then
@@ -905,6 +919,10 @@ class ExperimentScheduler:
     ) -> "ExperimentScheduler":
         plan = load_scheduler_plan(plan_path)
         resolved_state_dir = state_dir or (DEFAULT_STATE_BASE_DIR / sanitize_name(plan.label))
+        if tmux_has_session(plan.tmux.session_name):
+            raise SchedulerError(
+                f"tmux session already exists for a new scheduler run; use --resume or clean it first: {plan.tmux.session_name}"
+            )
         state = initialize_scheduler_state(plan, resolved_state_dir, plan_path, pool_size_override=pool_size_override)
         return cls(repo_root, plan, resolved_state_dir, state, scheduler_script, scheduler_python)
 

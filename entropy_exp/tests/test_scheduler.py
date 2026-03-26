@@ -12,14 +12,20 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 from entropy_exp.src.scheduler import (
+    create_launcher_script,
     build_progress_payload,
     build_run_command,
     compute_retry_budget,
+    EnvironmentConfig,
+    ExperimentScheduler,
     expand_jobs,
     finalize_attempt_result,
     format_progress_line,
+    infer_expected_answers,
+    JobSpec,
     load_scheduler_plan,
     GPUConfig,
+    SchedulerError,
     select_gpu_for_dispatch,
 )
 
@@ -97,8 +103,72 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertIn("retry=31/33", line)
         self.assertIn("active_gpus=0,2,4,5", line)
 
+    def test_create_rejects_existing_tmux_session_for_new_run(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo",
+                "pool_size": 2,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 3,
+                    "poll_interval_seconds": 15,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {
+                    "conda_sh": "/home/liuyu/miniconda3/etc/profile.d/conda.sh",
+                    "conda_env": "llava",
+                },
+                "defaults": {"max_samples": None, "extra_sets": ["inference.seed=42"]},
+                "experiments": [
+                    {
+                        "name": "pope_l1_r0.2",
+                        "dataset": "pope",
+                        "strategies": ["random"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[1]",
+                            "pruning.prune_ratio=[0.2]",
+                        ],
+                    }
+                ],
+            }
+        )
+
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch(
+            "entropy_exp.src.scheduler.tmux_has_session", return_value=True
+        ):
+            with self.assertRaises(SchedulerError):
+                ExperimentScheduler.create(
+                    repo_root=Path(temp_dir),
+                    plan_path=plan_path,
+                    state_dir=Path(temp_dir) / "state",
+                    pool_size_override=None,
+                    scheduler_script=Path(temp_dir) / "scheduler.py",
+                    scheduler_python=Path(sys.executable),
+                )
+
 
 class SchedulerFinalizeTests(unittest.TestCase):
+    def test_infer_expected_answers_respects_run_max_samples(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            question_path = Path(temp_dir) / "questions.jsonl"
+            question_path.write_text("{}\n{}\n{}\n", encoding="utf-8")
+
+            expected = infer_expected_answers(
+                {
+                    "_run_meta": {"dataset": "pope", "max_samples": 2},
+                    "datasets": {"pope": {"question_file": str(question_path)}},
+                },
+                "pope",
+                question_path,
+            )
+            self.assertEqual(expected, 2)
+
     def test_finalize_attempt_marks_completed_for_valid_run(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
@@ -141,6 +211,102 @@ class SchedulerFinalizeTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["validation"]["expected_answers"], 2)
             self.assertEqual(payload["validation"]["valid_answers"], 2)
+
+    def test_finalize_attempt_marks_completed_for_truncated_run_when_max_samples_matches(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / "entropy_exp" / "outputs" / "runs" / "random" / "pope").mkdir(parents=True)
+            (repo_root / "entropy_exp" / "datasets").mkdir(parents=True)
+            questions_path = repo_root / "entropy_exp" / "datasets" / "pope_questions.jsonl"
+            questions_path.write_text("{}\n{}\n{}\n{}\n{}\n", encoding="utf-8")
+
+            run_dir = (
+                repo_root
+                / "entropy_exp"
+                / "outputs"
+                / "runs"
+                / "random"
+                / "pope"
+                / "pope_random_l2_r0p5__20260326_000000_000001"
+            )
+            run_dir.mkdir(parents=True)
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "_run_meta": {"dataset": "pope", "max_samples": 2},
+                        "pruning": {"max_samples": None},
+                        "datasets": {"pope": {"question_file": "entropy_exp/datasets/pope_questions.jsonl"}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "answers.jsonl").write_text('{"ok": true}\n{"ok": true}\n', encoding="utf-8")
+
+            state_dir = repo_root / "state"
+            state_dir.mkdir(parents=True)
+            result_path = finalize_attempt_result(
+                repo_root=repo_root,
+                state_dir=state_dir,
+                job_id="job_0001",
+                attempt=1,
+                run_prefix="pope_random_l2_r0p5__",
+                dataset="pope",
+                started_at=run_dir.stat().st_mtime,
+                exit_code=0,
+                log_path="/tmp/demo.log",
+                gpu=0,
+                tmux_session="sched_demo",
+                tmux_window="pope_random_l2_r0p5_try1",
+            )
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["validation"]["expected_answers"], 2)
+            self.assertEqual(payload["validation"]["valid_answers"], 2)
+
+    def test_launcher_script_does_not_enable_nounset_before_conda_activate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir) / "repo"
+            state_dir = Path(temp_dir) / "state"
+            repo_root.mkdir(parents=True)
+            state_dir.mkdir(parents=True)
+
+            job = JobSpec(
+                job_id="job_0001",
+                experiment_name="pope_l2_r0.5_s1000",
+                dataset="pope",
+                strategy="random",
+                max_samples=1000,
+                extra_sets=[
+                    "inference.seed=42",
+                    "pruning.layer_selection=fixed",
+                    "pruning.prune_layers=[2]",
+                    "pruning.prune_ratio=[0.5]",
+                ],
+                run_prefix="pope_random_l2_r0p5__",
+                window_base_name="pope_random_l2_r0p5",
+            )
+
+            launcher_path, _ = create_launcher_script(
+                state_dir=state_dir,
+                repo_root=repo_root,
+                scheduler_script=repo_root / "entropy_exp" / "scripts" / "run_scheduler.py",
+                scheduler_python=Path(sys.executable),
+                job=job,
+                attempt=1,
+                gpu=1,
+                tmux_session="sched_pope_1000",
+                tmux_window="pope_random_l2_r0p5_try1",
+                log_path=repo_root / "entropy_exp" / "outputs" / "logs" / "demo.log",
+                env_cfg=EnvironmentConfig(
+                    conda_sh="/home/liuyu/miniconda3/etc/profile.d/conda.sh",
+                    conda_env="llava",
+                ),
+            )
+
+            launcher_text = launcher_path.read_text(encoding="utf-8")
+            self.assertIn("set -o pipefail", launcher_text)
+            self.assertNotIn("set -u", launcher_text)
 
 
 class SchedulerGpuSelectionTests(unittest.TestCase):
