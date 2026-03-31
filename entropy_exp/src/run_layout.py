@@ -16,6 +16,7 @@ DEFAULT_RUNS_DIR = DEFAULT_OUTPUT_BASE_DIR / "runs"
 RUN_MARKER_FILES = ("config.yaml", "answers.jsonl")
 KNOWN_DATASETS = ("gqa", "mme", "pope")
 KNOWN_STRATEGIES = (
+    "tail_masking_attn_score",
     "masking_attn_score",
     "pre_attn_score",
     "attn_score",
