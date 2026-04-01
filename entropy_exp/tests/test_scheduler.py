@@ -15,11 +15,13 @@ from entropy_exp.src.scheduler import (
     build_progress_payload,
     build_run_command,
     compute_retry_budget,
+    DEFAULT_CONDA_SH,
     expand_jobs,
     finalize_attempt_result,
     format_progress_line,
     load_scheduler_plan,
     GPUConfig,
+    resolve_conda_activate_target,
     select_gpu_for_dispatch,
 )
 
@@ -47,7 +49,7 @@ class SchedulerPlanTests(unittest.TestCase):
                 "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
                 "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
                 "environment": {
-                    "conda_sh": "/data/liuyu/anaconda3/etc/profile.d/conda.sh",
+                    "conda_sh": "~/miniconda3/etc/profile.d/conda.sh",
                     "conda_env": "llava",
                 },
                 "defaults": {"max_samples": None, "extra_sets": ["inference.seed=42"]},
@@ -87,7 +89,7 @@ class SchedulerPlanTests(unittest.TestCase):
                 "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
                 "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
                 "environment": {
-                    "conda_sh": "/data/liuyu/anaconda3/etc/profile.d/conda.sh",
+                    "conda_sh": "~/miniconda3/etc/profile.d/conda.sh",
                     "conda_env": "llava",
                 },
                 "defaults": {"max_samples": 5, "extra_sets": []},
@@ -108,6 +110,46 @@ class SchedulerPlanTests(unittest.TestCase):
         plan = load_scheduler_plan(plan_path)
         jobs = expand_jobs(plan)
         self.assertEqual(jobs[0].run_prefix, "gqa_baseline_")
+
+    def test_scheduler_defaults_conda_sh_to_home_miniconda(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-default-conda",
+                "pool_size": 1,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {"conda_env": "llava"},
+                "defaults": {"max_samples": 5, "extra_sets": []},
+                "experiments": [
+                    {
+                        "name": "gqa_baseline_smoke",
+                        "dataset": "gqa",
+                        "strategies": ["baseline"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[1]",
+                            "pruning.prune_ratio=[0.2]",
+                        ],
+                    }
+                ],
+            }
+        )
+        plan = load_scheduler_plan(plan_path)
+        self.assertEqual(plan.environment.conda_sh, str(DEFAULT_CONDA_SH))
+
+    def test_resolve_conda_activate_target_uses_same_conda_root(self):
+        target = resolve_conda_activate_target(
+            "/home/liuyu/miniconda3/etc/profile.d/conda.sh",
+            "llava",
+        )
+        self.assertEqual(target, "/home/liuyu/miniconda3/envs/llava")
 
     def test_retry_budget_and_progress_format(self):
         self.assertEqual(compute_retry_budget(324, 0.1, "ceil"), 33)

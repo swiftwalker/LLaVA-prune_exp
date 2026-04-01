@@ -61,7 +61,7 @@ tmux:
   log_dir: "entropy_exp/outputs/logs/tmux"
 
 environment:
-  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
+  conda_sh: "~/miniconda3/etc/profile.d/conda.sh"
   conda_env: "llava"
 
 defaults:
@@ -91,6 +91,7 @@ experiments:
 - `strategies` 会展开成多个 job
 - 队列顺序严格按 YAML 展开顺序保持 FIFO
 - 调度器统一调用 `run_prune.sh --no-auto-gpu`
+- `environment.conda_sh` 支持 `~/...`，省略时默认使用 `~/miniconda3/etc/profile.d/conda.sh`
 
 ---
 

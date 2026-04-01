@@ -23,17 +23,8 @@ ARG1="${1:-}"
 ARG2="${2:-}"
 RUNS_DIR="entropy_exp/outputs/runs"
 
-if [ -n "${PYTHON_BIN:-}" ]; then
-    :
-elif [ -x "/data_ssd/liuyu/miniconda3/envs/llava/bin/python" ]; then
-    PYTHON_BIN="/data_ssd/liuyu/miniconda3/envs/llava/bin/python"
-elif [ -x "/home/liuyu/miniconda3/envs/llava/bin/python" ]; then
-    PYTHON_BIN="/home/liuyu/miniconda3/envs/llava/bin/python"
-else
-    PYTHON_BIN="$(command -v python)"
-fi
-
 source "$SCRIPT_DIR/run_dir_common.sh"
+ensure_python_bin
 
 if [ $# -gt 2 ]; then
     echo "Usage: bash entropy_exp/scripts/run_summary.sh [runs|<run>|<prefix>|<answers.jsonl>|<eval/summary.json>] [output_dir]" >&2

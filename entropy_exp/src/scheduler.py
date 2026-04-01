@@ -25,6 +25,8 @@ except ImportError:  # pragma: no cover - fallback for direct src imports
 LLAVA_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATE_BASE_DIR = LLAVA_ROOT / "entropy_exp" / "outputs" / "scheduler"
 DEFAULT_RUNS_DIR = LLAVA_ROOT / "entropy_exp" / "outputs" / "runs"
+DEFAULT_CONDA_SH = Path.home() / "miniconda3" / "etc" / "profile.d" / "conda.sh"
+DEFAULT_CONDA_ENV = "llava"
 
 SUPPORTED_DATASETS = {"gqa", "mme", "pope"}
 SUPPORTED_STRATEGIES = {
@@ -111,6 +113,30 @@ class JobSpec:
 
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def resolve_conda_sh_value(raw_value: Any) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return str(DEFAULT_CONDA_SH)
+    return os.path.expandvars(os.path.expanduser(text))
+
+
+def resolve_conda_activate_target(conda_sh: str, conda_env: str) -> str:
+    env_text = str(conda_env).strip()
+    if not env_text:
+        return env_text
+
+    expanded_env = os.path.expandvars(os.path.expanduser(env_text))
+    if expanded_env != env_text or "/" in env_text:
+        return expanded_env
+
+    conda_sh_path = Path(conda_sh).expanduser()
+    try:
+        conda_root = conda_sh_path.parents[2]
+    except IndexError:
+        return env_text
+    return str(conda_root / "envs" / env_text)
 
 
 def ensure_list_of_strings(value: Any, field_name: str) -> List[str]:
@@ -305,11 +331,11 @@ def load_scheduler_plan(plan_path: Path) -> SchedulerPlan:
     if not isinstance(env_raw, dict):
         raise SchedulerError("environment must be a mapping")
     env_cfg = EnvironmentConfig(
-        conda_sh=str(env_raw.get("conda_sh", "")).strip(),
-        conda_env=str(env_raw.get("conda_env", "")).strip(),
+        conda_sh=resolve_conda_sh_value(env_raw.get("conda_sh")),
+        conda_env=str(env_raw.get("conda_env", DEFAULT_CONDA_ENV)).strip(),
     )
-    if not env_cfg.conda_sh or not env_cfg.conda_env:
-        raise SchedulerError("environment.conda_sh and environment.conda_env must be provided")
+    if not env_cfg.conda_env:
+        raise SchedulerError("environment.conda_env must be provided")
 
     defaults_raw = raw.get("defaults", {})
     if not isinstance(defaults_raw, dict):
@@ -832,6 +858,7 @@ def create_launcher_script(
     launcher_path = launcher_file_path(state_dir, job.job_id, attempt)
     started_at = time.time()
     command_line = shlex.join(build_run_command(job))
+    conda_activate_target = resolve_conda_activate_target(env_cfg.conda_sh, env_cfg.conda_env)
     content = f"""#!/usr/bin/env bash
 set -u
 JOB_EXIT_CODE=0
@@ -844,7 +871,7 @@ else
 fi
 
 if [[ "$JOB_EXIT_CODE" -eq 0 ]]; then
-  conda activate {shlex.quote(env_cfg.conda_env)} || JOB_EXIT_CODE=$?
+  conda activate {shlex.quote(conda_activate_target)} || JOB_EXIT_CODE=$?
 fi
 
 if [[ "$JOB_EXIT_CODE" -eq 0 ]]; then

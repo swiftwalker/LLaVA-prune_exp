@@ -60,18 +60,18 @@
 
 ### 3.1 项目位置与隔离策略
 
-- **项目路径**：`~/data/LLaVA/entropy_exp/`
-- **代码基础**：基于 `~/data/LLaVA` 仓库的 `master` 分支，创建 `entropy-exp` 分支
+- **项目路径**：`~/LLaVA-prune_exp/entropy_exp/`
+- **代码基础**：基于 `~/LLaVA-prune_exp` 仓库的 `master` 分支，创建 `entropy-exp` 分支
 - **与 SparseVLMs 的关系**：完全解耦。通过软连接复用数据集和模型权重，不引入 SparseVLMs 代码
 - **模型加载**：使用原始 `LlavaLlamaForCausalLM`（非 Sparse 版本），通过 `dynamic_sparse=False` 等效实现
 
 ### 3.2 目录结构
 
 ```
-~/data/LLaVA/entropy_exp/
-├── models/              → ln -s /home/liuyu/data/LM_models
-├── datasets/            → ln -s /home/liuyu/data/SparseVLMs/data
-├── eval_questions/      → ln -s /home/liuyu/data/SparseVLMs/eval
+~/LLaVA-prune_exp/entropy_exp/
+├── models/              → ln -s ~/models
+├── datasets/            → ln -s ~/datasets/SparseVLMs/data
+├── eval_questions/      → ln -s ~/datasets/SparseVLMs/eval
 ├── src/
 │   ├── inference.py     # 推理主入口（改造自 model_vqa_loader.py）
 │   ├── hooks.py         # AttentionCaptureHook + HDF5 写入
@@ -170,7 +170,7 @@ output_<dataset>_<timestamp>.h5
 
 ```bash
 conda activate llava
-cd ~/data/LLaVA
+cd ~/LLaVA-prune_exp
 ```
 
 ### 4.1 推理 + 捕获

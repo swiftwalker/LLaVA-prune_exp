@@ -4,15 +4,15 @@
 
 ```bash
 conda activate llava
-cd ~/data/LLaVA
+cd ~/LLaVA-prune_exp
 ```
 
 确保以下软链接存在：
 
 ```
-entropy_exp/models     → /home/liuyu/data/LM_models
-entropy_exp/datasets   → /home/liuyu/data/SparseVLMs/data
-entropy_exp/eval_questions → /home/liuyu/data/SparseVLMs/eval
+entropy_exp/models         → ~/models
+entropy_exp/datasets       → ~/datasets/SparseVLMs/data
+entropy_exp/eval_questions → ~/datasets/SparseVLMs/eval
 ```
 
 ---

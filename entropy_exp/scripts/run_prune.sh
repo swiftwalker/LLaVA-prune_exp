@@ -113,6 +113,10 @@ done
 
 CONFIG="entropy_exp/configs/prune.yaml"
 
+source "$SCRIPT_DIR/run_dir_common.sh"
+activate_llava_env
+ensure_python_bin
+
 collect_candidate_gpus() {
     local visible="$1"
     local -n out_ref="$2"
@@ -306,7 +310,7 @@ run_single() {
         echo "========================================"
         echo " Baseline (no pruning):  $ds"
         echo "========================================"
-        python entropy_exp/src/prune_inference.py \
+        "$PYTHON_BIN" entropy_exp/src/prune_inference.py \
             --config "$CONFIG" \
             --dataset "$ds" \
             --baseline \
@@ -316,7 +320,7 @@ run_single() {
         echo "========================================"
         echo " Strategy: $strategy  |  Dataset: $ds"
         echo "========================================"
-        python entropy_exp/src/prune_inference.py \
+        "$PYTHON_BIN" entropy_exp/src/prune_inference.py \
             --config "$CONFIG" \
             --dataset "$ds" \
             --set "pruning.strategy=$strategy" \

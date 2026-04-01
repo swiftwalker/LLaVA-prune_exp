@@ -25,6 +25,10 @@ MAX_SAMPLES="${2:-}"
 
 CONFIG="entropy_exp/configs/default.yaml"
 
+source "$SCRIPT_DIR/run_dir_common.sh"
+activate_llava_env
+ensure_python_bin
+
 run_dataset() {
     local ds="$1"
     local max_flag=""
@@ -38,7 +42,7 @@ run_dataset() {
     echo " Max samples: ${MAX_SAMPLES:-all}"
     echo "========================================"
 
-    python entropy_exp/src/inference.py \
+    "$PYTHON_BIN" entropy_exp/src/inference.py \
         --config "$CONFIG" \
         --dataset "$ds" \
         $max_flag

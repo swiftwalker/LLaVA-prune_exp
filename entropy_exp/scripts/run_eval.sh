@@ -24,17 +24,8 @@ ARG3="${3:-}"
 RUNS_DIR="entropy_exp/outputs/runs"
 EVAL_DIR="entropy_exp/outputs/eval"
 
-if [ -n "${PYTHON_BIN:-}" ]; then
-    :
-elif [ -x "/data_ssd/liuyu/miniconda3/envs/llava/bin/python" ]; then
-    PYTHON_BIN="/data_ssd/liuyu/miniconda3/envs/llava/bin/python"
-elif [ -x "/home/liuyu/miniconda3/envs/llava/bin/python" ]; then
-    PYTHON_BIN="/home/liuyu/miniconda3/envs/llava/bin/python"
-else
-    PYTHON_BIN="$(command -v python)"
-fi
-
 source "$SCRIPT_DIR/run_dir_common.sh"
+ensure_python_bin
 
 run_eval_for_run() {
     local run_dir="$1"

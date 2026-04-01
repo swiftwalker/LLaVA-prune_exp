@@ -17,7 +17,7 @@ tmux:
   log_dir: "entropy_exp/outputs/logs/tmux"
 
 environment:
-  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
+  conda_sh: "~/miniconda3/etc/profile.d/conda.sh"
   conda_env: "llava"
 
 defaults:

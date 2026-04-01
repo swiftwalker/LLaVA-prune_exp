@@ -26,17 +26,8 @@ RAW_DIR="entropy_exp/outputs/raw"
 PROCESSED_DIR="entropy_exp/outputs/processed"
 RUNS_DIR="entropy_exp/outputs/runs"
 
-if [ -n "${PYTHON_BIN:-}" ]; then
-    :
-elif [ -x "/data_ssd/liuyu/miniconda3/envs/llava/bin/python" ]; then
-    PYTHON_BIN="/data_ssd/liuyu/miniconda3/envs/llava/bin/python"
-elif [ -x "/home/liuyu/miniconda3/envs/llava/bin/python" ]; then
-    PYTHON_BIN="/home/liuyu/miniconda3/envs/llava/bin/python"
-else
-    PYTHON_BIN="$(command -v python)"
-fi
-
 source "$SCRIPT_DIR/run_dir_common.sh"
+ensure_python_bin
 
 # Step 1: Compute entropy metrics from HDF5 files
 echo "========================================"

@@ -35,7 +35,7 @@ Manual activation is still the safest option:
 
 ```bash
 conda activate llava
-cd /home/liuyu/data/LLaVA
+cd ~/LLaVA-prune_exp
 ```
 
 ## Workspace Layout
@@ -234,4 +234,3 @@ The current implementation has been checked with:
 - a single-run smoke flow using `--run-dir + --stats-json`
 - a single-run fixed-length smoke flow
 - a batch smoke flow using `--dataset mme`
-

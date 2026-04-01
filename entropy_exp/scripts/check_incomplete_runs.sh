@@ -81,17 +81,8 @@ if [[ ! -d "$RUNS_DIR" ]]; then
     exit 1
 fi
 
-if [ -n "${PYTHON_BIN:-}" ]; then
-    :
-elif [ -x "/data_ssd/liuyu/miniconda3/envs/llava/bin/python" ]; then
-    PYTHON_BIN="/data_ssd/liuyu/miniconda3/envs/llava/bin/python"
-elif [ -x "/home/liuyu/miniconda3/envs/llava/bin/python" ]; then
-    PYTHON_BIN="/home/liuyu/miniconda3/envs/llava/bin/python"
-else
-    PYTHON_BIN="$(command -v python)"
-fi
-
 source "$SCRIPT_DIR/run_dir_common.sh"
+ensure_python_bin
 
 declare -A QUESTION_COUNT_CACHE=()
 declare -a RUN_DIRS=()
@@ -213,7 +204,7 @@ count_lines_cached() {
 
 analyze_answers() {
     local answers_path="$1"
-    python - "$answers_path" <<'PY'
+    "$PYTHON_BIN" - "$answers_path" <<'PY'
 import json
 import sys
 

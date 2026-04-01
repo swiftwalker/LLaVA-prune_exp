@@ -4,12 +4,36 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 LLAVA_ROOT = SCRIPT_DIR.parent.parent
+PREFERRED_SCHEDULER_PYTHON = Path.home() / "miniconda3" / "envs" / "llava" / "bin" / "python"
+
+
+def maybe_reexec_with_preferred_python(argv: list[str] | None = None) -> None:
+    if os.environ.get("LLAVA_SCHEDULER_PREFERRED_PYTHON") == "1":
+        return
+    if not PREFERRED_SCHEDULER_PYTHON.is_file():
+        return
+    try:
+        current_python = Path(sys.executable).resolve()
+        preferred_python = PREFERRED_SCHEDULER_PYTHON.resolve()
+    except OSError:
+        return
+    if current_python == preferred_python:
+        return
+
+    os.environ["LLAVA_SCHEDULER_PREFERRED_PYTHON"] = "1"
+    exec_argv = sys.argv[1:] if argv is None else list(argv)
+    os.execv(str(preferred_python), [str(preferred_python), str(Path(__file__).resolve()), *exec_argv])
+
+
+maybe_reexec_with_preferred_python()
+
 sys.path.insert(0, str(LLAVA_ROOT))
 
 from entropy_exp.src.scheduler import (
