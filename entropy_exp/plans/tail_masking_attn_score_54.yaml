@@ -1,0 +1,407 @@
+version: 1
+label: "tail-masking-attn-score-54"
+pool_size: 6
+
+gpu:
+  min_free_gib: 16
+  selection: "max_free"
+  sample_seconds: 3
+  poll_interval_seconds: 15
+
+retry:
+  budget_ratio: 0.1
+  rounding: "ceil"
+
+tmux:
+  session_name: "sched_tail_masking_54"
+  log_dir: "entropy_exp/outputs/logs/tmux"
+
+environment:
+  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
+  conda_env: "llava"
+
+defaults:
+  max_samples: null
+  extra_sets:
+    - "inference.seed=42"
+    - "pruning.layer_selection=fixed"
+
+experiments:
+  - name: "gqa_l1_r0.2"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "gqa_l1_r0.3"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "gqa_l1_r0.4"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "gqa_l1_r0.5"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "gqa_l1_r0.6"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "gqa_l1_r0.7"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+  - name: "gqa_l2_r0.2"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "gqa_l2_r0.3"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "gqa_l2_r0.4"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "gqa_l2_r0.5"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "gqa_l2_r0.6"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "gqa_l2_r0.7"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+  - name: "gqa_l3_r0.2"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "gqa_l3_r0.3"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "gqa_l3_r0.4"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "gqa_l3_r0.5"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "gqa_l3_r0.6"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "gqa_l3_r0.7"
+    dataset: "gqa"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
+  - name: "mme_l1_r0.2"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "mme_l1_r0.3"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "mme_l1_r0.4"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "mme_l1_r0.5"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "mme_l1_r0.6"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "mme_l1_r0.7"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+  - name: "mme_l2_r0.2"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "mme_l2_r0.3"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "mme_l2_r0.4"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "mme_l2_r0.5"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "mme_l2_r0.6"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "mme_l2_r0.7"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+  - name: "mme_l3_r0.2"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "mme_l3_r0.3"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "mme_l3_r0.4"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "mme_l3_r0.5"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "mme_l3_r0.6"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "mme_l3_r0.7"
+    dataset: "mme"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
+  - name: "pope_l1_r0.2"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "pope_l1_r0.3"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "pope_l1_r0.4"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "pope_l1_r0.5"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "pope_l1_r0.6"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "pope_l1_r0.7"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+  - name: "pope_l2_r0.2"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "pope_l2_r0.3"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "pope_l2_r0.4"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "pope_l2_r0.5"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "pope_l2_r0.6"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "pope_l2_r0.7"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+  - name: "pope_l3_r0.2"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+  - name: "pope_l3_r0.3"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+  - name: "pope_l3_r0.4"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+  - name: "pope_l3_r0.5"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+  - name: "pope_l3_r0.6"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+  - name: "pope_l3_r0.7"
+    dataset: "pope"
+    strategies:
+      - "tail_masking_attn_score"
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"

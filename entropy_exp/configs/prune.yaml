@@ -4,9 +4,10 @@
 #   A) attn_score  — SparseVLM-style attention importance
 #   B) pre_attn_score — same aggregation, but prune before the target layer forward
 #   C) masking_attn_score — same aggregation, but mask dropped vision tokens only inside the target layer
-#   D) entropy     — entropy-weighted head aggregation
-#   E) random      — uniform random token importance (seed-reproducible)
-#   F) sparsevlm   — text-rater-guided text->vision attention pruning
+#   D) tail_masking_attn_score — same masking behavior, but apply it on every layer from a configured start layer onward
+#   E) entropy     — entropy-weighted head aggregation
+#   F) random      — uniform random token importance (seed-reproducible)
+#   G) sparsevlm   — text-rater-guided text->vision attention pruning
 
 model:
   path: "entropy_exp/models/llava-v1.5-7b"
@@ -22,7 +23,7 @@ inference:
   seed: 42
 
 pruning:
-  strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | entropy | random | sparsevlm
+  strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | tail_masking_attn_score | entropy | random | sparsevlm
   # --- layer & ratio (paired lists of equal length) ---
   layer_selection: "fixed"          # fixed | dynamic (placeholder)
   prune_layers: [2, 3]             # 剪枝层列表 (0-indexed)
@@ -33,6 +34,7 @@ pruning:
   attn_score: {}
   pre_attn_score: {}
   masking_attn_score: {}
+  tail_masking_attn_score: {}
   entropy:
     dynamic_ratio: false            # if true, ratio is modulated by entropy
     dynamic_scale: 0.5

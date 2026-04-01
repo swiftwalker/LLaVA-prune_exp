@@ -54,6 +54,7 @@ def parse_args() -> argparse.Namespace:
             "attn_score",
             "pre_attn_score",
             "masking_attn_score",
+            "tail_masking_attn_score",
             "entropy",
             "random",
             "sparsevlm",

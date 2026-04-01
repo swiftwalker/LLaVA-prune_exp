@@ -21,6 +21,7 @@ import random
 import time
 import datetime
 import yaml
+from typing import Optional
 os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 # Limit PyTorch CPU threads to avoid contention across concurrent experiments.
 # Default is ALL cores (192 on this machine); N experiments = N*192 threads
@@ -209,6 +210,79 @@ def build_run_name(dataset_name: str, run_tag: str, prune_layers, prune_ratio, t
     return f"{dataset_name}_{run_tag}_{layers_part}_{ratio_part}__{timestamp}"
 
 
+def _normalize_configured_prune_layers(value) -> list[int]:
+    if isinstance(value, int):
+        return [int(value)]
+    if isinstance(value, list):
+        return [int(item) for item in value]
+    raise ValueError(f"prune_layers must be an int or list of ints, got {type(value).__name__}")
+
+
+def _normalize_single_tail_start_layer(value) -> int:
+    layers = _normalize_configured_prune_layers(value)
+    if len(layers) != 1:
+        raise ValueError(
+            f"tail_masking_attn_score requires exactly one configured start layer, got {layers}"
+        )
+    return int(layers[0])
+
+
+def _normalize_single_tail_ratio(value) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, list):
+        if len(value) != 1:
+            raise ValueError(
+                "tail_masking_attn_score requires prune_ratio to be a scalar or a single-element list"
+            )
+        return float(value[0])
+    raise ValueError(
+        f"tail_masking_attn_score requires prune_ratio to be numeric, got {type(value).__name__}"
+    )
+
+
+def _load_num_hidden_layers(model_path: str) -> int:
+    config_path = os.path.join(model_path, "config.json")
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"Model config not found: {config_path}")
+    with open(config_path, "r", encoding="utf-8") as f:
+        model_config = json.load(f)
+    num_hidden_layers = model_config.get("num_hidden_layers")
+    if not isinstance(num_hidden_layers, int):
+        raise ValueError(
+            f"model config at {config_path} is missing integer num_hidden_layers, got {num_hidden_layers!r}"
+        )
+    return num_hidden_layers
+
+
+def derive_effective_prune_config(prune_cfg: dict, model_path: str) -> tuple[dict, list[int], Optional[int]]:
+    import copy
+
+    configured_prune_layers = _normalize_configured_prune_layers(prune_cfg["prune_layers"])
+    effective_prune_cfg = copy.deepcopy(prune_cfg)
+    strategy_name = prune_cfg["strategy"]
+
+    if strategy_name != "tail_masking_attn_score":
+        effective_prune_cfg["prune_layers"] = configured_prune_layers
+        return effective_prune_cfg, configured_prune_layers, None
+
+    if prune_cfg.get("layer_selection", "fixed") != "fixed":
+        raise ValueError("tail_masking_attn_score currently only supports layer_selection=fixed")
+
+    start_layer = _normalize_single_tail_start_layer(prune_cfg["prune_layers"])
+    shared_ratio = _normalize_single_tail_ratio(prune_cfg.get("prune_ratio", 0.5))
+    num_hidden_layers = _load_num_hidden_layers(model_path)
+    if start_layer < 0 or start_layer >= num_hidden_layers:
+        raise ValueError(
+            f"tail_masking_attn_score start layer must be within [0, {num_hidden_layers - 1}], got {start_layer}"
+        )
+
+    effective_prune_layers = list(range(start_layer, num_hidden_layers))
+    effective_prune_cfg["prune_layers"] = effective_prune_layers
+    effective_prune_cfg["prune_ratio"] = shared_ratio
+    return effective_prune_cfg, effective_prune_layers, start_layer
+
+
 # ---------------------------------------------------------------------------
 # Main inference loop with pruning
 # ---------------------------------------------------------------------------
@@ -236,15 +310,19 @@ def run_prune_inference(
     if run_mode not in {"prune", "baseline"}:
         raise ValueError(f"Unknown run_mode: {run_mode}")
 
-    strategy_name = prune_cfg["strategy"]
-    strategy_extra = prune_cfg.get(strategy_name, {})
-    strategy_config = {**prune_cfg, **strategy_extra}
-    strategy = get_strategy(strategy_name, strategy_config)
-
     model_path = resolve(model_cfg["path"])
     model_name = model_cfg["name"]
     question_file = resolve(ds_cfg["question_file"])
     image_folder = resolve(ds_cfg["image_folder"])
+    strategy_name = prune_cfg["strategy"]
+    configured_prune_layers = _normalize_configured_prune_layers(prune_cfg["prune_layers"])
+    effective_prune_cfg, effective_prune_layers, tail_start_layer = derive_effective_prune_config(
+        prune_cfg,
+        model_path,
+    )
+    strategy_extra = effective_prune_cfg.get(strategy_name, {})
+    strategy_config = {**effective_prune_cfg, **strategy_extra}
+    strategy = get_strategy(strategy_name, strategy_config)
 
     # --- output paths: per-run directory ---
     # Use readable settings in the run name and keep a microsecond timestamp
@@ -291,6 +369,16 @@ def run_prune_inference(
     # --- save config snapshot (after --set overrides) ---
     config_snapshot = {
         **config,
+        "pruning": {
+            **config["pruning"],
+            "prune_layers": (
+                configured_prune_layers
+                if strategy_name == "tail_masking_attn_score"
+                else config["pruning"]["prune_layers"]
+            ),
+            "effective_prune_layers": effective_prune_layers,
+            "tail_start_layer": tail_start_layer,
+        },
         "_run_meta": {
             "run_mode": run_mode,
             "dataset": dataset_name,
@@ -330,7 +418,7 @@ def run_prune_inference(
     print(f"Model loaded.  attn={attn_impl}, device={target_device}")
 
     # --- build pruner ---
-    pruner = VisualTokenPruner(model, strategy, prune_cfg)
+    pruner = VisualTokenPruner(model, strategy, effective_prune_cfg)
     effective_ratio_map = {str(k): float(v) for k, v in pruner.layer_ratio_map.items()}
     print(f"Pruner: strategy={strategy_name}, prune_layers={pruner.prune_layers}, "
           f"base_ratio={prune_cfg.get('prune_ratio', 0.5)}")
@@ -464,6 +552,8 @@ def run_prune_inference(
             "strategy_requested": strategy_name,
             "prune_stage": prune_info.get("prune_stage", strategy.prune_stage()),
             "effective_prune_ratio_map": effective_ratio_map,
+            "configured_prune_layers": configured_prune_layers,
+            "effective_prune_layers": effective_prune_layers,
             "prune_layers": pruner.prune_layers,
             "question_id": str(question_id),
             "image_file": image_file,

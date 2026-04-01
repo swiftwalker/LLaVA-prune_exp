@@ -70,6 +70,46 @@ class SummarizeResultsPopeTests(unittest.TestCase):
             self.assertAlmostEqual(rows[0]["primary_metric_value"], metrics["macro_f1"])
             self.assertAlmostEqual(rows[0]["pope_macro_f1"], metrics["macro_f1"])
 
+    def test_extract_record_preserves_tail_masking_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "gqa_tail_masking_attn_score_l3_r0p2__demo"
+            eval_dir = run_dir / "eval"
+            eval_dir.mkdir(parents=True)
+
+            config = {
+                "_run_meta": {"dataset": "gqa", "run_mode": "prune", "timestamp": "demo"},
+                "pruning": {
+                    "strategy": "tail_masking_attn_score",
+                    "layer_selection": "fixed",
+                    "prune_layers": [3],
+                    "effective_prune_layers": [3, 4, 5],
+                    "tail_start_layer": 3,
+                    "prune_ratio": [0.2],
+                    "v_token_num": 576,
+                    "max_samples": None,
+                    "entropy": {},
+                },
+            }
+            metrics = {"accuracy": 62.5}
+
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+            (eval_dir / "summary.json").write_text(
+                json.dumps({"dataset": "gqa", "metrics": metrics}, indent=2),
+                encoding="utf-8",
+            )
+
+            record, skipped = extract_record(run_dir)
+            self.assertIsNone(skipped)
+            self.assertEqual(record["effective_prune_layers"], [3, 4, 5])
+            self.assertEqual(record["tail_start_layer"], 3)
+
+            rows = build_csv_rows([record])
+            self.assertEqual(rows[0]["effective_prune_layers"], "[3, 4, 5]")
+            self.assertEqual(rows[0]["tail_start_layer"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

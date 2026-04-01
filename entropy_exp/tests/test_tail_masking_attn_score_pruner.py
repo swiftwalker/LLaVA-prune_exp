@@ -1,6 +1,7 @@
+import json
 import os
 import sys
-import types
+import tempfile
 import unittest
 
 import torch
@@ -8,23 +9,9 @@ import torch
 SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 sys.path.insert(0, SRC_DIR)
 
-
-class DynamicCache:
-    def __init__(self):
-        self.key_cache = []
-        self.value_cache = []
-        self._seen_tokens = 0
-
-    def get_seq_length(self):
-        if not self.key_cache:
-            return 0
-        return self.key_cache[0].shape[2]
-
-
-sys.modules.setdefault("transformers", types.SimpleNamespace(DynamicCache=DynamicCache))
-
+from prune_inference import derive_effective_prune_config  # noqa: E402
 from pruner import VisualTokenPruner, _apply_rotary_pos_emb, _repeat_kv  # noqa: E402
-from strategies.masking_attn_score import MaskingAttnScoreStrategy  # noqa: E402
+from strategies.tail_masking_attn_score import TailMaskingAttnScoreStrategy  # noqa: E402
 
 
 class IdentityRotary:
@@ -61,7 +48,6 @@ class DummyDecoderLayer:
         self.post_attention_layernorm = torch.nn.Identity()
         self.mlp = ZeroMLP()
         self.self_attn = DummySelfAttention(hidden_size)
-        self.output_attentions_history = []
         self.seq_lens = []
 
     def __call__(
@@ -73,7 +59,6 @@ class DummyDecoderLayer:
         use_cache=True,
         output_attentions=False,
     ):
-        self.output_attentions_history.append(output_attentions)
         self.seq_lens.append(hidden_states.shape[1])
 
         residual = hidden_states
@@ -130,82 +115,96 @@ class DummyModel:
         self.model = DummyBackbone(layers)
 
 
-class MaskingAttnScorePrunerTests(unittest.TestCase):
+class TailMaskingConfigExpansionTests(unittest.TestCase):
+    def test_derive_effective_prune_config_expands_tail_layers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = os.path.join(tmpdir, "model")
+            os.makedirs(model_dir, exist_ok=True)
+            with open(os.path.join(model_dir, "config.json"), "w", encoding="utf-8") as f:
+                json.dump({"num_hidden_layers": 32}, f)
+
+            effective_cfg, effective_layers, tail_start_layer = derive_effective_prune_config(
+                {
+                    "strategy": "tail_masking_attn_score",
+                    "layer_selection": "fixed",
+                    "prune_layers": [3],
+                    "prune_ratio": [0.2],
+                },
+                model_dir,
+            )
+            self.assertEqual(effective_layers, list(range(3, 32)))
+            self.assertEqual(effective_cfg["prune_layers"], list(range(3, 32)))
+            self.assertEqual(effective_cfg["prune_ratio"], 0.2)
+            self.assertEqual(tail_start_layer, 3)
+
+            scalar_cfg, scalar_layers, scalar_start = derive_effective_prune_config(
+                {
+                    "strategy": "tail_masking_attn_score",
+                    "layer_selection": "fixed",
+                    "prune_layers": 3,
+                    "prune_ratio": 0.2,
+                },
+                model_dir,
+            )
+            self.assertEqual(scalar_layers, list(range(3, 32)))
+            self.assertEqual(scalar_cfg["prune_ratio"], 0.2)
+            self.assertEqual(scalar_start, 3)
+
+    def test_derive_effective_prune_config_rejects_invalid_tail_configs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = os.path.join(tmpdir, "model")
+            os.makedirs(model_dir, exist_ok=True)
+            with open(os.path.join(model_dir, "config.json"), "w", encoding="utf-8") as f:
+                json.dump({"num_hidden_layers": 32}, f)
+
+            invalid_configs = [
+                {
+                    "strategy": "tail_masking_attn_score",
+                    "layer_selection": "fixed",
+                    "prune_layers": [1, 3],
+                    "prune_ratio": [0.2],
+                },
+                {
+                    "strategy": "tail_masking_attn_score",
+                    "layer_selection": "fixed",
+                    "prune_layers": [3],
+                    "prune_ratio": [0.2, 0.3],
+                },
+                {
+                    "strategy": "tail_masking_attn_score",
+                    "layer_selection": "dynamic",
+                    "prune_layers": [3],
+                    "prune_ratio": [0.2],
+                },
+                {
+                    "strategy": "tail_masking_attn_score",
+                    "layer_selection": "fixed",
+                    "prune_layers": [32],
+                    "prune_ratio": [0.2],
+                },
+            ]
+
+            for cfg in invalid_configs:
+                with self.assertRaises(ValueError):
+                    derive_effective_prune_config(cfg, model_dir)
+
+
+class TailMaskingAttnScorePrunerTests(unittest.TestCase):
     def _make_inputs(self):
         return torch.tensor(
             [
                 [
-                    [1.0, 0.0],  # visual 0
-                    [0.0, 1.0],  # visual 1
-                    [1.0, 1.0],  # visual 2
-                    [1.0, 0.0],  # text 0
-                    [0.0, 1.0],  # text 1
+                    [1.0, 0.0],
+                    [0.0, 1.0],
+                    [1.0, 1.0],
+                    [1.0, 0.0],
+                    [0.0, 1.0],
                 ]
             ],
             dtype=torch.float32,
         )
 
-    def test_masking_attn_score_masks_current_layer_without_changing_sequence_or_kv_length(self):
-        model = DummyModel([DummyDecoderLayer(0, hidden_size=2)])
-        strategy = MaskingAttnScoreStrategy({"prune_ratio": [1.0 / 3.0]})
-        pruner = VisualTokenPruner(
-            model,
-            strategy,
-            {
-                "layer_selection": "fixed",
-                "prune_layers": [0],
-                "prune_ratio": [1.0 / 3.0],
-            },
-        )
-
-        inputs = self._make_inputs()
-        hidden_states, past_kv, prune_info = pruner._pruned_prefill(
-            inputs_embeds=inputs,
-            initial_position_ids=None,
-            v_token_start=0,
-            v_token_num=3,
-            text_token_start=3,
-            save_tv_attn=True,
-            capture_layers={0},
-        )
-
-        baseline_cache = DynamicCache()
-        baseline_position_ids = torch.arange(5, dtype=torch.long).unsqueeze(0)
-        baseline_output = model.model.layers[0](
-            inputs,
-            attention_mask=pruner._refresh_sequence_state(
-                baseline_position_ids,
-                inputs.dtype,
-                inputs.device,
-            )[1],
-            position_ids=baseline_position_ids,
-            past_key_value=baseline_cache,
-            use_cache=True,
-            output_attentions=False,
-        )[0]
-
-        self.assertEqual(prune_info["prune_stage"], "masking")
-        self.assertEqual(hidden_states.shape[1], 5)
-        self.assertEqual(prune_info["original_seq_len"], 5)
-        self.assertEqual(prune_info["final_seq_len"], 5)
-        self.assertEqual(past_kv.get_seq_length(), 5)
-        self.assertEqual(model.model.layers[0].seq_lens, [5])
-        self.assertFalse(torch.allclose(hidden_states, baseline_output))
-
-        layer_info = prune_info["layers"][0]
-        self.assertEqual(layer_info["prune_stage"], "masking")
-        self.assertEqual(layer_info["keep_indices"].tolist(), [0, 2])
-        self.assertEqual(layer_info["num_visual_before"], 3)
-        self.assertEqual(layer_info["num_visual_after"], 2)
-        self.assertEqual(layer_info["num_pruned"], 1)
-        self.assertEqual(tuple(layer_info["tv_attn"].shape), (1, 2, 3))
-        self.assertTrue(torch.allclose(
-            torch.tensor(layer_info["importance_scores"]),
-            torch.tensor([0.2050, 0.1960, 0.2686]),
-            atol=1e-4,
-        ))
-
-    def test_masking_attn_score_only_affects_target_layer_and_keeps_full_kv_for_following_layers(self):
+    def test_tail_masking_applies_to_every_effective_tail_layer(self):
         model = DummyModel(
             [
                 DummyDecoderLayer(0, hidden_size=2),
@@ -213,14 +212,14 @@ class MaskingAttnScorePrunerTests(unittest.TestCase):
                 DummyDecoderLayer(2, hidden_size=2),
             ]
         )
-        strategy = MaskingAttnScoreStrategy({"prune_ratio": [1.0 / 3.0]})
+        strategy = TailMaskingAttnScoreStrategy({"prune_ratio": 1.0 / 3.0})
         pruner = VisualTokenPruner(
             model,
             strategy,
             {
                 "layer_selection": "fixed",
-                "prune_layers": [1],
-                "prune_ratio": [1.0 / 3.0],
+                "prune_layers": [1, 2],
+                "prune_ratio": 1.0 / 3.0,
             },
         )
 
@@ -235,15 +234,20 @@ class MaskingAttnScorePrunerTests(unittest.TestCase):
         )
 
         self.assertEqual(hidden_states.shape[1], 5)
+        self.assertEqual(prune_info["original_seq_len"], 5)
         self.assertEqual(prune_info["final_seq_len"], 5)
+        self.assertEqual(sorted(prune_info["layers"].keys()), [1, 2])
+        self.assertEqual(prune_info["layers"][1]["prune_stage"], "masking")
+        self.assertEqual(prune_info["layers"][2]["prune_stage"], "masking")
+        self.assertEqual(len(prune_info["layers"][1]["keep_indices"]), 2)
+        self.assertEqual(len(prune_info["layers"][2]["keep_indices"]), 2)
         self.assertEqual(model.model.layers[0].seq_lens, [5])
         self.assertEqual(model.model.layers[1].seq_lens, [])
-        self.assertEqual(model.model.layers[2].seq_lens, [5])
+        self.assertEqual(model.model.layers[2].seq_lens, [])
         self.assertEqual(past_kv.get_seq_length(), 5)
         self.assertEqual(past_kv.key_cache[0].shape[2], 5)
         self.assertEqual(past_kv.key_cache[1].shape[2], 5)
         self.assertEqual(past_kv.key_cache[2].shape[2], 5)
-        self.assertEqual(prune_info["layers"][1]["keep_indices"].tolist(), [0, 2])
 
 
 if __name__ == "__main__":

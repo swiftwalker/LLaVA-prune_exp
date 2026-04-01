@@ -6,6 +6,7 @@ from .masking_attn_score import MaskingAttnScoreStrategy
 from .pre_attn_score import PreAttnScoreStrategy
 from .random import RandomStrategy
 from .sparsevlm import SparseVLMStrategy
+from .tail_masking_attn_score import TailMaskingAttnScoreStrategy
 
 STRATEGY_REGISTRY = {
     "attn_score": AttnScoreStrategy,
@@ -14,6 +15,7 @@ STRATEGY_REGISTRY = {
     "pre_attn_score": PreAttnScoreStrategy,
     "random": RandomStrategy,
     "sparsevlm": SparseVLMStrategy,
+    "tail_masking_attn_score": TailMaskingAttnScoreStrategy,
 }
 
 
