@@ -12,3 +12,4 @@ from .masking_attn_score import MaskingAttnScoreStrategy
 class TailMaskingAttnScoreStrategy(MaskingAttnScoreStrategy):
     """Attention-score masking applied on every layer in the configured tail."""
 
+
