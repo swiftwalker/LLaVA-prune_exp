@@ -45,6 +45,10 @@ class PruneStrategy(ABC):
         """Whether pruning happens before or after the target layer forward."""
         return "post"
 
+    def update_after_prune(self, keep_indices: torch.Tensor, layer_idx: int) -> None:
+        """Update any sample-local state after a physical pruning step."""
+        del keep_indices, layer_idx
+
     @abstractmethod
     def compute_importance(
         self,

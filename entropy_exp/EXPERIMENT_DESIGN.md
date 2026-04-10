@@ -468,7 +468,7 @@ python entropy_exp/src/prune_inference.py \
 
 | 配置项 | 默认值 | 说明 |
 |:--|:--|:--|
-| `pruning.strategy` | `attn_score` | 策略选择：`attn_score` \| `pre_attn_score` \| `masking_attn_score` \| `entropy` \| `random` \| `sparsevlm` |
+| `pruning.strategy` | `attn_score` | 策略选择：`attn_score` \| `pre_attn_score` \| `masking_attn_score` \| `entropy` \| `random` \| `sparsevlm` \| `sparsevlm_adaptive_stratified` |
 | `pruning.layer_selection` | `fixed` | 层选择方法：`fixed`（配置列表）\| `dynamic`（预留） |
 | `pruning.prune_layers` | `[2, 3]` | 剪枝层列表（0-indexed），与 `prune_ratio` 等长 |
 | `pruning.prune_ratio` | `[0.5, 0.5]` | 与 `prune_layers` 等长的剪枝比例列表（标量则广播到所有层） |

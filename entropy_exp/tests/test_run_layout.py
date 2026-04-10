@@ -76,6 +76,12 @@ class RunLayoutTests(unittest.TestCase):
         self.assertEqual(fallback_metadata.dataset, "pope")
         self.assertEqual(fallback_metadata.strategy, "random")
 
+        adaptive_name = "mme_sparsevlm_adaptive_stratified_l2_r0p4__20260410_101010_000001"
+        adaptive_dir = self._write_run(adaptive_name, config=None)
+        adaptive_metadata = read_run_metadata(adaptive_dir)
+        self.assertEqual(adaptive_metadata.dataset, "mme")
+        self.assertEqual(adaptive_metadata.strategy, "sparsevlm_adaptive_stratified")
+
     def test_build_run_dir_creates_strategy_dataset_parent(self):
         output_base_dir = Path(self.temp_dir.name) / "entropy_exp" / "outputs"
         run_dir = build_run_dir(

@@ -144,6 +144,43 @@ class SchedulerPlanTests(unittest.TestCase):
         plan = load_scheduler_plan(plan_path)
         self.assertEqual(plan.environment.conda_sh, str(DEFAULT_CONDA_SH))
 
+    def test_scheduler_accepts_sparsevlm_adaptive_stratified_strategy(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-adaptive",
+                "pool_size": 1,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {"conda_env": "llava"},
+                "defaults": {"max_samples": 2, "extra_sets": []},
+                "experiments": [
+                    {
+                        "name": "mme_adaptive",
+                        "dataset": "mme",
+                        "strategies": ["sparsevlm_adaptive_stratified"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[2]",
+                            "pruning.prune_ratio=[0.4]",
+                        ],
+                    }
+                ],
+            }
+        )
+
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].strategy, "sparsevlm_adaptive_stratified")
+        self.assertEqual(jobs[0].run_prefix, "mme_sparsevlm_adaptive_stratified_l2_r0p4__")
+
     def test_resolve_conda_activate_target_uses_same_conda_root(self):
         target = resolve_conda_activate_target(
             "/home/liuyu/miniconda3/etc/profile.d/conda.sh",

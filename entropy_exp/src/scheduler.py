@@ -38,6 +38,7 @@ SUPPORTED_STRATEGIES = {
     "entropy",
     "random",
     "sparsevlm",
+    "sparsevlm_adaptive_stratified",
 }
 MIN_FREE_MIB_DEFAULT = 16 * 1024
 

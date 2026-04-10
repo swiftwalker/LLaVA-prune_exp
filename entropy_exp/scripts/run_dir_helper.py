@@ -58,6 +58,7 @@ def parse_args() -> argparse.Namespace:
             "entropy",
             "random",
             "sparsevlm",
+            "sparsevlm_adaptive_stratified",
         ],
         help="Filter runs by strategy branch",
     )

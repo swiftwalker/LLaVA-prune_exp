@@ -80,6 +80,7 @@ experiments:
       - "entropy"
       - "random"
       - "sparsevlm"
+      - "sparsevlm_adaptive_stratified"
     extra_sets:
       - "pruning.prune_layers=[1]"
       - "pruning.prune_ratio=[0.2]"

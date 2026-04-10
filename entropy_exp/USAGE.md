@@ -42,6 +42,9 @@ bash entropy_exp/scripts/run_prune.sh random mme 10
 # 用 sparsevlm 策略跑 MME（text rater + text->vision attention）
 bash entropy_exp/scripts/run_prune.sh sparsevlm mme 10
 
+# 用 sparsevlm_adaptive_stratified 策略跑 MME（SparseVLM 打分 + 分层补偿）
+bash entropy_exp/scripts/run_prune.sh sparsevlm_adaptive_stratified mme 10
+
 # 跑无剪枝 baseline（使用同一 decode 路径，计时公平）
 bash entropy_exp/scripts/run_prune.sh baseline mme 10
 
@@ -53,7 +56,7 @@ bash entropy_exp/scripts/run_prune.sh attn_score all
 
 | 位置 | 参数 | 可选值 | 说明 |
 |:--|:--|:--|:--|
-| $1 | strategy | `attn_score` / `pre_attn_score` / `masking_attn_score` / `tail_masking_attn_score` / `entropy` / `random` / `sparsevlm` / `baseline` | 剪枝策略；`pre_attn_score` 在目标层前物理裁剪，`masking_attn_score` 只在目标层 attention logits 中屏蔽被剪枝视觉 token，`tail_masking_attn_score` 会从配置的起始层开始到最后一层都执行 masking，`random` 使用固定 seed 可复现，`sparsevlm` 使用 text raters |
+| $1 | strategy | `attn_score` / `pre_attn_score` / `masking_attn_score` / `tail_masking_attn_score` / `entropy` / `random` / `sparsevlm` / `sparsevlm_adaptive_stratified` / `baseline` | 剪枝策略；`pre_attn_score` 在目标层前物理裁剪，`masking_attn_score` 只在目标层 attention logits 中屏蔽被剪枝视觉 token，`tail_masking_attn_score` 会从配置的起始层开始到最后一层都执行 masking，`random` 使用固定 seed 可复现，`sparsevlm` 使用 text raters，`sparsevlm_adaptive_stratified` 在此基础上再做空间分层补偿 |
 | $2 | dataset | `gqa` / `mme` / `pope` / `all` | 数据集 |
 | $3 | max_samples | 整数（可选） | 限制样本数，省略则跑全量 |
 | -- | `--set key=val` | 任意（可多次） | 覆盖 yaml 配置项，见 §1.3 |
@@ -126,6 +129,7 @@ bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
 | `masking_attn_score` | `"masking_attn_score"` | str |
 | `random` | `"random"` | str |
 | `sparsevlm` | `"sparsevlm"` | str |
+| `sparsevlm_adaptive_stratified` | `"sparsevlm_adaptive_stratified"` | str |
 
 ---
 
@@ -150,7 +154,7 @@ inference:
   seed: 42                          # 随机种子
 
 pruning:
-  strategy: "attn_score"            # 剪枝策略：attn_score / pre_attn_score / masking_attn_score / tail_masking_attn_score / entropy / random / sparsevlm
+  strategy: "attn_score"            # 剪枝策略：attn_score / pre_attn_score / masking_attn_score / tail_masking_attn_score / entropy / random / sparsevlm / sparsevlm_adaptive_stratified
   layer_selection: "fixed"          # 层选择方法
   prune_layers: [2, 3]             # 剪枝层列表
   prune_ratio: [0.5, 0.5]          # 对应每层的剪枝比例
@@ -169,6 +173,14 @@ pruning:
     fallback_topk: 4
     exclude_special_tokens: true
     min_visual_tokens_after_prune: 16
+  sparsevlm_adaptive_stratified:    # SparseVLM + adaptive stratified sampling
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
+    high_ratio: 0.7
+    grid_size: 6
+    patch_per_row: 24
+    intra_stratum_mode: "random"
 
 capture:
   save_attention: false             # 保存注意力矩阵到 captures.h5（HDF5）
@@ -200,7 +212,7 @@ prune_ratio  →  决定「剪多少」（每层移除 visual token 的比例）
 prune.yaml
   ├─ pruning.strategy: "attn_score"     ─┐
   ├─ pruning.attn_score: {}              ─┤  ① get_strategy(name, config)
-  │  └─ (或 pruning.pre_attn_score/masking_attn_score/tail_masking_attn_score/entropy/random/sparsevlm: {})  ─┘
+  │  └─ (或 pruning.pre_attn_score/masking_attn_score/tail_masking_attn_score/entropy/random/sparsevlm/sparsevlm_adaptive_stratified: {})  ─┘
   │                                              → 实例化对应策略
   │
   ├─ pruning.prune_layers: [2, 3]       ─┐
@@ -215,7 +227,7 @@ prune.yaml
   strategy.compute_keep_mask(...)                 →  保留 top-K 个 token
 ```
 
-**关键点**：`strategy` 只决定 importance 怎么算，以及剪枝动作如何施加；`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。`pre_attn_score` 会在目标层前物理裁剪 visual token 并同步更新前序 KV cache；`masking_attn_score` 会保留完整 hidden states / position ids / KV cache，只在目标层的 text->vision attention logits 中屏蔽被剪枝视觉 token；`tail_masking_attn_score` 则会从配置的起始层开始到最后一层都执行同样的 masking 路径。`random` 会根据 `inference.seed` 生成可复现的随机重要性分数，`sparsevlm` 会先选 text raters，再用当前层的 text->vision attention 给 visual token 打分。
+**关键点**：`strategy` 只决定 importance 怎么算，以及剪枝动作如何施加；`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。`pre_attn_score` 会在目标层前物理裁剪 visual token 并同步更新前序 KV cache；`masking_attn_score` 会保留完整 hidden states / position ids / KV cache，只在目标层的 text->vision attention logits 中屏蔽被剪枝视觉 token；`tail_masking_attn_score` 则会从配置的起始层开始到最后一层都执行同样的 masking 路径。`random` 会根据 `inference.seed` 生成可复现的随机重要性分数，`sparsevlm` 会先选 text raters，再用当前层的 text->vision attention 给 visual token 打分；`sparsevlm_adaptive_stratified` 则在 `sparsevlm` 的分数基础上，保留一部分高分 patch，再按 strata 缺口补足剩余预算。
 
 ### 2.3 典型配置示例
 
@@ -292,6 +304,25 @@ pruning:
 
 该策略会先从文本 token 中选择 image-relevant raters，再基于每个剪枝层的 text->vision attention 计算 visual token 分数。
 
+#### 示例 7：sparsevlm_adaptive_stratified 分层补偿剪枝
+
+```yaml
+pruning:
+  strategy: "sparsevlm_adaptive_stratified"
+  prune_layers: [8, 12, 16]
+  prune_ratio: [0.25, 0.5, 0.5]
+  sparsevlm_adaptive_stratified:
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
+    high_ratio: 0.7
+    grid_size: 6
+    patch_per_row: 24
+    intra_stratum_mode: "random"
+```
+
+该策略先按 `sparsevlm` 分数保留高分 patch，再按空间 strata 的分布缺口自适应补点，保证最终 keep 数精确命中预算。
+
 ### 2.4 如何跑实验
 
 **方式 1：`--set` 覆盖（推荐，无需创建文件）**
@@ -319,6 +350,11 @@ bash entropy_exp/scripts/run_prune.sh random mme \
 
 # 实验 E：sparsevlm，第 8/12/16 层按给定比例剪枝
 bash entropy_exp/scripts/run_prune.sh sparsevlm mme \
+    --set pruning.prune_layers=[8,12,16] \
+    --set pruning.prune_ratio=[0.25,0.5,0.5]
+
+# 实验 F：sparsevlm_adaptive_stratified，第 8/12/16 层按给定比例剪枝
+bash entropy_exp/scripts/run_prune.sh sparsevlm_adaptive_stratified mme \
     --set pruning.prune_layers=[8,12,16] \
     --set pruning.prune_ratio=[0.25,0.5,0.5]
 ```

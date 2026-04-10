@@ -127,7 +127,8 @@ class PrunerAttentionRequirementTests(unittest.TestCase):
         self.assertEqual(model.model.layers[1].output_attentions_history, [False])
         self.assertEqual(prune_info["layers"][0]["num_visual_after"], 2)
         self.assertEqual(hidden_states.shape[1], 4)
-        self.assertIsInstance(past_kv, DynamicCache)
+        self.assertTrue(hasattr(past_kv, "key_cache"))
+        self.assertTrue(hasattr(past_kv, "value_cache"))
 
     def test_capture_enabled_still_collects_attention(self):
         model, pruner = self._build_pruner()

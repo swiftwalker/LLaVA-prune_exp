@@ -399,7 +399,58 @@ _pruned_prefill()
 
 ---
 
-## 9. 总结对照表
+## 9. `sparsevlm_adaptive_stratified`
+
+### 9.1 入口路径
+
+```text
+_pruned_prefill()
+  -> strategy.prepare_sample()
+     -> SparseVLMAdaptiveStratifiedStrategy.prepare_sample()
+     -> SparseVLMStrategy.prepare_sample()
+     -> select_text_raters()
+  -> prune layer 普通 forward(output_attentions=True)
+  -> SparseVLMAdaptiveStratifiedStrategy.compute_keep_mask()
+     -> SparseVLMStrategy.compute_importance()
+     -> compute_visual_scores_from_attention()
+     -> build_stratum_index()
+     -> allocate_adaptive_stratified_quotas()
+  -> 物理裁剪 hidden_states + KV cache
+  -> strategy.update_after_prune()
+```
+
+### 9.2 与 `sparsevlm` 的区别
+
+`sparsevlm_adaptive_stratified` 的打分部分和 `sparsevlm` 完全相同：
+
+- 先选 text raters
+- 再用当前层 text->vision attention 计算 visual token 分数
+
+不同点只在 keep/drop 决策阶段：
+
+- 不是直接按 visual score 取 top-k
+- 而是先保留一部分高分 patch
+- 再按空间 strata 的缺口分配补偿名额
+- 在每个 stratum 内部做 `random` 或 `farthest` 选择
+
+### 9.3 对 block 状态的影响
+
+它仍然沿用 `sparsevlm` 的 **post-layer 物理裁剪** 路径：
+
+- 当前层先完整 forward
+- forward 后裁剪 `hidden_states`
+- 同步裁剪当前层及之前层 `KV cache`
+- 保留 `keep-position-ids` 分支已有的 `position_ids` 语义
+
+额外新增的是 sample-level 状态：
+
+- `current_patch_indices`
+- 每次物理剪枝后用当前层 `keep_indices` 更新
+- 后续层始终按原始 patch 坐标做 strata 映射
+
+---
+
+## 10. 总结对照表
 
 | 分支 | 决策时机 | target block 是否先完整 forward | 是否物理裁剪 token | 是否裁剪 KV cache | 是否改 attention logits | 后续层序列长度是否变化 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -409,12 +460,13 @@ _pruned_prefill()
 | `entropy` | target layer 之后 | 是 | 是 | 是 | 否 | 是 |
 | `random` | target layer 之后 | 是 | 是 | 是 | 否 | 是 |
 | `sparsevlm` | target layer 之后 | 是 | 是 | 是 | 否 | 是 |
+| `sparsevlm_adaptive_stratified` | target layer 之后 | 是 | 是 | 是 | 否 | 是 |
 
 ---
 
-## 10. 一句话区分
+## 11. 一句话区分
 
-- `attn_score / entropy / random / sparsevlm`
+- `attn_score / entropy / random / sparsevlm / sparsevlm_adaptive_stratified`
   - 都是 **post-layer 物理裁剪**
 - `pre_attn_score`
   - 是 **pre-layer 物理裁剪**
@@ -428,9 +480,9 @@ _pruned_prefill()
 
 ---
 
-## 11. `keep-position-ids` git 分支说明
+## 12. `keep-position-ids` git 分支说明
 
-### 11.1 分支目的
+### 12.1 分支目的
 
 该分支名为：
 
@@ -455,7 +507,7 @@ keep-position-ids
 - `hidden_states` / `KV cache` 的物理裁剪行为
 - `masking_attn_score` 的 layer-local masking 路径
 
-### 11.2 代码层改动入口
+### 12.2 代码层改动入口
 
 这个分支的核心改动都在下面两个文件：
 
@@ -477,7 +529,7 @@ pruner.py
   -> decode 时新 token 从 final_position_ids[-1] + 1 继续编号
 ```
 
-### 11.3 与主分支行为的差异
+### 12.3 与主分支行为的差异
 
 主分支（连续重建位置）在物理剪枝后会做：
 
@@ -515,7 +567,7 @@ position_ids  = [10, 11, 12, 14, 15]
 - 长度已经缩短
 - 但位置编号没有压紧成 `[0,1,2,3,4]`
 
-### 11.4 当前兼容性处理
+### 12.4 当前兼容性处理
 
 这个分支并不是简单地“保留 position_ids”而已，它同时做了三件兼容动作：
 
@@ -534,7 +586,7 @@ position_ids  = [10, 11, 12, 14, 15]
 - `length compatibility by compressed tensors`
 - `position semantics by preserved position ids`
 
-### 11.5 哪些策略受影响
+### 12.5 哪些策略受影响
 
 只影响会做 **物理剪枝** 的策略：
 
@@ -543,6 +595,7 @@ position_ids  = [10, 11, 12, 14, 15]
 - `entropy`
 - `random`
 - `sparsevlm`
+- `sparsevlm_adaptive_stratified`
 
 不影响：
 
@@ -550,7 +603,7 @@ position_ids  = [10, 11, 12, 14, 15]
 
 原因是 `masking_attn_score` 不缩短序列，也就没有位置重建问题。
 
-### 11.6 这个分支适合回答的问题
+### 12.6 这个分支适合回答的问题
 
 它主要用来区分下面两种效应：
 
