@@ -52,6 +52,8 @@ bash entropy_exp/scripts/run_prune.sh baseline mme 10
 bash entropy_exp/scripts/run_prune.sh attn_score all
 ```
 
+批量调度、`tmux` 恢复、plan YAML 写法和 scheduler 限制统一参考 [SCHEDULER.md](./SCHEDULER.md)。本页只覆盖单次 pruning 命令与配置说明。
+
 **参数说明：**
 
 | 位置 | 参数 | 可选值 | 说明 |
