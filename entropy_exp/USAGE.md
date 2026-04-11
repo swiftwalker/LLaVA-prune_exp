@@ -48,7 +48,7 @@ bash entropy_exp/scripts/run_prune.sh sparsevlm_adaptive_stratified mme 10
 # 跑无剪枝 baseline（使用同一 decode 路径，计时公平）
 bash entropy_exp/scripts/run_prune.sh baseline mme 10
 
-# 跑所有三个数据集
+# 跑所有六个推理数据集
 bash entropy_exp/scripts/run_prune.sh attn_score all
 ```
 
@@ -56,12 +56,14 @@ bash entropy_exp/scripts/run_prune.sh attn_score all
 
 纯注意力捕获与离线 entropy 分析仍然保留，但已降级为次级工作流，统一参考 [`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)。
 
+`TextVQA`、`ScienceQA`、`MMBench` 现已接入主线推理入口。repo-native `run_eval.sh`、`summarize_results.py`、`RESULTS_WORKFLOW.md` 现已覆盖 `gqa` / `mme` / `pope` / `textvqa` / `scienceqa`；其中 `MMBench` 仍只提供 inference 输入兼容，不提供本地 official score。
+
 **参数说明：**
 
 | 位置 | 参数 | 可选值 | 说明 |
 |:--|:--|:--|:--|
 | $1 | strategy | `attn_score` / `pre_attn_score` / `masking_attn_score` / `tail_masking_attn_score` / `entropy` / `random` / `sparsevlm` / `sparsevlm_adaptive_stratified` / `baseline` | 剪枝策略；`pre_attn_score` 在目标层前物理裁剪，`masking_attn_score` 只在目标层 attention logits 中屏蔽被剪枝视觉 token，`tail_masking_attn_score` 会从配置的起始层开始到最后一层都执行 masking，`random` 使用固定 seed 可复现，`sparsevlm` 使用 text raters，`sparsevlm_adaptive_stratified` 在此基础上再做空间分层补偿 |
-| $2 | dataset | `gqa` / `mme` / `pope` / `all` | 数据集 |
+| $2 | dataset | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` / `all` | 数据集 |
 | $3 | max_samples | 整数（可选） | 限制样本数，省略则跑全量 |
 | -- | `--set key=val` | 任意（可多次） | 覆盖 yaml 配置项，见 §1.3 |
 
@@ -87,7 +89,7 @@ python entropy_exp/src/prune_inference.py \
 | 参数 | 说明 |
 |:--|:--|
 | `--config` | 配置文件路径，默认 `entropy_exp/configs/prune.yaml` |
-| `--dataset` | 数据集名，必选：`gqa` / `mme` / `pope` |
+| `--dataset` | 数据集名，必选：`gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` |
 | `--max-samples` | 限制样本数（可选） |
 | `--baseline` | 加此 flag 则不剪枝，用于对照 |
 | `--set KEY=VALUE` | 覆盖配置项（可多次使用），见下文 §1.3 |

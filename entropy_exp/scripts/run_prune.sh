@@ -76,6 +76,16 @@ case "$STRATEGY" in
         ;;
 esac
 
+case "$DATASET" in
+    gqa|mme|pope|textvqa|scienceqa|mmbench|all)
+        ;;
+    *)
+        echo "Unknown dataset: $DATASET" >&2
+        echo "Supported datasets: gqa, mme, pope, textvqa, scienceqa, mmbench, all" >&2
+        exit 1
+        ;;
+esac
+
 # Parse optional max_samples (first positional arg that is a plain integer)
 MAX_SAMPLES=""
 EXTRA_SETS=()
@@ -338,7 +348,7 @@ run_dataset() {
     local ds="$2"
 
     if [ "$ds" = "all" ]; then
-        for d in gqa mme pope; do
+        for d in gqa mme pope textvqa scienceqa mmbench; do
             run_single "$strategy" "$d"
         done
     else

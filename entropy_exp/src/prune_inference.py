@@ -1,9 +1,9 @@
 """
 Pruning inference pipeline for LLaVA.
 
-Runs inference on GQA/MME/POPE with visual token pruning.
+Runs inference on supported VQA-style datasets with visual token pruning.
 Outputs:
-  1. Answer JSONL files (compatible with existing eval scripts)
+  1. Answer JSONL files
   2. Pruning statistics JSONL (per-sample pruning details)
 
 Usage:
@@ -52,12 +52,13 @@ from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_S
 from llava.conversation import conv_templates
 from llava.model.builder import load_pretrained_model
 from llava.utils import disable_torch_init
-from llava.mm_utils import tokenizer_image_token, process_images, get_model_name_from_path
+from llava.mm_utils import tokenizer_image_token, process_images, load_image_from_base64, get_model_name_from_path
 
 from hooks import locate_image_tokens
 from pruner import VisualTokenPruner, enable_sparse_position_ids_compat
 from run_layout import build_run_dir, build_run_rel_dir
 from strategies import get_strategy
+from dataset_adapters import SUPPORTED_DATASETS, load_dataset_samples
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 
@@ -76,22 +77,36 @@ class VQADataset(Dataset):
 
     def __getitem__(self, index):
         line = self.questions[index]
-        image_file = line["image"]
         qs = line["text"]
-        if getattr(self.model_config, 'mm_use_im_start_end', False):
-            qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
-        else:
-            qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
+        if line.get("has_image", False):
+            if getattr(self.model_config, 'mm_use_im_start_end', False):
+                qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
+            else:
+                qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
 
         conv = conv_templates[self.conv_mode].copy()
         conv.append_message(conv.roles[0], qs)
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
 
-        image = Image.open(os.path.join(self.image_folder, image_file)).convert('RGB')
-        image_tensor = process_images([image], self.image_processor, self.model_config)[0]
+        image_tensor = None
+        image_size = None
+        image_path = line.get("image_path")
+        image_base64 = line.get("image_base64")
+        if image_path:
+            resolved_image_path = image_path
+            if not os.path.isabs(resolved_image_path):
+                resolved_image_path = os.path.join(self.image_folder, resolved_image_path)
+            image = Image.open(resolved_image_path).convert('RGB')
+            image_tensor = process_images([image], self.image_processor, self.model_config)[0]
+            image_size = image.size
+        elif image_base64:
+            image = load_image_from_base64(image_base64).convert('RGB')
+            image_tensor = process_images([image], self.image_processor, self.model_config)[0]
+            image_size = image.size
+
         input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
-        return input_ids, image_tensor, image.size
+        return input_ids, image_tensor, image_size
 
     def __len__(self):
         return len(self.questions)
@@ -100,7 +115,10 @@ class VQADataset(Dataset):
 def collate_fn(batch):
     input_ids, image_tensors, image_sizes = zip(*batch)
     input_ids = torch.stack(input_ids, dim=0)
-    image_tensors = torch.stack(image_tensors, dim=0)
+    if image_tensors[0] is None:
+        image_tensors = None
+    else:
+        image_tensors = torch.stack(image_tensors, dim=0)
     return input_ids, image_tensors, image_sizes
 
 
@@ -297,6 +315,8 @@ def run_prune_inference(
     """
 
     def resolve(p):
+        if p is None:
+            return None
         if os.path.isabs(p):
             return p
         return os.path.join(LLAVA_ROOT, p)
@@ -424,8 +444,7 @@ def run_prune_inference(
           f"base_ratio={prune_cfg.get('prune_ratio', 0.5)}")
 
     # --- load questions ---
-    with open(question_file, 'r') as f:
-        questions = [json.loads(line) for line in f]
+    questions = load_dataset_samples(dataset_name, question_file)
 
     effective_max = max_samples or prune_cfg.get("max_samples")
     if effective_max is not None:
@@ -455,7 +474,8 @@ def run_prune_inference(
         tqdm(zip(data_loader, questions), total=len(questions), desc=f"[{dataset_name}|{progress_tag}]")
     ):
         question_id = line["question_id"]
-        image_file = line["image"]
+        image_file = line.get("image_path") or (f"inline_base64:{question_id}" if line.get("image_base64") else None)
+        has_image = bool(line.get("has_image", False))
         retry_count = 0
         while True:
             input_ids_cuda = None
@@ -465,57 +485,86 @@ def run_prune_inference(
             attention_mask = None
             inputs_embeds = None
             generated_ids = None
+            output_ids = None
 
             try:
-                v_token_start, _, text_token_start = locate_image_tokens(
-                    input_ids, IMAGE_TOKEN_INDEX, v_token_num=v_token_num
-                )
-                text_token_ids = input_ids[0, v_token_start + 1:].clone()
-                text_special_token_mask = build_text_special_token_mask(tokenizer, text_token_ids)
-                expected_seq_len = v_token_start + v_token_num + (input_ids.shape[1] - (v_token_start + 1))
-
-                # --- prepare multimodal embeddings ---
                 input_ids_cuda = input_ids.to(device=target_device, non_blocking=True)
-                image_tensor_cuda = image_tensor.to(dtype=torch.float16, device=target_device, non_blocking=True)
-
-                (
-                    _input_ids,
-                    position_ids,
-                    attention_mask,
-                    _,
-                    inputs_embeds,
-                    _,
-                ) = model.prepare_inputs_labels_for_multimodal(
-                    input_ids_cuda, None, None, None, None,
-                    image_tensor_cuda, image_sizes=list(image_sizes),
-                )
-                if inputs_embeds.shape[1] != expected_seq_len:
-                    raise RuntimeError(
-                        f"Expanded sequence length mismatch for question_id={question_id}: "
-                        f"expected {expected_seq_len}, got {inputs_embeds.shape[1]}. "
-                        f"Check v_token_num (configured={v_token_num})."
+                if has_image:
+                    v_token_start, _, text_token_start = locate_image_tokens(
+                        input_ids, IMAGE_TOKEN_INDEX, v_token_num=v_token_num
                     )
+                    text_token_ids = input_ids[0, v_token_start + 1:].clone()
+                    text_special_token_mask = build_text_special_token_mask(tokenizer, text_token_ids)
+                    expected_seq_len = v_token_start + v_token_num + (input_ids.shape[1] - (v_token_start + 1))
 
-                # --- generate with pruning ---
-                t0 = time.time()
-                generated_ids, prune_info = pruner.pruned_generate(
-                    inputs_embeds=inputs_embeds,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    v_token_start=v_token_start,
-                    v_token_num=v_token_num,
-                    text_token_start=text_token_start,
-                    text_token_ids=text_token_ids,
-                    text_special_token_mask=text_special_token_mask,
-                    max_new_tokens=infer_cfg["max_new_tokens"],
-                    eos_token_id=eos_token_id,
-                    save_tv_attn=save_attention,
-                    capture_layers=capture_layers_set,
-                )
-                t1 = time.time()
-                total_time += (t1 - t0)
+                    # --- prepare multimodal embeddings ---
+                    image_tensor_cuda = image_tensor.to(dtype=torch.float16, device=target_device, non_blocking=True)
 
-                answer_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
+                    (
+                        _input_ids,
+                        position_ids,
+                        attention_mask,
+                        _,
+                        inputs_embeds,
+                        _,
+                    ) = model.prepare_inputs_labels_for_multimodal(
+                        input_ids_cuda, None, None, None, None,
+                        image_tensor_cuda, image_sizes=list(image_sizes),
+                    )
+                    if inputs_embeds.shape[1] != expected_seq_len:
+                        raise RuntimeError(
+                            f"Expanded sequence length mismatch for question_id={question_id}: "
+                            f"expected {expected_seq_len}, got {inputs_embeds.shape[1]}. "
+                            f"Check v_token_num (configured={v_token_num})."
+                        )
+
+                    # --- generate with pruning ---
+                    t0 = time.time()
+                    generated_ids, prune_info = pruner.pruned_generate(
+                        inputs_embeds=inputs_embeds,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        v_token_start=v_token_start,
+                        v_token_num=v_token_num,
+                        text_token_start=text_token_start,
+                        text_token_ids=text_token_ids,
+                        text_special_token_mask=text_special_token_mask,
+                        max_new_tokens=infer_cfg["max_new_tokens"],
+                        eos_token_id=eos_token_id,
+                        save_tv_attn=save_attention,
+                        capture_layers=capture_layers_set,
+                    )
+                    t1 = time.time()
+                    total_time += (t1 - t0)
+
+                    answer_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
+                else:
+                    t0 = time.time()
+                    output_ids = model.generate(
+                        inputs=input_ids_cuda,
+                        do_sample=True if infer_cfg["temperature"] > 0 else False,
+                        temperature=infer_cfg["temperature"],
+                        top_p=infer_cfg["top_p"],
+                        num_beams=infer_cfg["num_beams"],
+                        max_new_tokens=infer_cfg["max_new_tokens"],
+                        use_cache=True,
+                    )
+                    t1 = time.time()
+                    total_time += (t1 - t0)
+
+                    prompt_length = int(input_ids_cuda.shape[1])
+                    generated_ids = output_ids[:, prompt_length:]
+                    answer_text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+                    prune_info = {
+                        "original_seq_len": prompt_length,
+                        "final_seq_len": prompt_length,
+                        "num_generated_tokens": int(generated_ids.shape[1]),
+                        "prefill_time": None,
+                        "decode_time": None,
+                        "total_time": t1 - t0,
+                        "prune_stage": "text_only_no_prune",
+                        "layers": {},
+                    }
                 break
             except torch.cuda.OutOfMemoryError:
                 retry_count += 1
@@ -524,13 +573,22 @@ def run_prune_inference(
                     f"[oom-retry] CUDA OOM on sample_idx={sample_idx}, question_id={question_id}, "
                     f"retry={retry_count}. Backing off for {backoff_seconds}s before retry."
                 )
-                del generated_ids
-                del inputs_embeds
-                del attention_mask
-                del position_ids
-                del _input_ids
-                del image_tensor_cuda
-                del input_ids_cuda
+                if output_ids is not None:
+                    del output_ids
+                if generated_ids is not None:
+                    del generated_ids
+                if inputs_embeds is not None:
+                    del inputs_embeds
+                if attention_mask is not None:
+                    del attention_mask
+                if position_ids is not None:
+                    del position_ids
+                if _input_ids is not None:
+                    del _input_ids
+                if image_tensor_cuda is not None:
+                    del image_tensor_cuda
+                if input_ids_cuda is not None:
+                    del input_ids_cuda
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     torch.cuda.ipc_collect()
@@ -679,7 +737,7 @@ def run_baseline_inference(config: dict, dataset_name: str, max_samples: int = N
 def main():
     parser = argparse.ArgumentParser(description="Pruning inference pipeline")
     parser.add_argument("--config", type=str, default="entropy_exp/configs/prune.yaml")
-    parser.add_argument("--dataset", type=str, required=True, choices=["gqa", "mme", "pope"])
+    parser.add_argument("--dataset", type=str, required=True, choices=list(SUPPORTED_DATASETS))
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--baseline", action="store_true",
                         help="Run baseline (no pruning) for comparison")

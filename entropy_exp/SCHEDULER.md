@@ -236,7 +236,7 @@ experiments:
 - `name`
   - 批次名，只用于可读性和进度
 - `dataset`
-  - 必须是 `gqa` / `mme` / `pope`
+  - 必须是 `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench`
 - `strategies`
   - 策略列表，按给定顺序展开
 - `extra_sets`
@@ -391,6 +391,12 @@ entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.ya
 - total jobs: `54`
 - pool size: `12`
 - retry budget: `ceil(54 * 0.1) = 6`
+
+补充说明：
+
+- scheduler 现已允许 `textvqa` / `scienceqa` / `mmbench` inference job
+- repo-native post-run `eval / summary` 主线现已覆盖 `gqa` / `mme` / `pope` / `textvqa` / `scienceqa`
+- `mmbench` 仍停留在 inference-only，不进入本地最终指标汇总
 
 推荐启动顺序：
 

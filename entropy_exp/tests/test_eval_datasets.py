@@ -1,12 +1,21 @@
+import json
 import os
 import sys
+import tempfile
 import unittest
 
 
 SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 sys.path.insert(0, SRC_DIR)
 
-from eval_datasets import add_pope_macro_f1, format_pope_macro_f1, parse_pope_metrics
+from eval_datasets import (
+    add_pope_macro_f1,
+    format_pope_macro_f1,
+    load_scienceqa_metrics,
+    parse_pope_metrics,
+    parse_textvqa_metrics,
+    unsupported_local_metric_message,
+)
 from summarize_results import primary_metric
 
 
@@ -66,6 +75,39 @@ Yes ratio: 0.43
         name, value = primary_metric("pope", {"weighted_average": {"f1_score": 0.799}})
         self.assertEqual(name, "macro_f1")
         self.assertAlmostEqual(value, 0.799)
+
+
+class NewDatasetEvalTests(unittest.TestCase):
+    def test_parse_textvqa_metrics_extracts_accuracy_percent(self):
+        stdout = "demo-model\nSamples: 5000\nAccuracy: 63.42%\n"
+        metrics = parse_textvqa_metrics(stdout)
+        self.assertEqual(metrics, {"accuracy": 63.42})
+
+    def test_load_scienceqa_metrics_prefers_result_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result_file = os.path.join(temp_dir, "scienceqa_result.json")
+            with open(result_file, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "acc": 78.5,
+                        "correct": 1570,
+                        "count": 2000,
+                        "results": {},
+                        "outputs": {},
+                    },
+                    handle,
+                )
+
+            metrics = load_scienceqa_metrics(result_file)
+            self.assertEqual(metrics["accuracy"], 78.5)
+            self.assertEqual(metrics["correct"], 1570)
+            self.assertEqual(metrics["count"], 2000)
+
+    def test_unsupported_local_metric_message_for_mmbench_is_clear(self):
+        message = unsupported_local_metric_message("mmbench")
+        self.assertIn("mmbench", message)
+        self.assertIn("inference input compatibility", message)
+        self.assertIn("local final-metric evaluation", message)
 
 
 if __name__ == "__main__":

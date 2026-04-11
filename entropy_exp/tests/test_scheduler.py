@@ -23,6 +23,7 @@ from entropy_exp.src.scheduler import (
     GPUConfig,
     resolve_conda_activate_target,
     select_gpu_for_dispatch,
+    validate_answers_file,
 )
 
 
@@ -181,6 +182,33 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(jobs[0].strategy, "sparsevlm_adaptive_stratified")
         self.assertEqual(jobs[0].run_prefix, "mme_sparsevlm_adaptive_stratified_l2_r0p4__")
 
+    def test_scheduler_accepts_new_inference_datasets(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-new-datasets",
+                "pool_size": 2,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {"conda_env": "llava"},
+                "defaults": {"max_samples": 1, "extra_sets": ["pruning.prune_layers=[1]", "pruning.prune_ratio=[0.2]"]},
+                "experiments": [
+                    {"name": "textvqa_smoke", "dataset": "textvqa", "strategies": ["random"]},
+                    {"name": "scienceqa_smoke", "dataset": "scienceqa", "strategies": ["random"]},
+                    {"name": "mmbench_smoke", "dataset": "mmbench", "strategies": ["random"]},
+                ],
+            }
+        )
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+        self.assertEqual([job.dataset for job in jobs], ["textvqa", "scienceqa", "mmbench"])
+
     def test_real_adaptive_full_matrix_plan_has_expected_grid(self):
         plan_path = ROOT_DIR / "entropy_exp" / "plans" / "keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml"
         plan = load_scheduler_plan(plan_path)
@@ -327,6 +355,74 @@ class SchedulerFinalizeTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["validation"]["expected_answers"], 3)
             self.assertEqual(payload["validation"]["valid_answers"], 3)
+
+    def test_validate_answers_file_supports_scienceqa_json_list(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            run_dir = repo_root / "entropy_exp" / "outputs" / "runs" / "random" / "scienceqa" / "scienceqa_random_l1_r0p2__demo"
+            eval_dir = repo_root / "entropy_exp" / "eval_questions" / "scienceqa"
+            run_dir.mkdir(parents=True)
+            eval_dir.mkdir(parents=True)
+
+            question_path = eval_dir / "llava_test_CQM-A.json"
+            question_path.write_text(
+                json.dumps(
+                    [
+                        {"id": "4", "conversations": [{"from": "human", "value": "Question only"}]},
+                        {"id": "5", "image": "5/image.png", "conversations": [{"from": "human", "value": "<image>\nQuestion with image"}]},
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "_run_meta": {"dataset": "scienceqa", "max_samples": 2},
+                        "datasets": {"scienceqa": {"question_file": "entropy_exp/eval_questions/scienceqa/llava_test_CQM-A.json"}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "answers.jsonl").write_text('{"ok": true}\n{"ok": true}\n', encoding="utf-8")
+
+            validation = validate_answers_file(run_dir, "scienceqa", repo_root)
+            self.assertTrue(validation["ok"])
+            self.assertEqual(validation["expected_answers"], 2)
+            self.assertEqual(validation["valid_answers"], 2)
+
+    def test_validate_answers_file_supports_mmbench_tsv(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            run_dir = repo_root / "entropy_exp" / "outputs" / "runs" / "random" / "mmbench" / "mmbench_random_l1_r0p2__demo"
+            eval_dir = repo_root / "entropy_exp" / "eval_questions" / "mmbench"
+            run_dir.mkdir(parents=True)
+            eval_dir.mkdir(parents=True)
+
+            question_path = eval_dir / "mmbench_dev_20230712.tsv"
+            question_path.write_text(
+                "\t".join(["index", "question", "hint", "A", "B", "C", "D", "image"]) + "\n"
+                + "\t".join(["1", "What is shown?", "", "cat", "dog", "", "", "ZmFrZQ=="]) + "\n"
+                + "\t".join(["2", "Pick one", "hint text", "A1", "B1", "C1", "D1", "ZmFrZTI="]) + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "_run_meta": {"dataset": "mmbench", "max_samples": 2},
+                        "datasets": {"mmbench": {"question_file": "entropy_exp/eval_questions/mmbench/mmbench_dev_20230712.tsv"}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "answers.jsonl").write_text('{"ok": true}\n{"ok": true}\n', encoding="utf-8")
+
+            validation = validate_answers_file(run_dir, "mmbench", repo_root)
+            self.assertTrue(validation["ok"])
+            self.assertEqual(validation["expected_answers"], 2)
+            self.assertEqual(validation["valid_answers"], 2)
 
 
 class SchedulerGpuSelectionTests(unittest.TestCase):

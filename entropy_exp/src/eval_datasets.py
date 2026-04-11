@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -10,6 +11,8 @@ import subprocess
 import sys
 
 LLAVA_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+LOCAL_EVAL_DATASETS = {"gqa", "mme", "pope", "textvqa", "scienceqa"}
+INFERENCE_ONLY_DATASETS = {"mmbench"}
 
 
 def ensure_dir(path: str) -> str:
@@ -73,6 +76,13 @@ def parse_gqa_metrics(stdout: str) -> dict:
         if key in wanted:
             metrics[key] = float(match.group(2))
     return metrics
+
+
+def parse_textvqa_metrics(stdout: str) -> dict:
+    match = re.search(r"Accuracy:\s*(-?\d+(?:\.\d+)?)%", stdout)
+    if not match:
+        return {}
+    return {"accuracy": float(match.group(1))}
 
 
 def parse_mme_metrics(stdout: str) -> dict:
@@ -153,6 +163,74 @@ def format_pope_macro_f1(macro_f1: float) -> str:
     return f"Macro-F1: {macro_f1:.6f}"
 
 
+def load_scienceqa_metrics(result_file: str) -> dict:
+    with open(result_file, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    return {
+        "accuracy": payload.get("acc"),
+        "correct": payload.get("correct"),
+        "count": payload.get("count"),
+    }
+
+
+def unsupported_local_metric_message(dataset: str) -> str:
+    return (
+        f"Dataset '{dataset}' currently supports inference input compatibility only. "
+        "This repo does not provide a local final-metric evaluation path for it."
+    )
+
+
+def load_json(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_jsonl(path: str) -> list[dict]:
+    with open(path, "r", encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def load_textvqa_evaluator():
+    evaluator_path = os.path.join(LLAVA_ROOT, "llava", "eval", "m4c_evaluator.py")
+    spec = importlib.util.spec_from_file_location("textvqa_evaluator_local", evaluator_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load TextVQA evaluator from: {evaluator_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.TextVQAAccuracyEvaluator()
+
+
+def textvqa_prompt_processor(prompt: str) -> str:
+    if prompt.startswith("OCR tokens: "):
+        pattern = r"Question: (.*?) Short answer:"
+        match = re.search(pattern, prompt, re.DOTALL)
+        if match is None:
+            raise ValueError(f"Unsupported TextVQA prompt: {prompt!r}")
+        question = match.group(1)
+    elif "Reference OCR token: " in prompt and len(prompt.split("\n")) == 3:
+        if prompt.startswith("Reference OCR token:"):
+            question = prompt.split("\n")[1]
+        else:
+            question = prompt.split("\n")[0]
+    elif len(prompt.split("\n")) == 2:
+        question = prompt.split("\n")[0]
+    else:
+        raise ValueError(f"Unsupported TextVQA prompt: {prompt!r}")
+    return question.lower()
+
+
+def parse_scienceqa_answer(pred_text: str, options: list[str]) -> str:
+    if pred_text in options:
+        return pred_text
+    if len(pred_text) >= 3 and pred_text[0] in options and pred_text[1:3] == ". ":
+        return pred_text[0]
+    pattern = re.compile(r"The answer is ([A-Z]).")
+    matches = pattern.findall(pred_text)
+    if len(matches) == 1:
+        return matches[0]
+    return "FAILED"
+
+
 def infer_config_value(config_file: str, path: tuple[str, ...]) -> str | None:
     stack: list[tuple[int, str]] = []
     with open(config_file, "r", encoding="utf-8") as f:
@@ -189,6 +267,17 @@ def infer_dataset_from_config(config_file: str) -> str | None:
     )
 
 
+def infer_run_max_samples(config_file: str | None) -> int | None:
+    if config_file is None:
+        return None
+    raw_value = infer_config_value(config_file, ("_run_meta", "max_samples"))
+    if raw_value is None:
+        raw_value = infer_config_value(config_file, ("pruning", "max_samples"))
+    if raw_value is None or raw_value.lower() in {"null", "none", "~"}:
+        return None
+    return int(raw_value)
+
+
 def resolve_config_path(path: str | None) -> str | None:
     if path is None or path.lower() == "null":
         return None
@@ -212,7 +301,7 @@ def infer_run_metadata(run_dir: str) -> tuple[str, str, str, str]:
         raise FileNotFoundError(f"Run config not found: {config_file}")
 
     dataset = infer_dataset_from_config(config_file)
-    if dataset not in {"gqa", "mme", "pope"}:
+    if dataset not in LOCAL_EVAL_DATASETS | INFERENCE_ONLY_DATASETS:
         raise ValueError(f"Unable to infer dataset from run config: {config_file}")
 
     output_dir = os.path.join(run_dir, "eval")
@@ -361,10 +450,109 @@ def eval_pope(answers_file: str, output_dir: str) -> dict:
     }
 
 
+def eval_textvqa(answers_file: str, output_dir: str) -> dict:
+    annotation_file = os.path.join(
+        LLAVA_ROOT,
+        "entropy_exp",
+        "eval_questions",
+        "textvqa",
+        "TextVQA_0.5.1_val.json",
+    )
+    annotations = load_json(annotation_file)["data"]
+    annotation_map = {
+        (annotation["image_id"], annotation["question"].lower()): annotation
+        for annotation in annotations
+    }
+    results = load_jsonl(answers_file)
+    pred_list = []
+    for result in results:
+        annotation = annotation_map[(result["question_id"], textvqa_prompt_processor(result["prompt"]))]
+        pred_list.append(
+            {
+                "pred_answer": result["text"],
+                "gt_answers": annotation["answers"],
+            }
+        )
+
+    evaluator = load_textvqa_evaluator()
+    accuracy = 100.0 * evaluator.eval_pred_list(pred_list)
+    stdout_text = f"Samples: {len(pred_list)}\nAccuracy: {accuracy:.2f}%\n"
+    print(stdout_text, end="")
+    write_text(os.path.join(output_dir, "stdout.txt"), stdout_text)
+    return {
+        "annotation_file": annotation_file,
+        "metrics": {"accuracy": accuracy},
+    }
+
+
+def eval_scienceqa(answers_file: str, output_dir: str, max_samples: int | None = None) -> dict:
+    base_dir = os.path.join(LLAVA_ROOT, "entropy_exp", "eval_questions", "scienceqa")
+    analysis_file = os.path.join(output_dir, "analysis.json")
+    result_file = os.path.join(output_dir, "result.json")
+    pid_splits = load_json(os.path.join(base_dir, "pid_splits.json"))
+    problems = load_json(os.path.join(base_dir, "problems.json"))
+    predictions = {str(pred["question_id"]): pred for pred in load_jsonl(answers_file)}
+    split_indices = [str(idx) for idx in pid_splits["test"]]
+    if max_samples is not None:
+        split_indices = split_indices[:max_samples]
+    options = ["A", "B", "C", "D", "E"]
+
+    results = {"correct": [], "incorrect": []}
+    result_payload = {
+        "acc": None,
+        "correct": None,
+        "count": None,
+        "results": {},
+        "outputs": {},
+    }
+
+    for prob_id in split_indices:
+        prob = problems[prob_id]
+        pred = predictions.get(prob_id, {"text": "FAILED", "prompt": "Unknown"})
+        pred_text = pred["text"]
+        answer = parse_scienceqa_answer(pred_text, options)
+        pred_idx = options.index(answer) if answer in options[: len(prob["choices"])] else -1
+
+        analysis = {
+            "question_id": prob_id,
+            "parsed_ans": answer,
+            "ground_truth": options[prob["answer"]],
+            "question": pred["prompt"],
+            "pred": pred_text,
+        }
+        result_payload["results"][prob_id] = pred_idx
+        result_payload["outputs"][prob_id] = pred_text
+        if pred_idx == prob["answer"]:
+            results["correct"].append(analysis)
+        else:
+            results["incorrect"].append(analysis)
+
+    correct = len(results["correct"])
+    total = correct + len(results["incorrect"])
+    accuracy = (correct / total * 100.0) if total else 0.0
+    result_payload["acc"] = accuracy
+    result_payload["correct"] = correct
+    result_payload["count"] = total
+
+    write_json(analysis_file, results)
+    write_json(result_file, result_payload)
+    stdout_text = f"Total: {total}, Correct: {correct}, Accuracy: {accuracy:.2f}%\n"
+    print(stdout_text, end="")
+    write_text(os.path.join(output_dir, "stdout.txt"), stdout_text)
+    return {
+        "base_dir": base_dir,
+        "analysis_file": analysis_file,
+        "result_file": result_file,
+        "metrics": load_scienceqa_metrics(result_file),
+    }
+
+
 EVAL_FUNCTIONS = {
     "gqa": eval_gqa,
     "mme": eval_mme,
     "pope": eval_pope,
+    "textvqa": eval_textvqa,
+    "scienceqa": eval_scienceqa,
 }
 
 
@@ -377,7 +565,7 @@ def resolve_legacy_output_dir(dataset: str, answers_file: str, output_dir: str |
 
 def main():
     parser = argparse.ArgumentParser(description="Run evaluation on inference outputs")
-    parser.add_argument("--dataset", type=str, choices=["gqa", "mme", "pope"])
+    parser.add_argument("--dataset", type=str, choices=sorted(LOCAL_EVAL_DATASETS | INFERENCE_ONLY_DATASETS))
     parser.add_argument("--answers-file", type=str,
                         help="Path to the JSONL answers file from inference")
     parser.add_argument("--output-dir", type=str,
@@ -409,6 +597,11 @@ def main():
     output_dir = ensure_dir(os.path.abspath(output_dir))
     print(f"Writing evaluation artifacts to: {output_dir}")
 
+    if dataset in INFERENCE_ONLY_DATASETS:
+        print(unsupported_local_metric_message(dataset))
+        return 0
+
+    run_max_samples = infer_run_max_samples(config_file)
     mme_data_path = None
     if dataset == "mme":
         mme_data_path = resolve_config_path(args.mme_data_path)
@@ -420,7 +613,10 @@ def main():
     else:
         if args.mme_data_path:
             parser.error("--mme-data-path can only be used with --dataset mme or an MME run directory")
-        summary = EVAL_FUNCTIONS[dataset](answers_file, output_dir)
+        if dataset == "scienceqa":
+            summary = eval_scienceqa(answers_file, output_dir, max_samples=run_max_samples)
+        else:
+            summary = EVAL_FUNCTIONS[dataset](answers_file, output_dir)
     summary.update(
         {
             "dataset": dataset,
@@ -436,7 +632,8 @@ def main():
     summary_path = os.path.join(output_dir, "summary.json")
     write_json(summary_path, summary)
     print(f"Saved summary: {summary_path}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -25,6 +25,14 @@ class SummarizeResultsPopeTests(unittest.TestCase):
         self.assertEqual(name, "macro_f1")
         self.assertAlmostEqual(value, 0.812)
 
+    def test_primary_metric_uses_accuracy_for_textvqa_and_scienceqa(self):
+        textvqa_name, textvqa_value = primary_metric("textvqa", {"accuracy": 58.7})
+        scienceqa_name, scienceqa_value = primary_metric("scienceqa", {"accuracy": 77.2})
+        self.assertEqual(textvqa_name, "accuracy")
+        self.assertAlmostEqual(textvqa_value, 58.7)
+        self.assertEqual(scienceqa_name, "accuracy")
+        self.assertAlmostEqual(scienceqa_value, 77.2)
+
     def test_extract_record_and_csv_rows_use_pope_macro_f1(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir) / "pope_masking_attn_score_l1_r0p6__demo"
@@ -109,6 +117,45 @@ class SummarizeResultsPopeTests(unittest.TestCase):
             rows = build_csv_rows([record])
             self.assertEqual(rows[0]["effective_prune_layers"], "[3, 4, 5]")
             self.assertEqual(rows[0]["tail_start_layer"], 3)
+
+    def test_extract_record_and_csv_rows_include_textvqa_and_scienceqa_accuracy(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "textvqa_random_l1_r0p2__demo"
+            eval_dir = run_dir / "eval"
+            eval_dir.mkdir(parents=True)
+
+            config = {
+                "_run_meta": {"dataset": "textvqa", "run_mode": "prune", "timestamp": "demo"},
+                "pruning": {
+                    "strategy": "random",
+                    "layer_selection": "fixed",
+                    "prune_layers": [1],
+                    "prune_ratio": [0.2],
+                    "v_token_num": 576,
+                    "max_samples": None,
+                    "entropy": {},
+                },
+            }
+            metrics = {"accuracy": 58.7}
+
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+            (eval_dir / "summary.json").write_text(
+                json.dumps({"dataset": "textvqa", "metrics": metrics}, indent=2),
+                encoding="utf-8",
+            )
+
+            record, skipped = extract_record(run_dir)
+            self.assertIsNone(skipped)
+            self.assertEqual(record["primary_metric_name"], "accuracy")
+            self.assertAlmostEqual(record["primary_metric_value"], 58.7)
+            self.assertAlmostEqual(record["textvqa_accuracy"], 58.7)
+
+            rows = build_csv_rows([record])
+            self.assertAlmostEqual(rows[0]["textvqa_accuracy"], 58.7)
+            self.assertEqual(rows[0]["scienceqa_accuracy"], "")
 
 
 if __name__ == "__main__":

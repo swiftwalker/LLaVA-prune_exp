@@ -21,6 +21,11 @@ try:
 except ImportError:  # pragma: no cover - fallback for direct src imports
     from run_layout import find_run_dirs, resolve_repo_path
 
+try:
+    from entropy_exp.src.dataset_adapters import count_dataset_samples
+except ImportError:  # pragma: no cover - fallback for direct src imports
+    from dataset_adapters import count_dataset_samples
+
 
 LLAVA_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATE_BASE_DIR = LLAVA_ROOT / "entropy_exp" / "outputs" / "scheduler"
@@ -28,7 +33,7 @@ DEFAULT_RUNS_DIR = LLAVA_ROOT / "entropy_exp" / "outputs" / "runs"
 DEFAULT_CONDA_SH = Path.home() / "miniconda3" / "etc" / "profile.d" / "conda.sh"
 DEFAULT_CONDA_ENV = "llava"
 
-SUPPORTED_DATASETS = {"gqa", "mme", "pope"}
+SUPPORTED_DATASETS = {"gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench"}
 SUPPORTED_STRATEGIES = {
     "baseline",
     "attn_score",
@@ -711,11 +716,6 @@ def select_gpu_for_dispatch(
     return selected_gpu, observed_free_mib, projected_free_mib
 
 
-def count_lines(path: Path) -> int:
-    with path.open("r", encoding="utf-8") as handle:
-        return sum(1 for _ in handle)
-
-
 def validate_answers_file(run_dir: Path, dataset: str, repo_root: Path) -> Dict[str, Any]:
     config_path = run_dir / "config.yaml"
     answers_path = run_dir / "answers.jsonl"
@@ -738,7 +738,7 @@ def validate_answers_file(run_dir: Path, dataset: str, repo_root: Path) -> Dict[
     if not question_path.is_file():
         return {"ok": False, "reason": f"missing_question_source:{question_path}"}
 
-    expected_lines = count_lines(question_path)
+    expected_lines = count_dataset_samples(dataset, question_path)
     max_samples = run_meta.get("max_samples")
     if isinstance(max_samples, int) and max_samples > 0:
         expected_lines = min(expected_lines, max_samples)

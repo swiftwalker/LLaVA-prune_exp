@@ -74,6 +74,10 @@ def primary_metric(dataset: str, metrics: dict[str, Any]) -> tuple[str, Any]:
         return "macro_f1", weighted_average.get("f1_score")
     if dataset == "gqa":
         return "accuracy", metrics.get("accuracy")
+    if dataset == "textvqa":
+        return "accuracy", metrics.get("accuracy")
+    if dataset == "scienceqa":
+        return "accuracy", metrics.get("accuracy")
     return "unknown", None
 
 
@@ -128,6 +132,8 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
             else None
         ),
         "gqa_accuracy": metrics.get("accuracy") if dataset == "gqa" else None,
+        "textvqa_accuracy": metrics.get("accuracy") if dataset == "textvqa" else None,
+        "scienceqa_accuracy": metrics.get("accuracy") if dataset == "scienceqa" else None,
         "pruning_config": pruning,
         "eval_metrics": metrics,
     }
@@ -177,6 +183,8 @@ def build_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "mme_overall_total_score": csv_value(record["mme_overall_total_score"]),
                 "pope_macro_f1": csv_value(record["pope_macro_f1"]),
                 "gqa_accuracy": csv_value(record["gqa_accuracy"]),
+                "textvqa_accuracy": csv_value(record["textvqa_accuracy"]),
+                "scienceqa_accuracy": csv_value(record["scienceqa_accuracy"]),
                 "pruning_config_json": json_string(record["pruning_config"]),
             }
         )
@@ -209,6 +217,8 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "mme_overall_total_score",
         "pope_macro_f1",
         "gqa_accuracy",
+        "textvqa_accuracy",
+        "scienceqa_accuracy",
         "pruning_config_json",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:

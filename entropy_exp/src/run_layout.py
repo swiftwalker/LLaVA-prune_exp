@@ -14,7 +14,7 @@ LLAVA_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_BASE_DIR = LLAVA_ROOT / "entropy_exp" / "outputs"
 DEFAULT_RUNS_DIR = DEFAULT_OUTPUT_BASE_DIR / "runs"
 RUN_MARKER_FILES = ("config.yaml", "answers.jsonl")
-KNOWN_DATASETS = ("gqa", "mme", "pope")
+KNOWN_DATASETS = ("gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench")
 KNOWN_STRATEGIES = (
     "tail_masking_attn_score",
     "masking_attn_score",

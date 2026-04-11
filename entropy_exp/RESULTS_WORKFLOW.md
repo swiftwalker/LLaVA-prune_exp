@@ -235,6 +235,12 @@ entropy_exp/outputs/summary/<label>/
 - `gqa -> accuracy`
 - `mme -> overall_total_score`
 - `pope -> macro_f1`
+- `textvqa -> accuracy`
+- `scienceqa -> accuracy`
+
+说明：
+
+- `mmbench` 当前不进入 repo-native 本地指标汇总；它只保留 inference 输入兼容能力
 
 把 `summary.csv` 组织成 `layer × ratio` 矩阵的一个通用脚本：
 
