@@ -60,7 +60,8 @@ entropy_exp/outputs/runs/
 entropy_exp/outputs/logs/
 entropy_exp/outputs/plans/
 entropy_exp/outputs/summary/
-entropy_exp/plans/
+entropy_exp/plans/*
+!entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml
 
 # FLOPs experiment — generated outputs (keep placeholder .gitkeep files)
 flops_exp/outputs/batch_flops/*

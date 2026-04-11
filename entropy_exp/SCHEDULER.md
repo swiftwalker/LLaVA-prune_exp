@@ -58,7 +58,8 @@ python entropy_exp/scripts/run_scheduler.py --state-dir <state_dir> --resume
 
 补充说明：
 
-- 脚本启动时会优先尝试重进程到 `~/miniconda3/envs/llava/bin/python`，这是 `run_scheduler.py` 自己的行为，不需要手工切换解释器。
+- 脚本启动时会优先尝试重进程到 `~/miniconda3/envs/llava/bin/python`，但只有该路径实际存在时才会生效。
+- 在当前主机上，更稳妥的调用方式仍是先执行 `source /data/liuyu/anaconda3/etc/profile.d/conda.sh && conda activate llava`，不要依赖失效的 preferred-python 路径。
 - `--resume` 且未显式传 `--state-dir` 时，如果给了 `--plan`，状态目录会按 `entropy_exp/outputs/scheduler/<sanitize(label)>/` 推导。
 
 ## 3. 推荐操作流程
@@ -170,7 +171,7 @@ tmux:
   log_dir: "entropy_exp/outputs/logs/tmux"
 
 environment:
-  conda_sh: "/home/liuyu/miniconda3/etc/profile.d/conda.sh"
+  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
   conda_env: "llava"
 
 defaults:
@@ -257,7 +258,7 @@ bash entropy_exp/scripts/run_prune.sh <strategy> <dataset> [max_samples] --no-au
 ```yaml
 version: 1
 label: "scheduler-demo-ratio-sweep"
-pool_size: 6
+pool_size: 12
 
 gpu:
   min_free_gib: 16
@@ -274,7 +275,7 @@ tmux:
   log_dir: "entropy_exp/outputs/logs/tmux"
 
 environment:
-  conda_sh: "/home/liuyu/miniconda3/etc/profile.d/conda.sh"
+  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
   conda_env: "llava"
 
 defaults:
@@ -371,6 +372,75 @@ extra_sets:
 
 如果你只是做标准 sweep，通常不需要在 scheduler plan 里重复写这些默认值；只有在做策略消融时才建议显式覆盖。
 
+### 4.5 `keep-position-ids` 分支的 canonical adaptive 54-run plan
+
+当前分支已经补上一份单策略全矩阵 plan：
+
+```text
+entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml
+```
+
+它的固定约束是：
+
+- strategy: `sparsevlm_adaptive_stratified`
+- datasets: `gqa` / `mme` / `pope`
+- prune layers: `1` / `2` / `3`
+- prune ratios: `0.2` / `0.3` / `0.4` / `0.5` / `0.6` / `0.7`
+- total jobs: `54`
+- pool size: `12`
+- retry budget: `ceil(54 * 0.1) = 6`
+
+推荐启动顺序：
+
+```bash
+source /data/liuyu/anaconda3/etc/profile.d/conda.sh
+conda activate llava
+
+python entropy_exp/scripts/run_scheduler.py \
+  --plan entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml \
+  --dry-run
+
+python entropy_exp/scripts/run_scheduler.py \
+  --plan entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml
+```
+
+中断后恢复：
+
+```bash
+python entropy_exp/scripts/run_scheduler.py \
+  --state-dir entropy_exp/outputs/scheduler/keep-position-ids-sparsevlm-adaptive-stratified-full-matrix \
+  --resume
+```
+
+dry-run 至少应看到：
+
+- `Pool size: 12`
+- `Retry budget: 6`
+- `Planned jobs: 54`
+
+大矩阵跑完后，建议先从 scheduler `attempts/*.json` 精确收集 `status=completed` 的 `run_dir`，再做 `eval / summary`：
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+
+state_dir = Path("entropy_exp/outputs/scheduler/keep-position-ids-sparsevlm-adaptive-stratified-full-matrix")
+run_dirs = []
+for attempt_path in sorted((state_dir / "attempts").glob("job_*__try*.json")):
+    payload = json.loads(attempt_path.read_text(encoding="utf-8"))
+    if payload.get("status") == "completed" and payload.get("run_dir"):
+        run_dirs.append(payload["run_dir"])
+
+for run_dir in dict.fromkeys(run_dirs):
+    print(run_dir)
+PY
+```
+
+完整的结果整理与汇总流程（含批量补评测、生成 `summary.csv`、提取 `layer × ratio` 矩阵）统一参考 [`RESULTS_WORKFLOW.md`](./RESULTS_WORKFLOW.md)。
+
+如果存在 `failed_final`，优先使用 `entropy_exp/scripts/build_recovery_plan_from_scheduler_state.py` 生成 recovery plan，而不是手工重拼命令。
+
 ## 5. GPU 选择与并发语义
 
 当前 GPU 选择逻辑来自 `collect_average_gpu_free_mib()` 和 `select_gpu_for_dispatch()`：
@@ -389,7 +459,7 @@ nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits
 补充说明：
 
 - `pool_size` 是**全局**最多同时 running 的 job 数
-- `pool_size=10` 的真实含义是“整个 scheduler 最多 10 个 running”，**不是**“每张卡 5 个任务”
+- `pool_size=12` 的真实含义是“整个 scheduler 最多 12 个 running”，**不是**“每张卡 6 个任务”
 - v1 只有“显存门槛 + max_free”这一套派发逻辑，没有每卡额度表
 - v1 只对“本轮刚刚派发但 `nvidia-smi` 还没反映出来”的新任务做临时显存预留
 
@@ -513,7 +583,7 @@ entropy_exp/outputs/runs/
 
 ```yaml
 environment:
-  conda_sh: "/home/liuyu/miniconda3/etc/profile.d/conda.sh"
+  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
   conda_env: "llava"
 ```
 

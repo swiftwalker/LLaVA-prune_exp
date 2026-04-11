@@ -181,6 +181,33 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(jobs[0].strategy, "sparsevlm_adaptive_stratified")
         self.assertEqual(jobs[0].run_prefix, "mme_sparsevlm_adaptive_stratified_l2_r0p4__")
 
+    def test_real_adaptive_full_matrix_plan_has_expected_grid(self):
+        plan_path = ROOT_DIR / "entropy_exp" / "plans" / "keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml"
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+
+        self.assertEqual(plan.pool_size, 12)
+        self.assertEqual(plan.environment.conda_sh, "/data/liuyu/anaconda3/etc/profile.d/conda.sh")
+        self.assertEqual(len(plan.experiments), 54)
+        self.assertEqual(len(jobs), 54)
+        self.assertTrue(all(job.strategy == "sparsevlm_adaptive_stratified" for job in jobs))
+        self.assertTrue(all("--no-auto-gpu" in build_run_command(job) for job in jobs))
+        self.assertEqual({job.dataset for job in jobs}, {"gqa", "mme", "pope"})
+
+        layers = set()
+        ratios = set()
+        for job in jobs:
+            for override in job.extra_sets:
+                if override.startswith("pruning.prune_layers="):
+                    layers.update(yaml.safe_load(override.split("=", 1)[1]))
+                if override.startswith("pruning.prune_ratio="):
+                    ratios.update(round(value, 1) for value in yaml.safe_load(override.split("=", 1)[1]))
+
+        self.assertEqual(layers, {1, 2, 3})
+        self.assertEqual(ratios, {0.2, 0.3, 0.4, 0.5, 0.6, 0.7})
+        self.assertEqual(jobs[0].run_prefix, "gqa_sparsevlm_adaptive_stratified_l1_r0p2__")
+        self.assertEqual(jobs[-1].run_prefix, "pope_sparsevlm_adaptive_stratified_l3_r0p7__")
+
     def test_resolve_conda_activate_target_uses_same_conda_root(self):
         target = resolve_conda_activate_target(
             "/home/liuyu/miniconda3/etc/profile.d/conda.sh",

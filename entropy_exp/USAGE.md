@@ -570,6 +570,24 @@ captures.h5
 
 > **注意**：注意力捕获数据量较大（每层 [32, ~60, 576] float16 ≈ 2.2MB），正式大规模实验时建议关闭或仅捕获关键层以节省磁盘空间。
 
+### 4.5 结果整理与汇总
+
+大矩阵实验跑完后，推荐统一走：
+
+```text
+scheduler attempts/*.json -> run_eval.sh -> summarize_results.py -> summary.csv
+```
+
+完整的跨策略、跨数据集结果整理流程统一写在 [`RESULTS_WORKFLOW.md`](./RESULTS_WORKFLOW.md) 中，包括：
+
+- 如何确认矩阵已经结束
+- 如何从 `attempts/*.json` 精确收集本轮 `run_dir`
+- 如何批量补 `eval/summary.json`
+- 如何生成 `summary.csv / summary.json / skipped_runs.json`
+- 如何从 `summary.csv` 提取 `layer × ratio` 全量结果矩阵
+
+对 scheduler 驱动的大矩阵，不建议直接用 `run_summary.sh runs` 扫全仓库。
+
 ---
 
 ## 五、常用实验流程

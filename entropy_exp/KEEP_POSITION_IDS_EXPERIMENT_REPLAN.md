@@ -141,3 +141,56 @@ entropy_exp/outputs/summary/keep_position_ids_all_strategies_all_datasets
 
 - 先把 **新分支自己的完整矩阵跑齐**
 - 再谈跨分支比较
+
+---
+
+## 7. Follow-Up：`sparsevlm_adaptive_stratified` 54-run 单策略矩阵
+
+在上面的 324-run 全策略矩阵之外，当前分支又补了一条单独的 follow-up 实验线：
+
+- strategy: `sparsevlm_adaptive_stratified`
+- datasets: `gqa` / `mme` / `pope`
+- prune layers: `1` / `2` / `3`
+- prune ratios: `0.2` / `0.3` / `0.4` / `0.5` / `0.6` / `0.7`
+- total jobs: `54`
+
+这条 follow-up 线不并入原来的 `324 runs` 统计，而是用 repo 内置 scheduler 单独调度：
+
+```text
+entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml
+```
+
+与旧的 `plan_batch_runs.py` 路线不同，这条矩阵采用 `scheduler-first`：
+
+- `pool_size: 12`
+- `gpu.min_free_gib: 16`
+- `tmux.session_name: sched_keep_position_ids_adaptive`
+- `environment.conda_sh: /data/liuyu/anaconda3/etc/profile.d/conda.sh`
+
+推荐执行顺序：
+
+```bash
+source /data/liuyu/anaconda3/etc/profile.d/conda.sh
+conda activate llava
+
+python entropy_exp/scripts/run_scheduler.py \
+  --plan entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml \
+  --dry-run
+
+python entropy_exp/scripts/run_scheduler.py \
+  --plan entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml
+```
+
+中断后恢复：
+
+```bash
+python entropy_exp/scripts/run_scheduler.py \
+  --state-dir entropy_exp/outputs/scheduler/keep-position-ids-sparsevlm-adaptive-stratified-full-matrix \
+  --resume
+```
+
+这份 plan 的作用是：
+
+- 给 `keep-position-ids` 分支补齐 adaptive stratified 的完整单策略网格
+- 保持与现有 `layer / ratio / dataset` 轴一致，便于后续和其他策略或旧分支结果对齐比较
+- 避免旧文档继续给出“当前分支只覆盖到 `sparsevlm`”的过时印象
