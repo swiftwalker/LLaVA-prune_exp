@@ -1,17 +1,8 @@
 """
-Attention Capture Hook for LLaVA entropy experiments.
+Secondary workflow helper for Phase 1 attention capture.
 
-Captures text→vision attention sub-matrices from all (or selected) decoder layers
-during inference. Supports two modes:
-  - "capture": pure observation, no pruning
-  - "prune":   (future) compute prune scores and return masks
-
-Usage:
-    hook = AttentionCaptureHook(model, config)
-    hook.enable()
-    outputs = model.generate(...)   # with output_attentions=True
-    hook.save_sample(sample_id, outputs.attentions, metadata)
-    hook.disable()
+This file belongs to the retained capture/analysis path and is no longer part
+of the primary pruning workflow.
 """
 
 import torch

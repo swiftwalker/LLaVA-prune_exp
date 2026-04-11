@@ -1,6 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Entropy Experiment: Analysis Pipeline
+# Secondary workflow retained for Phase 1 capture analysis.
 #
 # Usage:
 #   bash scripts/run_analysis.sh                            # analyze all HDF5 files in outputs/raw

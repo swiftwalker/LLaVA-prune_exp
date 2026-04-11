@@ -1,5 +1,9 @@
 # flops_exp Design
 
+Status: this file is a `secondary` design reference for the supported
+`flops_exp` workspace. Use [`README.md`](./README.md) as the operational entry
+point.
+
 ## Current Scope
 
 `flops_exp` is the FLOPs-specific companion workspace for saved pruning runs in

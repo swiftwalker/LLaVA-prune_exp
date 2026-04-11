@@ -1,6 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Entropy Experiment: Full Capture Pipeline
+# Secondary workflow retained for Phase 1 attention capture.
 #
 # Usage:
 #   bash scripts/run_capture.sh [dataset] [max_samples]

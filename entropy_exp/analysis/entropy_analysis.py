@@ -1,8 +1,8 @@
 """
-Offline entropy analysis: reads HDF5 attention data, computes metrics, outputs CSV.
+Secondary workflow: offline entropy analysis for retained Phase 1 captures.
 
-Usage:
-    python entropy_analysis.py --h5 outputs/raw/gqa_*.h5 --output outputs/processed/
+Reads HDF5 attention data, computes metrics, and writes CSV summaries for the
+capture/analysis path that is no longer the repository's primary workflow.
 """
 
 import argparse

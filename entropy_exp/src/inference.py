@@ -1,10 +1,9 @@
 """
-Inference pipeline for entropy experiment.
+Secondary workflow: Phase 1 attention-capture inference pipeline.
 
-Runs LLaVA inference on GQA/MME/POPE with attention capture.
-Outputs:
-  1. Answer JSONL files (compatible with existing eval scripts)
-  2. HDF5 files with per-layer text→vision attention sub-matrices
+This module is retained for the historical entropy-analysis path. It is not the
+supported mainline pruning entrypoint; use `prune_inference.py` for the current
+pruning workflow.
 """
 
 import argparse

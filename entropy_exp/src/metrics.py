@@ -1,8 +1,8 @@
 """
-Entropy and attention distribution metrics for entropy experiment.
+Secondary workflow metrics for the retained Phase 1 entropy-analysis path.
 
-Computes Shannon entropy, Rényi entropy, Gini coefficient, and Top-K concentration
-from text→vision attention sub-matrices or prune scores.
+These utilities remain available for capture/analysis experiments, but they are
+not part of the primary pruning-runtime entrypoint.
 """
 
 import numpy as np

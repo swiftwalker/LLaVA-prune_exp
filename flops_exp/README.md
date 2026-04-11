@@ -75,7 +75,7 @@ Stats-based example:
 ```bash
 STATS_DIR="$(bash flops_exp/scripts/run_text_stats.sh --dataset mme --sample-limit 8 | tail -n 1)"
 bash flops_exp/scripts/run_flops.sh \
-  --run-dir entropy_exp/outputs/runs/mme_attn_score_20260312_141401 \
+  --run-dir entropy_exp/outputs/runs/attn_score/mme/mme_attn_score_l1_r0p2__20260410_123456_000001 \
   --stats-json "$STATS_DIR/summary.json"
 ```
 
@@ -83,7 +83,7 @@ Fixed-length example:
 
 ```bash
 bash flops_exp/scripts/run_flops.sh \
-  --run-dir entropy_exp/outputs/runs/mme_baseline_20260312_180039 \
+  --run-dir entropy_exp/outputs/runs/baseline/mme/mme_baseline_l1_r0__20260410_123456_000001 \
   --fixed-text-len 32
 ```
 
@@ -97,7 +97,7 @@ bash flops_exp/scripts/run_flops.sh \
 ```bash
 bash flops_exp/scripts/run_all.sh \
   mme \
-  entropy_exp/outputs/runs/mme_attn_score_20260312_141401 \
+  entropy_exp/outputs/runs/attn_score/mme/mme_attn_score_l1_r0p2__20260410_123456_000001 \
   8
 ```
 

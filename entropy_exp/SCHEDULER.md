@@ -8,6 +8,8 @@
 - 当前实现边界与排查方法
 - 新策略如何接入 scheduler 生态
 
+仓库层面的 supported / secondary / archived 路径说明，统一参考 [`../docs/REPO_LAYOUT.md`](../docs/REPO_LAYOUT.md)。
+
 ## 1. 职责边界
 
 Scheduler **负责**：

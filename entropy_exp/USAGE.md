@@ -54,6 +54,8 @@ bash entropy_exp/scripts/run_prune.sh attn_score all
 
 批量调度、`tmux` 恢复、plan YAML 写法和 scheduler 限制统一参考 [SCHEDULER.md](./SCHEDULER.md)。本页只覆盖单次 pruning 命令与配置说明。
 
+纯注意力捕获与离线 entropy 分析仍然保留，但已降级为次级工作流，统一参考 [`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)。
+
 **参数说明：**
 
 | 位置 | 参数 | 可选值 | 说明 |
@@ -457,22 +459,15 @@ bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
 - `keep_indices [K]`：保留 token 索引，方便可视化
 - 大规模正式实验只看精度时可关闭以减小体积
 
-### 3.2 纯注意力捕获（Phase 1，entropy-exp 分支功能）
+### 3.2 纯注意力捕获（次级 workflow）
 
-如果只想捕获全层注意力数据（不做剪枝），使用 `configs/default.yaml` 配合 `inference.py`：
+如果你需要的是旧的 Phase 1 纯注意力捕获和离线 entropy 分析路径，而不是当前 pruning 主线，请直接参考 [`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)。
 
-```bash
-# 捕获 MME 前 10 个样本的全部 32 层 attention
-python entropy_exp/src/inference.py \
-    --config entropy_exp/configs/default.yaml \
-    --dataset mme \
-    --max-samples 10
+当前主线说明：
 
-# 或使用脚本
-bash entropy_exp/scripts/run_capture.sh mme 10
-```
-
-此模式使用 `AttentionCaptureHook`，输出 HDF5 文件到 `outputs/raw/`。
+- pruning benchmark / strategy 对比：本页 + [`SCHEDULER.md`](./SCHEDULER.md)
+- matrix 结果整理：[`RESULTS_WORKFLOW.md`](./RESULTS_WORKFLOW.md)
+- 纯 attention capture / HDF5 离线分析：[`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)
 
 ---
 
@@ -569,6 +564,8 @@ captures.h5
 - Phase 1 的分析脚本可直接处理此文件
 
 > **注意**：注意力捕获数据量较大（每层 [32, ~60, 576] float16 ≈ 2.2MB），正式大规模实验时建议关闭或仅捕获关键层以节省磁盘空间。
+
+`captures.h5` 与纯 attention capture 的完整说明已经从主流程中降级，详见 [`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)。
 
 ### 4.5 结果整理与汇总
 
