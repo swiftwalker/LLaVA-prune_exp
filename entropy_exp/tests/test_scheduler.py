@@ -236,6 +236,49 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(jobs[0].run_prefix, "gqa_sparsevlm_adaptive_stratified_l1_r0p2__")
         self.assertEqual(jobs[-1].run_prefix, "pope_sparsevlm_adaptive_stratified_l3_r0p7__")
 
+    def test_real_patch_distribution_full_matrix_plan_has_expected_grid(self):
+        plan_path = ROOT_DIR / "entropy_exp" / "plans" / "gqa_textvqa_patch_distribution_full_matrix.yaml"
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+
+        self.assertEqual(plan.pool_size, 12)
+        self.assertEqual(plan.tmux.session_name, "sched_gqa_tv_patchdist")
+        self.assertEqual(len(plan.experiments), 110)
+        self.assertEqual(len(jobs), 110)
+        self.assertEqual({job.dataset for job in jobs}, {"gqa", "textvqa"})
+        self.assertTrue(all("--no-auto-gpu" in build_run_command(job) for job in jobs))
+
+        baseline_jobs = [job for job in jobs if job.strategy == "baseline"]
+        self.assertEqual(len(baseline_jobs), 2)
+        self.assertEqual(baseline_jobs[0].run_prefix, "gqa_baseline_")
+        self.assertEqual(baseline_jobs[1].run_prefix, "textvqa_baseline_")
+
+        overrides = {override for job in jobs for override in job.extra_sets}
+        self.assertIn("capture.save_attention=false", overrides)
+        self.assertIn("capture.save_importance_scores=false", overrides)
+        self.assertIn("capture.save_keep_indices=true", overrides)
+        self.assertIn("pruning.sparsevlm_adaptive_stratified.patch_per_row=24", overrides)
+
+        pruning_jobs = [job for job in jobs if job.strategy != "baseline"]
+        layers = set()
+        ratios = set()
+        strategies = {job.strategy for job in pruning_jobs}
+        for job in pruning_jobs:
+            for override in job.extra_sets:
+                if override.startswith("pruning.prune_layers="):
+                    layers.update(yaml.safe_load(override.split("=", 1)[1]))
+                if override.startswith("pruning.prune_ratio="):
+                    value = yaml.safe_load(override.split("=", 1)[1])
+                    if isinstance(value, list):
+                        ratios.update(round(entry, 1) for entry in value)
+                    else:
+                        ratios.add(round(value, 1))
+
+        self.assertEqual(strategies, {"random", "sparsevlm", "sparsevlm_adaptive_stratified"})
+        self.assertEqual(layers, {1, 2, 3})
+        self.assertEqual(ratios, {0.2, 0.3, 0.4, 0.5, 0.6, 0.7})
+        self.assertEqual(jobs[-1].run_prefix, "textvqa_sparsevlm_adaptive_stratified_l3_r0p7__")
+
     def test_resolve_conda_activate_target_uses_same_conda_root(self):
         target = resolve_conda_activate_target(
             "/home/liuyu/miniconda3/etc/profile.d/conda.sh",

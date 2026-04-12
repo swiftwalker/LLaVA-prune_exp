@@ -60,6 +60,12 @@ ensure_python_bin() {
         return 0
     fi
 
+    # Prefer the currently activated conda environment's Python
+    if [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+        PYTHON_BIN="${CONDA_PREFIX}/bin/python"
+        return 0
+    fi
+
     local home_python
     home_python="$(preferred_llava_python_path)"
     if [[ -x "$home_python" ]]; then

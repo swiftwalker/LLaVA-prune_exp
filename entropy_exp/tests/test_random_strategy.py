@@ -42,6 +42,8 @@ class RandomStrategyTests(unittest.TestCase):
         self.assertEqual(info["num_pruned"], 5)
         self.assertTrue(torch.equal(keep_indices, keep_indices.sort().values))
         self.assertTrue(torch.all((keep_indices >= 0) & (keep_indices < 10)))
+        self.assertEqual(len(info["pruned_indices"]), 5)
+        self.assertTrue(all(idx not in info["keep_indices"] for idx in info["pruned_indices"]))
 
     def test_zero_prune_ratio_keeps_all_tokens(self):
         strategy = RandomStrategy({"prune_ratio_map": {1: 0.0}})
@@ -54,6 +56,7 @@ class RandomStrategyTests(unittest.TestCase):
         self.assertEqual(len(keep_indices), 6)
         self.assertEqual(info["num_pruned"], 0)
         self.assertEqual(info["keep_indices"].tolist(), list(range(6)))
+        self.assertEqual(info["pruned_indices"].tolist(), [])
 
 
 if __name__ == "__main__":

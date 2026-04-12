@@ -103,6 +103,7 @@ class PruneStrategy(ABC):
         # Keep the top-num_keep tokens by importance (preserve spatial order)
         _, sorted_indices = importance_scores.sort(descending=True)
         keep_indices = sorted_indices[:num_keep].sort().values
+        pruned_indices = sorted_indices[num_keep:].sort().values
 
         info = {
             "prune_ratio": prune_ratio,
@@ -111,6 +112,7 @@ class PruneStrategy(ABC):
             "num_pruned": num_prune,
             "importance_scores": importance_scores.detach().cpu().numpy(),
             "keep_indices": keep_indices.detach().cpu().numpy(),
+            "pruned_indices": pruned_indices.detach().cpu().numpy(),
         }
         return keep_indices, info
 

@@ -62,6 +62,9 @@ entropy_exp/outputs/plans/
 entropy_exp/outputs/summary/
 entropy_exp/plans/*
 !entropy_exp/plans/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix.yaml
+!entropy_exp/plans/gqa_textvqa_patch_distribution_full_matrix.yaml
+!entropy_exp/plans/gqa_patch_distribution_half_local.yaml
+!entropy_exp/plans/textvqa_patch_distribution_half_remote.yaml
 
 # FLOPs experiment — generated outputs (keep placeholder .gitkeep files)
 flops_exp/outputs/batch_flops/*

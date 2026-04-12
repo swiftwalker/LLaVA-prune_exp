@@ -21,7 +21,7 @@ import random
 import time
 import datetime
 import yaml
-from typing import Optional
+from typing import Any, Optional
 os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 # Limit PyTorch CPU threads to avoid contention across concurrent experiments.
 # Default is ALL cores (192 on this machine); N experiments = N*192 threads
@@ -128,6 +128,121 @@ def build_text_special_token_mask(tokenizer, text_token_ids: torch.Tensor) -> to
     ids = text_token_ids.tolist()
     mask = [int(token_id) in special_ids for token_id in ids]
     return torch.tensor(mask, dtype=torch.bool, device=text_token_ids.device)
+
+
+def _serialize_optional_sequence(value: Any) -> Any:
+    if value is None:
+        return None
+    if torch.is_tensor(value):
+        return value.detach().cpu().tolist()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _set_optional_layer_field(sample_stats: dict, field_name: str, value: Any) -> None:
+    serialized = _serialize_optional_sequence(value)
+    if serialized is not None:
+        sample_stats[field_name] = serialized
+
+
+def append_layer_stats_fields(
+    sample_stats: dict,
+    layer_idx: int,
+    layer_info: dict,
+    *,
+    save_importance: bool,
+    save_indices: bool,
+) -> None:
+    sample_stats[f"layer_{layer_idx}_ratio"] = layer_info["prune_ratio"]
+    sample_stats[f"layer_{layer_idx}_before"] = layer_info["num_visual_before"]
+    sample_stats[f"layer_{layer_idx}_after"] = layer_info["num_visual_after"]
+    sample_stats[f"layer_{layer_idx}_pruned"] = layer_info["num_pruned"]
+
+    if save_importance:
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_importance",
+            layer_info.get("importance_scores"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_text_relevance_scores",
+            layer_info.get("text_relevance_scores"),
+        )
+
+    if not save_indices:
+        return
+
+    keep_indices = layer_info.get("keep_indices")
+    pruned_indices = layer_info.get("pruned_indices")
+    keep_patch_indices = layer_info.get("keep_patch_indices", keep_indices)
+    pruned_patch_indices = layer_info.get("pruned_patch_indices", pruned_indices)
+
+    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_keep_indices", keep_indices)
+    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_pruned_indices", pruned_indices)
+    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_keep_patch_indices", keep_patch_indices)
+    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_pruned_patch_indices", pruned_patch_indices)
+    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_rater_indices", layer_info.get("rater_indices"))
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_current_patch_indices",
+        layer_info.get("current_patch_indices"),
+    )
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_high_keep_indices",
+        layer_info.get("high_keep_indices"),
+    )
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_low_keep_indices",
+        layer_info.get("low_keep_indices"),
+    )
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_high_keep_patch_indices",
+        layer_info.get("high_keep_patch_indices"),
+    )
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_low_keep_patch_indices",
+        layer_info.get("low_keep_patch_indices"),
+    )
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_stratum_selected_counts",
+        layer_info.get("stratum_selected_counts"),
+    )
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_stratum_candidate_counts",
+        layer_info.get("stratum_candidate_counts"),
+    )
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_stratum_deficits",
+        layer_info.get("stratum_deficits"),
+    )
+    _set_optional_layer_field(
+        sample_stats,
+        f"layer_{layer_idx}_stratum_quotas",
+        layer_info.get("stratum_quotas"),
+    )
+
+    for key in (
+        "target_keep",
+        "strategy_keep_high",
+        "strategy_keep_low",
+        "grid_size",
+        "patch_per_row",
+        "high_ratio",
+        "intra_stratum_mode",
+    ):
+        if key in layer_info and layer_info[key] is not None:
+            sample_stats[f"layer_{layer_idx}_{key}"] = _serialize_optional_sequence(layer_info[key])
 
 
 def load_config(config_path: str) -> dict:
@@ -629,21 +744,13 @@ def run_prune_inference(
             # Skip capture-only layers (no pruning stats)
             if "prune_ratio" not in linfo:
                 continue
-            sample_stats[f"layer_{layer_idx}_ratio"] = linfo["prune_ratio"]
-            sample_stats[f"layer_{layer_idx}_before"] = linfo["num_visual_before"]
-            sample_stats[f"layer_{layer_idx}_after"] = linfo["num_visual_after"]
-            sample_stats[f"layer_{layer_idx}_pruned"] = linfo["num_pruned"]
-
-            if save_importance:
-                sample_stats[f"layer_{layer_idx}_importance"] = linfo["importance_scores"].tolist()
-                if "text_relevance_scores" in linfo:
-                    sample_stats[f"layer_{layer_idx}_text_relevance_scores"] = linfo["text_relevance_scores"].tolist()
-            if save_indices:
-                sample_stats[f"layer_{layer_idx}_keep_indices"] = linfo["keep_indices"].tolist()
-                if "rater_indices" in linfo:
-                    sample_stats[f"layer_{layer_idx}_rater_indices"] = linfo["rater_indices"].tolist()
-                if "pruned_indices" in linfo:
-                    sample_stats[f"layer_{layer_idx}_pruned_indices"] = linfo["pruned_indices"].tolist()
+            append_layer_stats_fields(
+                sample_stats,
+                layer_idx,
+                linfo,
+                save_importance=save_importance,
+                save_indices=save_indices,
+            )
 
         # Write attention captures to HDF5 (same format as Phase 1)
         if h5_file is not None:

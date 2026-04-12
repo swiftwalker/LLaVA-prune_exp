@@ -544,6 +544,12 @@ bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_attn_score
 | `layer_{N}_pruned` | int | 第 N 层被剪掉的 token 数 |
 | `layer_{N}_importance` | list[float] | （`save_importance_scores` 开启时）每个 visual token 的重要性分数 |
 | `layer_{N}_keep_indices` | list[int] | （`save_keep_indices` 开启时）被保留 token 的索引 |
+| `layer_{N}_pruned_indices` | list[int] | （`save_keep_indices` 开启时）被剪掉 token 的索引 |
+| `layer_{N}_keep_patch_indices` | list[int] | patch 空间中的保留索引；单层物理剪枝时通常与 `keep_indices` 一致 |
+| `layer_{N}_pruned_patch_indices` | list[int] | patch 空间中的被剪索引 |
+| `layer_{N}_high_keep_patch_indices` | list[int] | adaptive stratified 中高分直接保留的 patch 索引 |
+| `layer_{N}_low_keep_patch_indices` | list[int] | adaptive stratified 中低分补偿保留的 patch 索引 |
+| `layer_{N}_stratum_quotas` | list[int] | adaptive stratified 的 strata 配额分布 |
 
 ### 4.4 captures.h5 — 注意力中间变量捕获（HDF5）
 
@@ -586,6 +592,37 @@ scheduler attempts/*.json -> run_eval.sh -> summarize_results.py -> summary.csv
 - 如何从 `summary.csv` 提取 `layer × ratio` 全量结果矩阵
 
 对 scheduler 驱动的大矩阵，不建议直接用 `run_summary.sh runs` 扫全仓库。
+
+### 4.6 Patch 分布可视化捕获
+
+如果目标是看 **剪枝后 patch 空间分布**，推荐走轻量级 `stats.jsonl` 主线，而不是对整套矩阵开启 `captures.h5`：
+
+```bash
+python entropy_exp/scripts/run_scheduler.py \
+    --plan entropy_exp/plans/gqa_textvqa_patch_distribution_full_matrix.yaml \
+    --dry-run
+
+python entropy_exp/scripts/run_scheduler.py \
+    --plan entropy_exp/plans/gqa_textvqa_patch_distribution_full_matrix.yaml
+
+python entropy_exp/src/patch_distribution_report.py \
+    --state-dir entropy_exp/outputs/scheduler/gqa-textvqa-patch-distribution-full-matrix
+```
+
+这套 canonical plan 固定使用：
+
+- `capture.save_attention=false`
+- `capture.save_importance_scores=false`
+- `capture.save_keep_indices=true`
+
+分析脚本会从 `attempts/*.json` 精确收集本轮 completed run，输出：
+
+- `manifest/completed_run_dirs.json`
+- `tables/per_config_patch_summary.csv`
+- `heatmaps/{dataset}/{strategy}/...`
+- `compare/{dataset}/...`
+
+适合直接比较 `baseline / random / sparsevlm / sparsevlm_adaptive_stratified` 在 `GQA + TextVQA` 上的全样本、全矩阵 patch 保留分布。
 
 ---
 

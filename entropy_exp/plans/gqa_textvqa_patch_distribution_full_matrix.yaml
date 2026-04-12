@@ -1,0 +1,827 @@
+version: 1
+label: "gqa-textvqa-patch-distribution-full-matrix"
+pool_size: 12
+
+gpu:
+  min_free_gib: 16
+  selection: "max_free"
+  sample_seconds: 3
+  poll_interval_seconds: 15
+
+retry:
+  budget_ratio: 0.1
+  rounding: "ceil"
+
+tmux:
+  session_name: "sched_gqa_tv_patchdist"
+  log_dir: "entropy_exp/outputs/logs/tmux"
+
+environment:
+  conda_sh: "/data/liuyu/anaconda3/etc/profile.d/conda.sh"
+  conda_env: "llava"
+
+defaults:
+  max_samples: null
+  extra_sets:
+    - "inference.seed=42"
+    - "pruning.layer_selection=fixed"
+    - "capture.save_attention=false"
+    - "capture.save_importance_scores=false"
+    - "capture.save_keep_indices=true"
+    - "pruning.sparsevlm.fallback_topk=4"
+    - "pruning.sparsevlm.exclude_special_tokens=true"
+    - "pruning.sparsevlm.min_visual_tokens_after_prune=16"
+    - "pruning.sparsevlm_adaptive_stratified.fallback_topk=4"
+    - "pruning.sparsevlm_adaptive_stratified.exclude_special_tokens=true"
+    - "pruning.sparsevlm_adaptive_stratified.min_visual_tokens_after_prune=16"
+    - "pruning.sparsevlm_adaptive_stratified.high_ratio=0.7"
+    - "pruning.sparsevlm_adaptive_stratified.grid_size=6"
+    - "pruning.sparsevlm_adaptive_stratified.patch_per_row=24"
+    - "pruning.sparsevlm_adaptive_stratified.intra_stratum_mode=random"
+
+experiments:
+  # GQA baseline reference (1 job)
+  - name: "gqa_baseline_ref"
+    dataset: "gqa"
+    strategies:
+      - "baseline"
+    extra_sets:
+      - "pruning.prune_layers=[1,2,3]"
+      - "pruning.prune_ratio=[0.0]"
+
+  # GQA random (18 jobs)
+  - name: "gqa_rnd_l1_r0p2"
+    dataset: "gqa"
+    strategies: &gqa_rnd
+      - "random"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_rnd_l1_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_rnd_l1_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_rnd_l1_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_rnd_l1_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_rnd_l1_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "gqa_rnd_l2_r0p2"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_rnd_l2_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_rnd_l2_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_rnd_l2_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_rnd_l2_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_rnd_l2_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "gqa_rnd_l3_r0p2"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_rnd_l3_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_rnd_l3_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_rnd_l3_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_rnd_l3_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_rnd_l3_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
+
+  # GQA sparsevlm (18 jobs)
+  - name: "gqa_svm_l1_r0p2"
+    dataset: "gqa"
+    strategies: &gqa_svm
+      - "sparsevlm"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_svm_l1_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_svm_l1_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_svm_l1_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_svm_l1_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_svm_l1_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "gqa_svm_l2_r0p2"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_svm_l2_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_svm_l2_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_svm_l2_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_svm_l2_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_svm_l2_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "gqa_svm_l3_r0p2"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_svm_l3_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_svm_l3_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_svm_l3_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_svm_l3_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_svm_l3_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
+
+  # GQA sparsevlm_adaptive_stratified (18 jobs)
+  - name: "gqa_adp_l1_r0p2"
+    dataset: "gqa"
+    strategies: &gqa_adp
+      - "sparsevlm_adaptive_stratified"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_adp_l1_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_adp_l1_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_adp_l1_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_adp_l1_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_adp_l1_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "gqa_adp_l2_r0p2"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_adp_l2_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_adp_l2_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_adp_l2_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_adp_l2_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_adp_l2_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "gqa_adp_l3_r0p2"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "gqa_adp_l3_r0p3"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "gqa_adp_l3_r0p4"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "gqa_adp_l3_r0p5"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "gqa_adp_l3_r0p6"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "gqa_adp_l3_r0p7"
+    dataset: "gqa"
+    strategies: *gqa_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
+
+  # TEXTVQA baseline reference (1 job)
+  - name: "tv_baseline_ref"
+    dataset: "textvqa"
+    strategies:
+      - "baseline"
+    extra_sets:
+      - "pruning.prune_layers=[1,2,3]"
+      - "pruning.prune_ratio=[0.0]"
+
+  # TEXTVQA random (18 jobs)
+  - name: "tv_rnd_l1_r0p2"
+    dataset: "textvqa"
+    strategies: &tv_rnd
+      - "random"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_rnd_l1_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_rnd_l1_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_rnd_l1_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_rnd_l1_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_rnd_l1_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "tv_rnd_l2_r0p2"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_rnd_l2_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_rnd_l2_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_rnd_l2_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_rnd_l2_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_rnd_l2_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "tv_rnd_l3_r0p2"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_rnd_l3_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_rnd_l3_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_rnd_l3_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_rnd_l3_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_rnd_l3_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_rnd
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
+
+  # TEXTVQA sparsevlm (18 jobs)
+  - name: "tv_svm_l1_r0p2"
+    dataset: "textvqa"
+    strategies: &tv_svm
+      - "sparsevlm"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_svm_l1_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_svm_l1_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_svm_l1_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_svm_l1_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_svm_l1_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "tv_svm_l2_r0p2"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_svm_l2_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_svm_l2_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_svm_l2_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_svm_l2_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_svm_l2_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "tv_svm_l3_r0p2"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_svm_l3_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_svm_l3_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_svm_l3_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_svm_l3_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_svm_l3_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_svm
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
+
+  # TEXTVQA sparsevlm_adaptive_stratified (18 jobs)
+  - name: "tv_adp_l1_r0p2"
+    dataset: "textvqa"
+    strategies: &tv_adp
+      - "sparsevlm_adaptive_stratified"
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_adp_l1_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_adp_l1_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_adp_l1_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_adp_l1_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_adp_l1_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[1]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "tv_adp_l2_r0p2"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_adp_l2_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_adp_l2_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_adp_l2_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_adp_l2_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_adp_l2_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[2]"
+      - "pruning.prune_ratio=[0.7]"
+
+  - name: "tv_adp_l3_r0p2"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.2]"
+
+  - name: "tv_adp_l3_r0p3"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.3]"
+
+  - name: "tv_adp_l3_r0p4"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.4]"
+
+  - name: "tv_adp_l3_r0p5"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.5]"
+
+  - name: "tv_adp_l3_r0p6"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.6]"
+
+  - name: "tv_adp_l3_r0p7"
+    dataset: "textvqa"
+    strategies: *tv_adp
+    extra_sets:
+      - "pruning.prune_layers=[3]"
+      - "pruning.prune_ratio=[0.7]"
