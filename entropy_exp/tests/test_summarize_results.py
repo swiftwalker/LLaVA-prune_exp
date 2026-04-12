@@ -157,6 +157,47 @@ class SummarizeResultsPopeTests(unittest.TestCase):
             self.assertAlmostEqual(rows[0]["textvqa_accuracy"], 58.7)
             self.assertEqual(rows[0]["scienceqa_accuracy"], "")
 
+    def test_extract_record_prefers_run_meta_strategy_for_baseline_runs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "textvqa_baseline_l1_r0__demo"
+            eval_dir = run_dir / "eval"
+            eval_dir.mkdir(parents=True)
+
+            config = {
+                "_run_meta": {
+                    "dataset": "textvqa",
+                    "run_mode": "baseline",
+                    "timestamp": "demo",
+                    "strategy": "baseline",
+                },
+                "pruning": {
+                    "strategy": "attn_score",
+                    "layer_selection": "fixed",
+                    "prune_layers": [1],
+                    "prune_ratio": 0.0,
+                    "v_token_num": 576,
+                    "max_samples": None,
+                    "entropy": {},
+                },
+            }
+            metrics = {"accuracy": 58.2}
+
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+            (eval_dir / "summary.json").write_text(
+                json.dumps({"dataset": "textvqa", "metrics": metrics}, indent=2),
+                encoding="utf-8",
+            )
+
+            record, skipped = extract_record(run_dir)
+            self.assertIsNone(skipped)
+            self.assertEqual(record["strategy"], "baseline")
+
+            rows = build_csv_rows([record])
+            self.assertEqual(rows[0]["strategy"], "baseline")
+
 
 if __name__ == "__main__":
     unittest.main()

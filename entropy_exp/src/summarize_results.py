@@ -111,7 +111,7 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
         "dataset": dataset,
         "run_mode": run_meta.get("run_mode"),
         "timestamp": run_meta.get("timestamp"),
-        "strategy": pruning.get("strategy"),
+        "strategy": run_meta.get("strategy") or pruning.get("strategy"),
         "layer_selection": pruning.get("layer_selection"),
         "prune_layers": pruning.get("prune_layers"),
         "effective_prune_layers": pruning.get("effective_prune_layers"),
