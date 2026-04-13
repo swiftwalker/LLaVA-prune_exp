@@ -81,6 +81,11 @@ def primary_metric(dataset: str, metrics: dict[str, Any]) -> tuple[str, Any]:
     return "unknown", None
 
 
+def extract_adaptive_hparams(pruning: dict[str, Any]) -> tuple[Any, Any]:
+    adaptive_cfg = pruning.get("sparsevlm_adaptive_stratified", {}) or {}
+    return adaptive_cfg.get("grid_size"), adaptive_cfg.get("high_ratio")
+
+
 def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
     config_file = run_dir / "config.yaml"
     eval_summary_file = run_dir / "eval" / "summary.json"
@@ -102,6 +107,7 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
     metrics = eval_summary.get("metrics", {}) or {}
     dataset = eval_summary.get("dataset") or run_meta.get("dataset") or ""
     metric_name, metric_value = primary_metric(dataset, metrics)
+    adaptive_grid_size, adaptive_high_ratio = extract_adaptive_hparams(pruning)
 
     record = {
         "run_name": run_dir.name,
@@ -134,6 +140,8 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
         "gqa_accuracy": metrics.get("accuracy") if dataset == "gqa" else None,
         "textvqa_accuracy": metrics.get("accuracy") if dataset == "textvqa" else None,
         "scienceqa_accuracy": metrics.get("accuracy") if dataset == "scienceqa" else None,
+        "adaptive_grid_size": adaptive_grid_size,
+        "adaptive_high_ratio": adaptive_high_ratio,
         "pruning_config": pruning,
         "eval_metrics": metrics,
     }
@@ -185,6 +193,8 @@ def build_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "gqa_accuracy": csv_value(record["gqa_accuracy"]),
                 "textvqa_accuracy": csv_value(record["textvqa_accuracy"]),
                 "scienceqa_accuracy": csv_value(record["scienceqa_accuracy"]),
+                "adaptive_grid_size": csv_value(record["adaptive_grid_size"]),
+                "adaptive_high_ratio": csv_value(record["adaptive_high_ratio"]),
                 "pruning_config_json": json_string(record["pruning_config"]),
             }
         )
@@ -219,6 +229,8 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "gqa_accuracy",
         "textvqa_accuracy",
         "scienceqa_accuracy",
+        "adaptive_grid_size",
+        "adaptive_high_ratio",
         "pruning_config_json",
     ]
     with path.open("w", encoding="utf-8", newline="") as f:

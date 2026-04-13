@@ -76,6 +76,7 @@ class TmuxConfig:
 class EnvironmentConfig:
     conda_sh: str
     conda_env: str
+    extra_env: List[str]
 
 
 @dataclass(frozen=True)
@@ -144,6 +145,23 @@ def resolve_conda_activate_target(conda_sh: str, conda_env: str) -> str:
     except IndexError:
         return env_text
     return str(conda_root / "envs" / env_text)
+
+
+def validate_env_assignments(values: List[str], field_name: str) -> List[str]:
+    validated: List[str] = []
+    for raw_value in values:
+        if "=" not in raw_value:
+            raise SchedulerError(f"{field_name} entries must be KEY=VALUE assignments: {raw_value!r}")
+        key, _value = raw_value.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise SchedulerError(f"{field_name} entries must include a variable name: {raw_value!r}")
+        if not (key[0].isalpha() or key[0] == "_"):
+            raise SchedulerError(f"{field_name} variable names must start with a letter or underscore: {raw_value!r}")
+        if any(not (char.isalnum() or char == "_") for char in key):
+            raise SchedulerError(f"{field_name} variable names may only contain letters, digits, and underscores: {raw_value!r}")
+        validated.append(f"{key}={raw_value.split('=', 1)[1]}")
+    return validated
 
 
 def ensure_list_of_strings(value: Any, field_name: str) -> List[str]:
@@ -230,19 +248,26 @@ def encode_run_list(values: Any) -> str:
 
 
 def build_run_prefix(dataset: str, strategy: str, extra_sets: Iterable[str]) -> str:
+    run_tag_suffix = parse_override_value(extra_sets, "output.run_tag_suffix")
+    tag = "baseline" if strategy == "baseline" else strategy
+    if run_tag_suffix is not None and str(run_tag_suffix).strip():
+        tag = f"{tag}_{sanitize_name(str(run_tag_suffix))}"
     if strategy == "baseline":
-        return f"{dataset}_baseline_"
+        return f"{dataset}_{tag}_"
     layers = parse_override_value(extra_sets, "pruning.prune_layers")
     ratios = parse_override_value(extra_sets, "pruning.prune_ratio")
     if not isinstance(layers, list) or not isinstance(ratios, list):
         raise SchedulerError(
             f"Job {dataset}/{strategy} is missing pruning.prune_layers or pruning.prune_ratio overrides"
         )
-    tag = "baseline" if strategy == "baseline" else strategy
     return f"{dataset}_{tag}_l{encode_run_list(layers)}_r{encode_run_list(ratios)}__"
 
 
 def build_window_base_name(dataset: str, strategy: str, extra_sets: Iterable[str]) -> str:
+    run_tag_suffix = parse_override_value(extra_sets, "output.run_tag_suffix")
+    strategy_label = strategy
+    if run_tag_suffix is not None and str(run_tag_suffix).strip():
+        strategy_label = f"{strategy}_{sanitize_name(str(run_tag_suffix))}"
     layers = parse_override_value(extra_sets, "pruning.prune_layers")
     ratios = parse_override_value(extra_sets, "pruning.prune_ratio")
     if not isinstance(layers, list) or not isinstance(ratios, list):
@@ -250,7 +275,7 @@ def build_window_base_name(dataset: str, strategy: str, extra_sets: Iterable[str
             f"Job {dataset}/{strategy} is missing pruning.prune_layers or pruning.prune_ratio overrides"
         )
     return sanitize_name(
-        f"{dataset}_{strategy}_l{encode_run_list(layers)}_r{encode_run_list(ratios)}"
+        f"{dataset}_{strategy_label}_l{encode_run_list(layers)}_r{encode_run_list(ratios)}"
     )
 
 
@@ -340,6 +365,10 @@ def load_scheduler_plan(plan_path: Path) -> SchedulerPlan:
     env_cfg = EnvironmentConfig(
         conda_sh=resolve_conda_sh_value(env_raw.get("conda_sh")),
         conda_env=str(env_raw.get("conda_env", DEFAULT_CONDA_ENV)).strip(),
+        extra_env=validate_env_assignments(
+            ensure_list_of_strings(env_raw.get("extra_env"), "environment.extra_env"),
+            "environment.extra_env",
+        ),
     )
     if not env_cfg.conda_env:
         raise SchedulerError("environment.conda_env must be provided")
@@ -861,6 +890,13 @@ def create_launcher_script(
     started_at = time.time()
     command_line = shlex.join(build_run_command(job))
     conda_activate_target = resolve_conda_activate_target(env_cfg.conda_sh, env_cfg.conda_env)
+    extra_env_lines = ""
+    if env_cfg.extra_env:
+        exports = []
+        for assignment in env_cfg.extra_env:
+            key, value = assignment.split("=", 1)
+            exports.append(f"  export {key}={shlex.quote(value)}")
+        extra_env_lines = "\n".join(exports) + "\n"
     content = f"""#!/usr/bin/env bash
 set -u
 JOB_EXIT_CODE=0
@@ -881,7 +917,7 @@ if [[ "$JOB_EXIT_CODE" -eq 0 ]]; then
 fi
 
 if [[ "$JOB_EXIT_CODE" -eq 0 ]]; then
-  export CUDA_VISIBLE_DEVICES={gpu}
+{extra_env_lines}  export CUDA_VISIBLE_DEVICES={gpu}
   {command_line}
   JOB_EXIT_CODE=$?
 fi

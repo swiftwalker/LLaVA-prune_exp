@@ -21,6 +21,7 @@ import random
 import time
 import datetime
 import yaml
+import re
 from typing import Any, Optional
 os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 # Limit PyTorch CPU threads to avoid contention across concurrent experiments.
@@ -343,6 +344,14 @@ def build_run_name(dataset_name: str, run_tag: str, prune_layers, prune_ratio, t
     return f"{dataset_name}_{run_tag}_{layers_part}_{ratio_part}__{timestamp}"
 
 
+def sanitize_run_tag_suffix(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._-")
+    return sanitized
+
+
 def _normalize_configured_prune_layers(value) -> list[int]:
     if isinstance(value, int):
         return [int(value)]
@@ -464,6 +473,9 @@ def run_prune_inference(
     # suffix so concurrent launches remain unique.
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_tag = "baseline" if run_mode == "baseline" else strategy_name
+    run_tag_suffix = sanitize_run_tag_suffix(output_cfg.get("run_tag_suffix"))
+    if run_tag_suffix:
+        run_tag = f"{run_tag}_{run_tag_suffix}"
     base_dir = resolve(output_cfg.get("base_dir", "entropy_exp/outputs"))
 
     base_run_name = build_run_name(

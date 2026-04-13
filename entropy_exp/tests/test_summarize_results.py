@@ -198,6 +198,58 @@ class SummarizeResultsPopeTests(unittest.TestCase):
             rows = build_csv_rows([record])
             self.assertEqual(rows[0]["strategy"], "baseline")
 
+    def test_extract_record_and_csv_rows_include_adaptive_hparams(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "gqa_sparsevlm_adaptive_stratified_l1_r0p2__demo"
+            eval_dir = run_dir / "eval"
+            eval_dir.mkdir(parents=True)
+
+            config = {
+                "_run_meta": {
+                    "dataset": "gqa",
+                    "run_mode": "prune",
+                    "timestamp": "demo",
+                    "strategy": "sparsevlm_adaptive_stratified",
+                },
+                "pruning": {
+                    "strategy": "sparsevlm_adaptive_stratified",
+                    "layer_selection": "fixed",
+                    "prune_layers": [1],
+                    "prune_ratio": [0.2],
+                    "v_token_num": 576,
+                    "max_samples": None,
+                    "entropy": {},
+                    "sparsevlm_adaptive_stratified": {
+                        "fallback_topk": 4,
+                        "exclude_special_tokens": True,
+                        "min_visual_tokens_after_prune": 16,
+                        "grid_size": 8,
+                        "high_ratio": 0.55,
+                        "patch_per_row": 24,
+                        "intra_stratum_mode": "random",
+                    },
+                },
+            }
+            metrics = {"accuracy": 61.2}
+
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+            (eval_dir / "summary.json").write_text(
+                json.dumps({"dataset": "gqa", "metrics": metrics}, indent=2),
+                encoding="utf-8",
+            )
+
+            record, skipped = extract_record(run_dir)
+            self.assertIsNone(skipped)
+            self.assertEqual(record["adaptive_grid_size"], 8)
+            self.assertAlmostEqual(record["adaptive_high_ratio"], 0.55)
+
+            rows = build_csv_rows([record])
+            self.assertEqual(rows[0]["adaptive_grid_size"], 8)
+            self.assertAlmostEqual(rows[0]["adaptive_high_ratio"], 0.55)
+
 
 if __name__ == "__main__":
     unittest.main()

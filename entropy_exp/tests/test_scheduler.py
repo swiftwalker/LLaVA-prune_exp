@@ -14,6 +14,8 @@ sys.path.insert(0, str(ROOT_DIR))
 from entropy_exp.src.scheduler import (
     build_progress_payload,
     build_run_command,
+    build_run_prefix,
+    build_window_base_name,
     compute_retry_budget,
     DEFAULT_CONDA_SH,
     expand_jobs,
@@ -144,6 +146,45 @@ class SchedulerPlanTests(unittest.TestCase):
         )
         plan = load_scheduler_plan(plan_path)
         self.assertEqual(plan.environment.conda_sh, str(DEFAULT_CONDA_SH))
+        self.assertEqual(plan.environment.extra_env, [])
+
+    def test_scheduler_accepts_environment_extra_env_assignments(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-extra-env",
+                "pool_size": 1,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {
+                    "conda_sh": "~/miniconda3/etc/profile.d/conda.sh",
+                    "conda_env": "llava",
+                    "extra_env": ["HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1"],
+                },
+                "defaults": {"max_samples": 2, "extra_sets": []},
+                "experiments": [
+                    {
+                        "name": "gqa_adaptive_demo",
+                        "dataset": "gqa",
+                        "strategies": ["sparsevlm_adaptive_stratified"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[1]",
+                            "pruning.prune_ratio=[0.2]",
+                        ],
+                    }
+                ],
+            }
+        )
+
+        plan = load_scheduler_plan(plan_path)
+        self.assertEqual(plan.environment.extra_env, ["HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1"])
 
     def test_scheduler_accepts_sparsevlm_adaptive_stratified_strategy(self):
         plan_path = self._write_plan(
@@ -279,12 +320,71 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(ratios, {0.2, 0.3, 0.4, 0.5, 0.6, 0.7})
         self.assertEqual(jobs[-1].run_prefix, "textvqa_sparsevlm_adaptive_stratified_l3_r0p7__")
 
+    def test_real_adaptive_hparam_round1_remote_plan_has_expected_grid(self):
+        plan_path = ROOT_DIR / "entropy_exp" / "plans" / "adaptive_hparam_round1_remote.yaml"
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+
+        self.assertEqual(plan.pool_size, 24)
+        self.assertEqual(plan.tmux.session_name, "sched_adaptive_hp_r1_remote")
+        self.assertEqual(plan.environment.conda_sh, "/home/liuyu/miniconda3/etc/profile.d/conda.sh")
+        self.assertEqual(plan.environment.extra_env, ["HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1"])
+        self.assertEqual(len(plan.experiments), 360)
+        self.assertEqual(len(jobs), 360)
+        self.assertEqual({job.dataset for job in jobs}, {"gqa", "textvqa"})
+        self.assertTrue(all(job.strategy == "sparsevlm_adaptive_stratified" for job in jobs))
+        self.assertTrue(all("--no-auto-gpu" in build_run_command(job) for job in jobs))
+
+        layers = set()
+        ratios = set()
+        grid_sizes = set()
+        high_ratios = set()
+        run_tag_suffixes = set()
+        for job in jobs:
+            for override in job.extra_sets:
+                if override.startswith("pruning.prune_layers="):
+                    layers.update(yaml.safe_load(override.split("=", 1)[1]))
+                if override.startswith("pruning.prune_ratio="):
+                    ratios.update(round(value, 2) for value in yaml.safe_load(override.split("=", 1)[1]))
+                if override.startswith("pruning.sparsevlm_adaptive_stratified.grid_size="):
+                    grid_sizes.add(int(yaml.safe_load(override.split("=", 1)[1])))
+                if override.startswith("pruning.sparsevlm_adaptive_stratified.high_ratio="):
+                    high_ratios.add(round(float(yaml.safe_load(override.split("=", 1)[1])), 2))
+                if override.startswith("output.run_tag_suffix="):
+                    run_tag_suffixes.add(override.split("=", 1)[1])
+
+        self.assertEqual(layers, {1, 3})
+        self.assertEqual(ratios, {0.2, 0.3, 0.4, 0.5, 0.6, 0.7})
+        self.assertEqual(grid_sizes, {4, 6, 8})
+        self.assertEqual(high_ratios, {0.4, 0.55, 0.7, 0.85, 1.0})
+        self.assertEqual(len(run_tag_suffixes), 15)
+        self.assertEqual(jobs[0].run_prefix, "gqa_sparsevlm_adaptive_stratified_g4_a0p4_l1_r0p2__")
+        self.assertEqual(jobs[-1].run_prefix, "textvqa_sparsevlm_adaptive_stratified_g8_a1p0_l3_r0p7__")
+
     def test_resolve_conda_activate_target_uses_same_conda_root(self):
         target = resolve_conda_activate_target(
             "/home/liuyu/miniconda3/etc/profile.d/conda.sh",
             "llava",
         )
         self.assertEqual(target, "/home/liuyu/miniconda3/envs/llava")
+
+    def test_build_run_prefix_and_window_name_include_run_tag_suffix(self):
+        extra_sets = [
+            "pruning.prune_layers=[1]",
+            "pruning.prune_ratio=[0.2]",
+            "output.run_tag_suffix=g4_a0p4",
+        ]
+        job_prefix = build_run_prefix("gqa", "sparsevlm_adaptive_stratified", extra_sets)
+        window_name = build_window_base_name("gqa", "sparsevlm_adaptive_stratified", extra_sets)
+
+        self.assertEqual(
+            job_prefix,
+            "gqa_sparsevlm_adaptive_stratified_g4_a0p4_l1_r0p2__",
+        )
+        self.assertEqual(
+            window_name,
+            "gqa_sparsevlm_adaptive_stratified_g4_a0p4_l1_r0p2",
+        )
 
     def test_retry_budget_and_progress_format(self):
         self.assertEqual(compute_retry_budget(324, 0.1, "ceil"), 33)
