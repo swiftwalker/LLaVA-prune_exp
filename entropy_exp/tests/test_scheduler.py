@@ -223,6 +223,42 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(jobs[0].strategy, "sparsevlm_adaptive_stratified")
         self.assertEqual(jobs[0].run_prefix, "mme_sparsevlm_adaptive_stratified_l2_r0p4__")
 
+    def test_scheduler_accepts_sparsevlm_entropy_alpha_strategy(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-entropy-alpha",
+                "pool_size": 1,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {"conda_env": "llava"},
+                "defaults": {"max_samples": 2, "extra_sets": []},
+                "experiments": [
+                    {
+                        "name": "mme_entropy_alpha",
+                        "dataset": "mme",
+                        "strategies": ["sparsevlm_entropy_alpha"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[2]",
+                            "pruning.prune_ratio=[0.4]",
+                        ],
+                    }
+                ],
+            }
+        )
+
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+        self.assertEqual(jobs[0].strategy, "sparsevlm_entropy_alpha")
+        self.assertEqual(jobs[0].run_prefix, "mme_sparsevlm_entropy_alpha_l2_r0p4__")
+
     def test_scheduler_accepts_new_inference_datasets(self):
         plan_path = self._write_plan(
             {
@@ -384,6 +420,23 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(
             window_name,
             "gqa_sparsevlm_adaptive_stratified_g4_a0p4_l1_r0p2",
+        )
+
+    def test_build_run_prefix_and_window_name_support_sparsevlm_entropy_alpha(self):
+        extra_sets = [
+            "pruning.prune_layers=[3]",
+            "pruning.prune_ratio=[0.6]",
+        ]
+        job_prefix = build_run_prefix("textvqa", "sparsevlm_entropy_alpha", extra_sets)
+        window_name = build_window_base_name("textvqa", "sparsevlm_entropy_alpha", extra_sets)
+
+        self.assertEqual(
+            job_prefix,
+            "textvqa_sparsevlm_entropy_alpha_l3_r0p6__",
+        )
+        self.assertEqual(
+            window_name,
+            "textvqa_sparsevlm_entropy_alpha_l3_r0p6",
         )
 
     def test_retry_budget_and_progress_format(self):

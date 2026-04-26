@@ -9,6 +9,7 @@
 #   F) random      — uniform random token importance (seed-reproducible)
 #   G) sparsevlm   — text-rater-guided text->vision attention pruning
 #   H) sparsevlm_adaptive_stratified — SparseVLM scoring + adaptive stratified compensation
+#   I) sparsevlm_entropy_alpha — SparseVLM scoring + entropy-adaptive stratified compensation
 
 model:
   path: "entropy_exp/models/llava-v1.5-7b"
@@ -24,7 +25,7 @@ inference:
   seed: 42
 
 pruning:
-  strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | tail_masking_attn_score | entropy | random | sparsevlm | sparsevlm_adaptive_stratified
+  strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | tail_masking_attn_score | entropy | random | sparsevlm | sparsevlm_adaptive_stratified | sparsevlm_entropy_alpha
   # --- layer & ratio (paired lists of equal length) ---
   layer_selection: "fixed"          # fixed | dynamic (placeholder)
   prune_layers: [2, 3]             # 剪枝层列表 (0-indexed)
@@ -53,6 +54,15 @@ pruning:
     grid_size: 6
     patch_per_row: 24
     intra_stratum_mode: "random"
+  sparsevlm_entropy_alpha:
+    alpha_min: 0.4
+    alpha_max: 0.95
+    grid_size: 6
+    patch_per_row: 24
+    intra_stratum_mode: "random"
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
 
 capture:
   save_attention: false             # save text→vision attention sub-matrices to captures.h5 (HDF5)

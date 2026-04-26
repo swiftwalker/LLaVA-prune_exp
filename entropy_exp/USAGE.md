@@ -1,744 +1,212 @@
-# 剪枝推理实验 — 使用指南
+# 剪枝推理实验使用指南
 
-## 〇、环境准备
+本文只覆盖 **单次 pruning / baseline inference**：怎么启动、怎么覆盖配置、输出在哪里。批量矩阵、结果汇总、策略原理和历史流程分别见：
+
+- 批量调度：[SCHEDULER.md](./SCHEDULER.md)
+- 结果评测与汇总：[RESULTS_WORKFLOW.md](./RESULTS_WORKFLOW.md)
+- 策略方法总览：[STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md)
+- patch 分布分析：[PATCH_DISTRIBUTION_WORKFLOW.md](./PATCH_DISTRIBUTION_WORKFLOW.md)
+- 历史/次级流程：[HISTORICAL_WORKFLOWS.md](./HISTORICAL_WORKFLOWS.md)
+
+## 1. 环境准备
 
 ```bash
 conda activate llava
 cd ~/LLaVA-prune_exp
 ```
 
-确保以下软链接存在：
+确认这些路径可用：
 
+```text
+entropy_exp/models
+entropy_exp/datasets
+entropy_exp/eval_questions
 ```
-entropy_exp/models         → ~/models
-entropy_exp/datasets       → ~/datasets/SparseVLMs/data
-entropy_exp/eval_questions → ~/datasets/SparseVLMs/eval
+
+当前默认配置文件是：
+
+```text
+entropy_exp/configs/prune.yaml
 ```
 
----
+## 2. 快速开始
 
-## 一、快速开始
-
-### 1.1 Shell 脚本（推荐）
+推荐入口是 `run_prune.sh`：
 
 ```bash
-# 用 attn_score 策略跑 MME，限 10 个样本（冒烟测试）
+# attention score 剪枝，限制 10 个样本
 bash entropy_exp/scripts/run_prune.sh attn_score mme 10
 
-# 用 masking_attn_score 策略跑 GQA，当前层 mask 掉被剪枝视觉 token
+# pre-layer 物理剪枝
+bash entropy_exp/scripts/run_prune.sh pre_attn_score gqa 10
+
+# target-layer attention logits masking
 bash entropy_exp/scripts/run_prune.sh masking_attn_score gqa 10
 
-# 用 tail_masking_attn_score 策略跑 GQA，从指定起始层开始到最后一层都做 masking
+# 从指定起始层到最后一层持续 masking
 bash entropy_exp/scripts/run_prune.sh tail_masking_attn_score gqa 10 \
-    --set pruning.prune_layers=[3] \
-    --set pruning.prune_ratio=[0.2]
+  --set pruning.prune_layers=[3] \
+  --set pruning.prune_ratio=[0.2]
 
-# 用 entropy 策略跑 POPE 全量
-bash entropy_exp/scripts/run_prune.sh entropy pope
-
-# 用 random 策略跑 MME（由 inference.seed 控制可复现）
-bash entropy_exp/scripts/run_prune.sh random mme 10
-
-# 用 sparsevlm 策略跑 MME（text rater + text->vision attention）
+# SparseVLM text-rater 剪枝
 bash entropy_exp/scripts/run_prune.sh sparsevlm mme 10
 
-# 用 sparsevlm_adaptive_stratified 策略跑 MME（SparseVLM 打分 + 分层补偿）
+# SparseVLM + 固定 alpha 分层补偿
 bash entropy_exp/scripts/run_prune.sh sparsevlm_adaptive_stratified mme 10
 
-# 跑无剪枝 baseline（使用同一 decode 路径，计时公平）
-bash entropy_exp/scripts/run_prune.sh baseline mme 10
+# SparseVLM + saliency 熵自适应 alpha 分层补偿
+bash entropy_exp/scripts/run_prune.sh sparsevlm_entropy_alpha mme 10
 
-# 跑所有六个推理数据集
-bash entropy_exp/scripts/run_prune.sh attn_score all
+# 无剪枝 baseline，同一套自定义 decode 路径
+bash entropy_exp/scripts/run_prune.sh baseline mme 10
 ```
 
-批量调度、`tmux` 恢复、plan YAML 写法和 scheduler 限制统一参考 [SCHEDULER.md](./SCHEDULER.md)。本页只覆盖单次 pruning 命令与配置说明。
-
-纯注意力捕获与离线 entropy 分析仍然保留，但已降级为次级工作流，统一参考 [`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)。
-
-`TextVQA`、`ScienceQA`、`MMBench` 现已接入主线推理入口。repo-native `run_eval.sh`、`summarize_results.py`、`RESULTS_WORKFLOW.md` 现已覆盖 `gqa` / `mme` / `pope` / `textvqa` / `scienceqa`；其中 `MMBench` 仍只提供 inference 输入兼容，不提供本地 official score。
-
-**参数说明：**
-
-| 位置 | 参数 | 可选值 | 说明 |
-|:--|:--|:--|:--|
-| $1 | strategy | `attn_score` / `pre_attn_score` / `masking_attn_score` / `tail_masking_attn_score` / `entropy` / `random` / `sparsevlm` / `sparsevlm_adaptive_stratified` / `baseline` | 剪枝策略；`pre_attn_score` 在目标层前物理裁剪，`masking_attn_score` 只在目标层 attention logits 中屏蔽被剪枝视觉 token，`tail_masking_attn_score` 会从配置的起始层开始到最后一层都执行 masking，`random` 使用固定 seed 可复现，`sparsevlm` 使用 text raters，`sparsevlm_adaptive_stratified` 在此基础上再做空间分层补偿 |
-| $2 | dataset | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` / `all` | 数据集 |
-| $3 | max_samples | 整数（可选） | 限制样本数，省略则跑全量 |
-| -- | `--set key=val` | 任意（可多次） | 覆盖 yaml 配置项，见 §1.3 |
-
-### 1.2 直接调用 Python
+也可以直接调用 Python：
 
 ```bash
-# 剪枝推理
 python entropy_exp/src/prune_inference.py \
-    --config entropy_exp/configs/prune.yaml \
-    --dataset mme \
-    --max-samples 10
+  --config entropy_exp/configs/prune.yaml \
+  --dataset mme \
+  --max-samples 10
 
-# 无剪枝 baseline
 python entropy_exp/src/prune_inference.py \
-    --config entropy_exp/configs/prune.yaml \
-    --dataset mme \
-    --max-samples 10 \
-    --baseline
+  --config entropy_exp/configs/prune.yaml \
+  --dataset mme \
+  --max-samples 10 \
+  --baseline
 ```
 
-**CLI 参数：**
+## 3. CLI 参数
+
+### `run_prune.sh`
+
+```bash
+bash entropy_exp/scripts/run_prune.sh <strategy|baseline> <dataset|all> [max_samples] [--auto-gpu|--no-auto-gpu] [--set key=val ...]
+```
+
+| 参数 | 可选值 | 说明 |
+| --- | --- | --- |
+| `strategy` | `baseline` 或 9 个剪枝策略 | 当前策略列表见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md) |
+| `dataset` | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` / `all` | `mmbench` 当前只保证 inference 输入兼容 |
+| `max_samples` | 整数，可选 | 省略则使用配置中的 `pruning.max_samples`；仍为空则跑全量 |
+| `--auto-gpu` | flag | 运行前自动选择可用显存最多的 GPU |
+| `--no-auto-gpu` | flag | 不自动选择 GPU，使用当前 `CUDA_VISIBLE_DEVICES` |
+| `--set` | `key=value`，可重复 | 覆盖配置项 |
+
+### `prune_inference.py`
+
+```bash
+python entropy_exp/src/prune_inference.py \
+  --config entropy_exp/configs/prune.yaml \
+  --dataset gqa \
+  --set pruning.strategy=sparsevlm_entropy_alpha
+```
 
 | 参数 | 说明 |
-|:--|:--|
+| --- | --- |
 | `--config` | 配置文件路径，默认 `entropy_exp/configs/prune.yaml` |
-| `--dataset` | 数据集名，必选：`gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` |
-| `--max-samples` | 限制样本数（可选） |
-| `--baseline` | 加此 flag 则不剪枝，用于对照 |
-| `--set KEY=VALUE` | 覆盖配置项（可多次使用），见下文 §1.3 |
+| `--dataset` | 单个数据集名 |
+| `--max-samples` | 样本数限制 |
+| `--baseline` | 运行无剪枝 baseline |
+| `--set KEY=VALUE` | 覆盖任意配置项，可重复 |
 
-### 1.3 `--set` 命令行覆盖机制
+## 4. 配置覆盖
 
-不需要复制 yaml 文件，用 `--set` 即可在命令行中覆盖任意配置项。支持 **点分隔嵌套 key** 和自动类型推导：
+`--set` 支持点分隔嵌套 key，并会做基础类型推断：
 
 ```bash
-# 覆盖策略和剪枝层/比例
-python entropy_exp/src/prune_inference.py \
-    --config entropy_exp/configs/prune.yaml \
-    --dataset mme \
-    --set pruning.strategy=entropy \
-    --set pruning.prune_layers=[2,5,10] \
-    --set pruning.prune_ratio=[0.3,0.4,0.5]
-
-# 覆盖嵌套参数
-python entropy_exp/src/prune_inference.py \
-    --config entropy_exp/configs/prune.yaml \
-    --dataset mme \
-    --set pruning.entropy.dynamic_ratio=true \
-    --set pruning.entropy.max_prune_ratio=0.8
-
-# 通过 shell 脚本传递 --set
-bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
-    --set pruning.prune_layers=[5] \
-    --set pruning.prune_ratio=[0.7]
+bash entropy_exp/scripts/run_prune.sh sparsevlm_entropy_alpha textvqa \
+  --set inference.seed=42 \
+  --set pruning.prune_layers=[2] \
+  --set pruning.prune_ratio=[0.3] \
+  --set pruning.sparsevlm_entropy_alpha.alpha_min=0.4 \
+  --set pruning.sparsevlm_entropy_alpha.alpha_max=1.0
 ```
 
-**自动类型推导规则：**
+常用覆盖：
 
-| 输入 | 解析结果 | 类型 |
-|:--|:--|:--|
-| `42` | `42` | int |
-| `0.5` | `0.5` | float |
-| `true` / `false` | `True` / `False` | bool |
-| `null` / `none` | `None` | NoneType |
-| `[2,5,10]` | `[2, 5, 10]` | list (JSON) |
-| `[0.3,0.5]` | `[0.3, 0.5]` | list (JSON) |
-| `entropy` | `"entropy"` | str |
-| `pre_attn_score` | `"pre_attn_score"` | str |
-| `masking_attn_score` | `"masking_attn_score"` | str |
-| `random` | `"random"` | str |
-| `sparsevlm` | `"sparsevlm"` | str |
-| `sparsevlm_adaptive_stratified` | `"sparsevlm_adaptive_stratified"` | str |
+| 覆盖项 | 说明 |
+| --- | --- |
+| `inference.seed=42` | 固定随机种子 |
+| `pruning.strategy=entropy` | 切换策略 |
+| `pruning.prune_layers=[2,3]` | 指定目标层 |
+| `pruning.prune_ratio=[0.5,0.5]` | 每个目标层的剪枝比例 |
+| `pruning.max_samples=100` | 限制样本数 |
+| `capture.save_attention=true` | 保存 text->vision attention 到 `captures.h5` |
+| `capture.save_importance_scores=true` | 保存 importance / visual scores 到 `stats.jsonl` |
+| `capture.save_keep_indices=true` | 保存 keep / pruned indices 到 `stats.jsonl` |
 
----
+`prune_layers` 和 `prune_ratio` 的规则：
 
-## 二、配置文件详解
+- 二者都是列表时，长度必须相同，并按位置配对。
+- `prune_ratio` 是标量时，会广播到所有 `prune_layers`。
+- 多层剪枝是渐进式的：后一层在前一层保留下来的 visual tokens 上继续剪。
 
-配置文件：**`entropy_exp/configs/prune.yaml`**
+## 5. 核心配置结构
 
-### 2.1 完整配置结构
+只列运行时最常改的部分：
 
 ```yaml
 model:
   path: "entropy_exp/models/llava-v1.5-7b"
   name: "llava-v1.5-7b"
-  attn_implementation: "eager"      # 必须为 eager 才能获取 attention weights
+  attn_implementation: "eager"
 
 inference:
-  temperature: 0                    # 0 = 确定性推理
-  top_p: null
+  temperature: 0
   num_beams: 1
-  max_new_tokens: 128               # 最大生成 token 数
+  max_new_tokens: 128
   conv_mode: "vicuna_v1"
-  seed: 42                          # 随机种子
+  seed: 42
 
-pruning:
-  strategy: "attn_score"            # 剪枝策略：attn_score / pre_attn_score / masking_attn_score / tail_masking_attn_score / entropy / random / sparsevlm / sparsevlm_adaptive_stratified
-  layer_selection: "fixed"          # 层选择方法
-  prune_layers: [2, 3]             # 剪枝层列表
-  prune_ratio: [0.5, 0.5]          # 对应每层的剪枝比例
-  v_token_num: 576                  # 视觉 token 数量
-  max_samples: null                 # 样本数限制
-  attn_score: {}                    # attn_score 策略额外参数
-  pre_attn_score: {}                # pre_attn_score 策略额外参数
-  masking_attn_score: {}            # masking_attn_score 策略额外参数
-  tail_masking_attn_score: {}       # tail_masking_attn_score 策略额外参数
-  entropy:                          # entropy 策略额外参数
-    dynamic_ratio: false
-    dynamic_scale: 0.5
-    max_prune_ratio: 0.9
-  random: {}                        # random 策略额外参数（当前为空）
-  sparsevlm:                        # sparsevlm 策略额外参数
-    fallback_topk: 4
-    exclude_special_tokens: true
-    min_visual_tokens_after_prune: 16
-  sparsevlm_adaptive_stratified:    # SparseVLM + adaptive stratified sampling
-    fallback_topk: 4
-    exclude_special_tokens: true
-    min_visual_tokens_after_prune: 16
-    high_ratio: 0.7
-    grid_size: 6
-    patch_per_row: 24
-    intra_stratum_mode: "random"
-
-capture:
-  save_attention: false             # 保存注意力矩阵到 captures.h5（HDF5）
-  capture_layers: "all"             # 捕获哪些层："all" 或层索引列表如 [0, 1, 2, 3]
-  save_importance_scores: true      # 保存重要性分数到 stats.jsonl
-  save_keep_indices: true           # 保存保留索引到 stats.jsonl
-  precision: "fp16"                 # HDF5 存储精度
-  compression: "gzip"               # HDF5 压缩方式
-  compression_opts: 4               # 压缩等级
-
-datasets: ...                       # 数据集路径
-output:
-  base_dir: "entropy_exp/outputs"   # 输出根目录，每次运行创建 runs/{tag}/ 子目录
-```
-
-### 2.2 三者关系：`strategy` / `prune_layers` / `prune_ratio`
-
-这三个参数**互相独立、正交组合**，各司其职：
-
-```
-strategy     →  决定「怎么算重要性」（importance 计算方法）
-prune_layers →  决定「在哪里剪」（哪些层执行剪枝）
-prune_ratio  →  决定「剪多少」（每层移除 visual token 的比例）
-```
-
-它们在代码中的协作流程：
-
-```
-prune.yaml
-  ├─ pruning.strategy: "attn_score"     ─┐
-  ├─ pruning.attn_score: {}              ─┤  ① get_strategy(name, config)
-  │  └─ (或 pruning.pre_attn_score/masking_attn_score/tail_masking_attn_score/entropy/random/sparsevlm/sparsevlm_adaptive_stratified: {})  ─┘
-  │                                              → 实例化对应策略
-  │
-  ├─ pruning.prune_layers: [2, 3]       ─┐
-  │                                       ├  ② VisualTokenPruner.__init__()
-  └─ pruning.prune_ratio: [0.5, 0.5]   ─┘     → _determine_prune_layers() 读 prune_layers
-                                                → _build_layer_ratio_map()  将两者 zip 成
-                                                  {2: 0.5, 3: 0.5} 并注入 strategy.config
-
-第 N 层执行剪枝时:
-  strategy.compute_importance(attn_weights, ...)  →  [576] 重要性分数
-  strategy.get_prune_ratio(layer_idx, scores)     →  从 ratio_map 查出该层比例
-  strategy.compute_keep_mask(...)                 →  保留 top-K 个 token
-```
-
-**关键点**：`strategy` 只决定 importance 怎么算，以及剪枝动作如何施加；`prune_layers` 和 `prune_ratio` 独立控制在哪层剪、剪多少。同一组 layers/ratio 可以搭配任意 strategy。`pre_attn_score` 会在目标层前物理裁剪 visual token 并同步更新前序 KV cache；`masking_attn_score` 会保留完整 hidden states / position ids / KV cache，只在目标层的 text->vision attention logits 中屏蔽被剪枝视觉 token；`tail_masking_attn_score` 则会从配置的起始层开始到最后一层都执行同样的 masking 路径。`random` 会根据 `inference.seed` 生成可复现的随机重要性分数，`sparsevlm` 会先选 text raters，再用当前层的 text->vision attention 给 visual token 打分；`sparsevlm_adaptive_stratified` 则在 `sparsevlm` 的分数基础上，保留一部分高分 patch，再按 strata 缺口补足剩余预算。
-
-### 2.3 典型配置示例
-
-#### 示例 1：最简 — 一个策略，一个层，一个比例
-
-```yaml
 pruning:
   strategy: "attn_score"
-  prune_layers: [2]
-  prune_ratio: [0.5]
-```
-
-直接 `python entropy_exp/src/prune_inference.py --config ... --dataset mme` 即可运行。
-
-#### 示例 2：两层配对，不同比例
-
-```yaml
-pruning:
-  strategy: "entropy"
-  prune_layers: [2, 3]
-  prune_ratio: [0.3, 0.6]    # 第 2 层剪 30%，第 3 层在剩余中再剪 60%
-```
-
-> **注意**：多层剪枝是**渐进的**。第 2 层从 576 个 token 中剪 30%（保留 403），第 3 层再从 403 中剪 60%（保留 161）。
-
-#### 示例 3：标量广播
-
-```yaml
-pruning:
-  prune_layers: [2, 5, 10]
-  prune_ratio: 0.5            # 标量，自动广播到每层都用 0.5
-```
-
-#### 示例 4：搭配 entropy 动态比例
-
-```yaml
-pruning:
-  strategy: "entropy"
-  prune_layers: [2, 3]
-  prune_ratio: [0.5, 0.5]    # 作为 base ratio
-  entropy:
-    dynamic_ratio: true       # 开启后，实际比例 ≥ base ratio
-    dynamic_scale: 0.5
-    max_prune_ratio: 0.9
-```
-
-此时 `prune_ratio` 中的值作为基准，`EntropyStrategy.get_prune_ratio()` 会根据 importance 分布的集中度向上调整（但不超过 `max_prune_ratio`）。
-
-> **注意**：当 `prune_layers` 和 `prune_ratio` 都是列表时长度必须相等，否则启动时会报错。
-
-#### 示例 5：可复现的 random 剪枝
-
-```yaml
-pruning:
-  strategy: "random"
+  layer_selection: "fixed"
   prune_layers: [2, 3]
   prune_ratio: [0.5, 0.5]
-```
+  v_token_num: 576
+  max_samples: null
 
-在相同的 `inference.seed` 下，多次运行会得到相同的随机保留结果。
-
-#### 示例 6：sparsevlm text-rater 剪枝
-
-```yaml
-pruning:
-  strategy: "sparsevlm"
-  prune_layers: [8, 12, 16]
-  prune_ratio: [0.25, 0.5, 0.5]
-  sparsevlm:
-    fallback_topk: 4
-    exclude_special_tokens: true
-    min_visual_tokens_after_prune: 16
-```
-
-该策略会先从文本 token 中选择 image-relevant raters，再基于每个剪枝层的 text->vision attention 计算 visual token 分数。
-
-#### 示例 7：sparsevlm_adaptive_stratified 分层补偿剪枝
-
-```yaml
-pruning:
-  strategy: "sparsevlm_adaptive_stratified"
-  prune_layers: [8, 12, 16]
-  prune_ratio: [0.25, 0.5, 0.5]
-  sparsevlm_adaptive_stratified:
-    fallback_topk: 4
-    exclude_special_tokens: true
-    min_visual_tokens_after_prune: 16
-    high_ratio: 0.7
-    grid_size: 6
-    patch_per_row: 24
-    intra_stratum_mode: "random"
-```
-
-该策略先按 `sparsevlm` 分数保留高分 patch，再按空间 strata 的分布缺口自适应补点，保证最终 keep 数精确命中预算。
-
-### 2.4 如何跑实验
-
-**方式 1：`--set` 覆盖（推荐，无需创建文件）**
-
-保留一份 `prune.yaml` 作为默认值，用 `--set` 覆盖要改的参数：
-
-```bash
-# 实验 A：attn_score 在第 2 层剪 50%（yaml 默认值，直接跑）
-bash entropy_exp/scripts/run_prune.sh attn_score mme
-
-# 实验 B：entropy 在第 2、3 层分别剪 30%、60%
-bash entropy_exp/scripts/run_prune.sh entropy mme \
-    --set pruning.prune_layers=[2,3] \
-    --set pruning.prune_ratio=[0.3,0.6]
-
-# 实验 C：第 5 层 70%
-bash entropy_exp/scripts/run_prune.sh attn_score mme \
-    --set pruning.prune_layers=[5] \
-    --set pruning.prune_ratio=[0.7]
-
-# 实验 D：random，第 2、3 层各剪 50%
-bash entropy_exp/scripts/run_prune.sh random mme \
-    --set pruning.prune_layers=[2,3] \
-    --set pruning.prune_ratio=[0.5,0.5]
-
-# 实验 E：sparsevlm，第 8/12/16 层按给定比例剪枝
-bash entropy_exp/scripts/run_prune.sh sparsevlm mme \
-    --set pruning.prune_layers=[8,12,16] \
-    --set pruning.prune_ratio=[0.25,0.5,0.5]
-
-# 实验 F：sparsevlm_adaptive_stratified，第 8/12/16 层按给定比例剪枝
-bash entropy_exp/scripts/run_prune.sh sparsevlm_adaptive_stratified mme \
-    --set pruning.prune_layers=[8,12,16] \
-    --set pruning.prune_ratio=[0.25,0.5,0.5]
-```
-
-**方式 2：修改 yaml**
-
-直接编辑 `prune.yaml` 中的三个字段后运行：
-
-```bash
-python entropy_exp/src/prune_inference.py \
-    --config entropy_exp/configs/prune.yaml \
-    --dataset mme
-```
-
-**方式 3：显式逐策略对比**
-
-当前不再提供 `compare` 一键模式，建议显式逐个策略运行，保证对比矩阵和输出目录更可控：
-
-```bash
-bash entropy_exp/scripts/run_prune.sh baseline mme
-bash entropy_exp/scripts/run_prune.sh attn_score mme
-bash entropy_exp/scripts/run_prune.sh pre_attn_score mme
-bash entropy_exp/scripts/run_prune.sh masking_attn_score mme
-bash entropy_exp/scripts/run_prune.sh entropy mme
-bash entropy_exp/scripts/run_prune.sh random mme
-```
-
-### 2.5 其他参数速查
-
-#### `pruning.entropy` — entropy 策略的额外参数
-
-| 参数 | 说明 |
-|:--|:--|
-| `dynamic_ratio: false` | 设为 `true` 时，剪枝比例根据 importance 分布集中度动态向上调整 |
-| `dynamic_scale: 0.5` | 动态调整幅度系数（越大调整越激进） |
-| `max_prune_ratio: 0.9` | 动态调整上限，防止过度剪枝 |
-
-#### `pruning.layer_selection` — 层选择方法
-
-| 值 | 说明 |
-|:--|:--|
-| `fixed` | 使用 `prune_layers` 列表指定的层（默认，推荐） |
-| `dynamic` | 预留接口，当前回退读 `prune_layers` |
-
----
-
-## 三、捕获（Capture）配置
-
-### 3.1 剪枝推理时的捕获
-
-`prune.yaml` 的 `capture` 段控制两类输出：
-
-```yaml
 capture:
-  # === 注意力捕获 → captures.h5（HDF5，与 Phase 1 格式一致）===
-  save_attention: false           # 保存 text→vision 注意力子矩阵到 HDF5
-  capture_layers: "all"           # 捕获哪些层："all"（全部 32 层）或层索引列表
-  precision: "fp16"               # fp16 | fp32
-  compression: "gzip"
-  compression_opts: 4
+  save_attention: false
+  capture_layers: "all"
+  save_importance_scores: true
+  save_keep_indices: true
 
-  # === 剪枝结果 → stats.jsonl ===
-  save_importance_scores: true    # 保存每个 visual token 的重要性分数
-  save_keep_indices: true         # 保存被保留的 token 索引列表
+output:
+  base_dir: "entropy_exp/outputs"
 ```
 
-**`save_attention: true`**（HDF5 捕获）：
-- 保存指定层的 text→vision 注意力子矩阵 `[H, L_t, L_v]`
-- 剪枝层同时保存 `prune_scores [L_v]`；非剪枝捕获层仅保存 `tv_attn`
-- 输出到 `captures.h5`，格式与 Phase 1 `AttentionCaptureHook` 完全一致
-- Phase 1 的分析脚本可直接处理此文件
-- 数据量较大，默认关闭
+策略专属参数都在 `pruning.<strategy_name>` 下。当前策略数量、方法差异和参数方向见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md)。
 
-**`capture_layers`**（捕获层控制）：
-- `"all"`（默认）：捕获全部 32 层的注意力，适合离线分析
-- 层索引列表如 `[0, 1, 2, 3]`：仅捕获指定层，减少磁盘占用
-- 与 `prune_layers` 独立：可以剪枝第 2、3 层，但捕获全部 32 层的注意力数据
+## 6. 输出文件
 
-```bash
-# 捕获全部 32 层（默认）
-bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
-    --set capture.save_attention=true
-
-# 仅捕获前 4 层
-bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
-    --set capture.save_attention=true \
-    --set capture.capture_layers=[0,1,2,3]
-
-# 仅捕获剪枝层（与 prune_layers 相同）
-bash entropy_exp/scripts/run_prune.sh attn_score mme 10 \
-    --set capture.save_attention=true \
-    --set capture.capture_layers=[2,3]
-```
-
-**`save_importance_scores` / `save_keep_indices`**（JSONL 剪枝结果）：
-- 保存到 `stats.jsonl` 的对应字段中（轻量级）
-- `importance_scores [576]`：重要性分数向量，适合分析哪些 token 被认为重要
-- `keep_indices [K]`：保留 token 索引，方便可视化
-- 大规模正式实验只看精度时可关闭以减小体积
-
-### 3.2 纯注意力捕获（次级 workflow）
-
-如果你需要的是旧的 Phase 1 纯注意力捕获和离线 entropy 分析路径，而不是当前 pruning 主线，请直接参考 [`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)。
-
-当前主线说明：
-
-- pruning benchmark / strategy 对比：本页 + [`SCHEDULER.md`](./SCHEDULER.md)
-- matrix 结果整理：[`RESULTS_WORKFLOW.md`](./RESULTS_WORKFLOW.md)
-- 纯 attention capture / HDF5 离线分析：[`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)
-
----
-
-## 四、输出文件说明
-
-每次运行会创建一个独立的 **run 目录**，包含该次实验的完整配置、结果和中间变量：
-
-```
-outputs/runs/{strategy}/{dataset}/{dataset}_{strategy}_l{layers}_r{ratios}__{YYYYMMDD_HHMMSS_microseconds}/
-  ├── config.yaml        # 实验配置快照（含 --set 覆盖后的最终值）
-  ├── answers.jsonl      # 模型回答（与评测脚本兼容）
-  ├── stats.jsonl        # 每样本剪枝统计（timing, ratios, seq_len）
-  ├── eval/summary.json  # 评测结果
-  └── captures.h5        # 注意力中间变量捕获（HDF5，与 Phase 1 格式一致）
-                         # 仅当 capture.save_attention=true 时生成
-```
-
-其中 leaf `run_name` 保持不变，只是父目录层级改成了 `{strategy}/{dataset}`。例如：
+单次运行会创建：
 
 ```text
-outputs/runs/pre_attn_score/pope/pope_pre_attn_score_l2_r0p3__20260320_192913_375869
-outputs/runs/pre_attn_score/pope/pope_pre_attn_score_l2-3_r0p5-0p5__20260320_192913_486301
+entropy_exp/outputs/runs/{strategy}/{dataset}/{run_name}/
 ```
 
-`run_eval.sh`、`run_summary.sh`、`run_analysis.sh`、`check_incomplete_runs.sh` 会递归扫描 `outputs/runs/`，所以旧的 leaf `run_name` / prefix 用法仍然可用，例如 `pope_random_`、`mme_masking_attn_score_` 这类筛选方式不需要改。
+常见文件：
 
-### 4.1 config.yaml — 配置快照
+| 文件 | 说明 |
+| --- | --- |
+| `config.yaml` | 本次运行的完整配置快照，包含 `--set` 覆盖后结果 |
+| `answers.jsonl` | 模型输出 |
+| `stats.jsonl` | 剪枝统计；是否包含 scores/indices 由 `capture` 配置控制 |
+| `captures.h5` | 可选 attention 捕获文件，仅 `capture.save_attention=true` 时生成 |
+| `eval/summary.json` | 评测后生成，不由 inference 自动生成 |
 
-每次运行自动保存当前生效的完整配置（包括 `--set` 覆盖后的值）。可直接用于复现：
+评测和汇总请走 [RESULTS_WORKFLOW.md](./RESULTS_WORKFLOW.md)。批量实验请走 [SCHEDULER.md](./SCHEDULER.md)。
 
-```bash
-python entropy_exp/src/prune_inference.py \
-    --config entropy_exp/outputs/runs/attn_score/mme/mme_attn_score_l2-3_r0p5-0p5__20260309_143000_123456/config.yaml \
-    --dataset mme
-```
+## 7. 数据集能力
 
-### 4.2 answers.jsonl — 模型回答
+| 数据集 | Inference | Repo-native local eval/summary |
+| --- | --- | --- |
+| `gqa` | 支持 | 支持，主指标 `accuracy` |
+| `mme` | 支持 | 支持，主指标 `overall_total_score` |
+| `pope` | 支持 | 支持，主指标 `macro_f1` |
+| `textvqa` | 支持 | 支持，主指标 `accuracy` |
+| `scienceqa` | 支持 | 支持，主指标 `accuracy` |
+| `mmbench` | 支持 | 不支持本地 official score |
 
-```json
-{"question_id": "...", "prompt": "...", "text": "模型回答", "model_id": "llava-v1.5-7b", "metadata": {}}
-```
-
-与 GQA/MME/POPE 评测脚本兼容，直接传路径即可：
-
-```bash
-bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_attn_score_*/answers.jsonl
-```
-
-### 4.3 stats.jsonl — 剪枝统计
-
-每行一个样本，记录剪枝过程的聚合统计：
-
-| 字段 | 类型 | 说明 |
-|:--|:--|:--|
-| `sample_idx` | int | 样本序号 |
-| `run_mode` | str | `"prune"` 或 `"baseline"` |
-| `strategy_requested` | str | 使用的策略名 |
-| `effective_prune_ratio_map` | dict | 实际的 `{层号: 比例}` 映射 |
-| `prune_layers` | list | 剪枝层列表 |
-| `question_id` | str | 问题 ID |
-| `image_file` | str | 图片文件路径 |
-| `answer` | str | 模型回答 |
-| `original_seq_len` | int | 剪枝前序列总长度 |
-| `final_seq_len` | int | 剪枝后序列总长度 |
-| `num_generated_tokens` | int | 生成的新 token 数 |
-| `prefill_time` | float | prefill 阶段耗时（秒） |
-| `decode_time` | float | decode 阶段耗时（秒） |
-| `total_time` | float | 样本总耗时（秒） |
-| `layer_{N}_ratio` | float | 第 N 层实际剪枝比例 |
-| `layer_{N}_before` | int | 第 N 层剪枝前 visual token 数 |
-| `layer_{N}_after` | int | 第 N 层剪枝后 visual token 数 |
-| `layer_{N}_pruned` | int | 第 N 层被剪掉的 token 数 |
-| `layer_{N}_importance` | list[float] | （`save_importance_scores` 开启时）每个 visual token 的重要性分数 |
-| `layer_{N}_keep_indices` | list[int] | （`save_keep_indices` 开启时）被保留 token 的索引 |
-| `layer_{N}_pruned_indices` | list[int] | （`save_keep_indices` 开启时）被剪掉 token 的索引 |
-| `layer_{N}_keep_patch_indices` | list[int] | patch 空间中的保留索引；单层物理剪枝时通常与 `keep_indices` 一致 |
-| `layer_{N}_pruned_patch_indices` | list[int] | patch 空间中的被剪索引 |
-| `layer_{N}_high_keep_patch_indices` | list[int] | adaptive stratified 中高分直接保留的 patch 索引 |
-| `layer_{N}_low_keep_patch_indices` | list[int] | adaptive stratified 中低分补偿保留的 patch 索引 |
-| `layer_{N}_stratum_quotas` | list[int] | adaptive stratified 的 strata 配额分布 |
-
-### 4.4 captures.h5 — 注意力中间变量捕获（HDF5）
-
-仅当 `capture.save_attention: true` 时生成。保存指定层的 **text→vision 注意力子矩阵**，格式与 Phase 1 的 `AttentionCaptureHook` 输出完全一致：
-
-```
-captures.h5
-  /{sample_id}/
-    .attrs: question_id, image_file, v_token_start, v_token_num, text_token_start
-    layer_{N}/
-      tv_attn          # [H, L_t, L_v]  text→vision 注意力子矩阵 (gzip 压缩)
-      prune_scores     # [L_v]          每个 visual token 的重要性分数（仅剪枝层）
-```
-
-- **捕获范围**由 `capture.capture_layers` 控制：`"all"` 捕获全部 32 层，指定列表如 `[0, 1, 2, 3]` 则只捕获这些层
-- **剪枝层**：同时写入 `tv_attn` 和 `prune_scores`
-- **非剪枝捕获层**：仅写入 `tv_attn`（无 `prune_scores`）
-- **`tv_attn`**：原始 text→vision 注意力矩阵，`H`=注意力头数，`L_t`=文本 token 数，`L_v`=视觉 token 数（剪枝前）
-- **`prune_scores`**：从 `tv_attn` 计算得出的重要性分数，与 Phase 1 格式一致
-- Phase 1 的分析脚本可直接处理此文件
-
-> **注意**：注意力捕获数据量较大（每层 [32, ~60, 576] float16 ≈ 2.2MB），正式大规模实验时建议关闭或仅捕获关键层以节省磁盘空间。
-
-`captures.h5` 与纯 attention capture 的完整说明已经从主流程中降级，详见 [`PHASE1_SECONDARY_WORKFLOW.md`](./PHASE1_SECONDARY_WORKFLOW.md)。
-
-### 4.5 结果整理与汇总
-
-大矩阵实验跑完后，推荐统一走：
-
-```text
-scheduler attempts/*.json -> run_eval.sh -> summarize_results.py -> summary.csv
-```
-
-完整的跨策略、跨数据集结果整理流程统一写在 [`RESULTS_WORKFLOW.md`](./RESULTS_WORKFLOW.md) 中，包括：
-
-- 如何确认矩阵已经结束
-- 如何从 `attempts/*.json` 精确收集本轮 `run_dir`
-- 如何批量补 `eval/summary.json`
-- 如何生成 `summary.csv / summary.json / skipped_runs.json`
-- 如何从 `summary.csv` 提取 `layer × ratio` 全量结果矩阵
-
-对 scheduler 驱动的大矩阵，不建议直接用 `run_summary.sh runs` 扫全仓库。
-
-### 4.6 Patch 分布可视化捕获
-
-如果目标是看 **剪枝后 patch 空间分布**，推荐走轻量级 `stats.jsonl` 主线，而不是对整套矩阵开启 `captures.h5`：
-
-```bash
-python entropy_exp/scripts/run_scheduler.py \
-    --plan entropy_exp/plans/gqa_textvqa_patch_distribution_full_matrix.yaml \
-    --dry-run
-
-python entropy_exp/scripts/run_scheduler.py \
-    --plan entropy_exp/plans/gqa_textvqa_patch_distribution_full_matrix.yaml
-
-python entropy_exp/src/patch_distribution_report.py \
-    --state-dir entropy_exp/outputs/scheduler/gqa-textvqa-patch-distribution-full-matrix
-```
-
-这套 canonical plan 固定使用：
-
-- `capture.save_attention=false`
-- `capture.save_importance_scores=false`
-- `capture.save_keep_indices=true`
-
-分析脚本会从 `attempts/*.json` 精确收集本轮 completed run，输出：
-
-- `manifest/completed_run_dirs.json`
-- `tables/per_config_patch_summary.csv`
-- `heatmaps/{dataset}/{strategy}/...`
-- `compare/{dataset}/...`
-
-适合直接比较 `baseline / random / sparsevlm / sparsevlm_adaptive_stratified` 在 `GQA + TextVQA` 上的全样本、全矩阵 patch 保留分布。
-
----
-
-## 五、常用实验流程
-
-### 5.1 冒烟测试
-
-```bash
-# 快速验证代码能跑通
-bash entropy_exp/scripts/run_prune.sh attn_score mme 2
-# 结果在 outputs/runs/mme_attn_score_l2-3_r0p5-0p5__YYYYMMDD_HHMMSS_microseconds/ 下
-```
-
-### 5.2 单策略实验
-
-```bash
-bash entropy_exp/scripts/run_prune.sh attn_score gqa
-# 评测时指定 run 目录下的 answers.jsonl
-bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_attn_score_*/answers.jsonl
-
-# random 策略同理
-bash entropy_exp/scripts/run_prune.sh random gqa
-bash entropy_exp/scripts/run_eval.sh gqa entropy_exp/outputs/runs/gqa_random_*/answers.jsonl
-```
-
-### 5.3 策略对比实验
-
-```bash
-# 显式跑多种策略，保证每个 run 目录和 override 可追踪
-bash entropy_exp/scripts/run_prune.sh baseline mme
-bash entropy_exp/scripts/run_prune.sh attn_score mme
-bash entropy_exp/scripts/run_prune.sh pre_attn_score mme
-bash entropy_exp/scripts/run_prune.sh masking_attn_score mme
-bash entropy_exp/scripts/run_prune.sh entropy mme
-
-# 分别评测（每种策略生成独立的 run 目录）
-bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_baseline_*/answers.jsonl
-bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_attn_score_*/answers.jsonl
-bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_pre_attn_score_*/answers.jsonl
-bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_masking_attn_score_*/answers.jsonl
-bash entropy_exp/scripts/run_eval.sh mme entropy_exp/outputs/runs/mme_entropy_*/answers.jsonl
-```
-
-### 5.4 调参实验（`--set` 快速切换）
-
-不需要复制 yaml，用 `--set` 直接在命令行覆盖参数，跑多组实验：
-
-```bash
-# 实验 A：attn_score，第 2 层 50%
-bash entropy_exp/scripts/run_prune.sh attn_score mme \
-    --set pruning.prune_layers=[2] \
-    --set pruning.prune_ratio=[0.5]
-
-# 实验 B：entropy，第 2、3 层分别 30%、60%
-bash entropy_exp/scripts/run_prune.sh entropy mme \
-    --set pruning.prune_layers=[2,3] \
-    --set pruning.prune_ratio=[0.3,0.6]
-
-# 实验 C：attn_score，第 5 层 70%
-bash entropy_exp/scripts/run_prune.sh attn_score mme \
-    --set pruning.prune_layers=[5] \
-    --set pruning.prune_ratio=[0.7]
-
-# 实验 D：entropy 动态比例
-bash entropy_exp/scripts/run_prune.sh entropy mme \
-    --set pruning.entropy.dynamic_ratio=true \
-    --set pruning.entropy.dynamic_scale=0.8 \
-    --set pruning.entropy.max_prune_ratio=0.9
-
-# 实验 E：random（固定 seed，可复现实验）
-bash entropy_exp/scripts/run_prune.sh random mme \
-    --set pruning.prune_layers=[2,3] \
-    --set pruning.prune_ratio=[0.5,0.5]
-```
-
-> **Tip**：把上述命令写成一个批跑脚本，就可以一次性提交多组实验。`--set` 优先级高于 yaml 文件中的值，不会修改原始 yaml。
-
-### 5.5 关闭捕获（减少磁盘占用）
-
-```yaml
-capture:
-  save_attention: false           # 关闭 HDF5 注意力捕获
-  save_importance_scores: false   # 关闭 stats 中的 importance scores
-  save_keep_indices: false        # 关闭 stats 中的 keep indices
-```
-
-此时 run 目录下不会生成 `captures.h5`，`stats.jsonl` 只包含聚合统计。
-
-或通过命令行关闭：
-
-```bash
-bash entropy_exp/scripts/run_prune.sh attn_score mme \
-    --set capture.save_attention=false \
-    --set capture.save_importance_scores=false \
-    --set capture.save_keep_indices=false
-```
-
-如果只需要注意力捕获（用于分析），不需要 stats 中的 scores/indices，可以只开 `save_attention`：
-
-```bash
-bash entropy_exp/scripts/run_prune.sh attn_score mme \
-    --set capture.save_attention=true \
-    --set capture.save_importance_scores=false \
-    --set capture.save_keep_indices=false
-```
-
----
-
-## 六、效率测量注意事项
-
-进行正式效率对比实验时，需严格控制环境：
-
-| 条件 | 说明 |
-|:--|:--|
-| **GPU** | 独占显卡，`nvidia-smi` 确认无其他进程 |
-| **CPU** | `top` / `htop` 确认总体占用 < 80% |
-| **磁盘 I/O** | 数据放 SSD，或提前预加载到内存 |
-| **Baseline** | 必须使用 `--baseline` 而非原始 `inference.py`，因为它走的是同一个自定义 decode 路径，计时才公平 |
-| **CUDA warmup** | 首个样本的耗时通常偏高，可考虑跑前几个样本作 warmup 后再统计 |

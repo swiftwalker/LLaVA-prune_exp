@@ -1,131 +1,70 @@
-# `entropy_exp` 结果整理与汇总流程
+# 结果评测与汇总流程
 
-本文档总结一套 **跨策略、跨数据集** 都可复用的结果整理流程，适用于 repo-native `scheduler-first` 大矩阵实验。
+本文是 `entropy_exp` 的 repo-native 结果处理流程，只覆盖：如何确认矩阵结束、补评测、生成 `summary.csv/json`、整理结果矩阵和 top-k。批量调度见 [SCHEDULER.md](./SCHEDULER.md)，单次运行见 [USAGE.md](./USAGE.md)。
 
-它回答的是：
+## 1. 结果处理顺序
 
-- 一轮矩阵实验跑完后，如何确认结果已经可整理
-- 如何从 scheduler 状态中**精确**收集本轮 run
-- 如何批量补评测、生成汇总表、再提取 `layer × ratio` 矩阵
+标准顺序：
 
-不覆盖的内容：
+1. 确认 scheduler 批次已经结束。
+2. 从 scheduler `attempts/*.json` 精确收集本轮 completed run dirs。
+3. 对每个 run dir 执行 `run_eval.sh`。
+4. 用 `summarize_results.py` 生成本轮 summary。
+5. 从 `summary.csv` 提取矩阵、top-k 和趋势。
 
-- 如何启动实验、写 scheduler plan、恢复中断任务
-- legacy `plan_batch_runs.py` 的完整工作流
+不要直接扫整个 `entropy_exp/outputs/runs/` 做正式对比。这个目录可能混有不同策略、不同日期、不同参数或历史分支结果。
 
-这些内容分别参考：
+## 2. 数据集和主指标
 
-- 调度与 plan：[`SCHEDULER.md`](./SCHEDULER.md)
-- 单次 pruning / 配置说明：[`USAGE.md`](./USAGE.md)
+| 数据集 | Local eval | Summary 主指标 |
+| --- | --- | --- |
+| `gqa` | 支持 | `accuracy` |
+| `mme` | 支持 | `overall_total_score` |
+| `pope` | 支持 | `macro_f1` |
+| `textvqa` | 支持 | `accuracy` |
+| `scienceqa` | 支持 | `accuracy` |
+| `mmbench` | 不支持本地 official score | 不进入 repo-native summary 主指标 |
 
----
+`summarize_results.py` 会把各数据集主指标统一写入：
 
-## 1. 确认矩阵已经结束
+- `primary_metric_name`
+- `primary_metric_value`
 
-对 scheduler 驱动的大矩阵，先看：
-
-```text
-entropy_exp/outputs/scheduler/<label>/
-  ├── progress.txt
-  ├── progress.json
-  ├── state.json
-  └── attempts/job_*__try*.json
-```
-
-最直接的判断方式：
+## 3. 确认 scheduler 完成
 
 ```bash
-cat entropy_exp/outputs/scheduler/<label>/progress.txt
+label="<scheduler-label>"
+state_dir="entropy_exp/outputs/scheduler/${label}"
+
+cat "${state_dir}/progress.txt"
+python -m json.tool "${state_dir}/state.json" | head -n 80
 ```
 
-只有在下面这个状态下，才进入结果整理：
+继续汇总前应确认：
 
-- `completed = total_jobs`
-- `running = 0`
 - `pending = 0`
-- `failed = 0`
+- `running = 0`
+- `failed_final = 0`
+- completed 数量等于 plan 期望 job 数
 
-如果还想核对 `state.json`：
+## 4. 收集本轮 run dirs
 
-```bash
-python - <<'PY'
-import json
-from pathlib import Path
-
-label = "<label>"
-state_path = Path(f"entropy_exp/outputs/scheduler/{label}/state.json")
-state = json.loads(state_path.read_text(encoding="utf-8"))
-
-print({
-    "completed": len(state["completed"]),
-    "running": len(state["running"]),
-    "pending": len(state["pending"]),
-    "failed_final": len(state["failed_final"]),
-    "retry_budget_remaining": state["retry_budget_remaining"],
-})
-PY
-```
-
-判读规则：
-
-- `failed_final > 0`
-  - 先处理 recovery，不要直接汇总
-- `running > 0` 或 `pending > 0`
-  - 说明矩阵还没结束
-- `completed == total_jobs`
-  - 可以进入结果整理阶段
-
----
-
-## 2. 从 `attempts/*.json` 精确收集本轮 run
-
-对大矩阵，**scheduler state 才是结果归属的 source of truth**。
-
-不要直接：
-
-- 用宽泛 prefix 扫 `outputs/runs/`
-- 用 `bash entropy_exp/scripts/run_summary.sh runs` 扫全仓库
-- 混用不同 matrix / recovery / 手工重跑留下的 run 目录
-
-推荐做法是只读取 `status=completed` 的 `run_dir`：
+从 scheduler attempts 精确收集 completed run：
 
 ```bash
-python - <<'PY'
-import json
-from pathlib import Path
-
-label = "<label>"
-attempt_dir = Path(f"entropy_exp/outputs/scheduler/{label}/attempts")
-run_dirs = []
-
-for attempt_path in sorted(attempt_dir.glob("job_*__try*.json")):
-    payload = json.loads(attempt_path.read_text(encoding="utf-8"))
-    if payload.get("status") == "completed" and payload.get("run_dir"):
-        run_dirs.append(payload["run_dir"])
-
-run_dirs = list(dict.fromkeys(run_dirs))
-for run_dir in run_dirs:
-    print(run_dir)
-PY
-```
-
-建议把结果先落成临时清单文件，后续 `eval / summary` 都复用这一份：
-
-```bash
-label="<label>"
+label="<scheduler-label>"
+state_dir="entropy_exp/outputs/scheduler/${label}"
 run_dir_list="/tmp/${label}_run_dirs.txt"
 
-RESULT_LABEL="$label" python - <<'PY' > "$run_dir_list"
+RESULT_STATE_DIR="$state_dir" python - <<'PY' > "$run_dir_list"
 import json
 import os
 from pathlib import Path
 
-label = os.environ["RESULT_LABEL"]
-attempt_dir = Path(f"entropy_exp/outputs/scheduler/{label}/attempts")
+attempts = Path(os.environ["RESULT_STATE_DIR"]) / "attempts"
 run_dirs = []
-
-for attempt_path in sorted(attempt_dir.glob("job_*__try*.json")):
-    payload = json.loads(attempt_path.read_text(encoding="utf-8"))
+for path in sorted(attempts.glob("*.json")):
+    payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("status") == "completed" and payload.get("run_dir"):
         run_dirs.append(payload["run_dir"])
 
@@ -134,200 +73,88 @@ for run_dir in dict.fromkeys(run_dirs):
 PY
 
 wc -l "$run_dir_list"
-head "$run_dir_list"
-tail "$run_dir_list"
 ```
 
-这里的行数应当和这轮矩阵的完成 job 数一致。
+## 5. 补评测
 
----
+```bash
+while IFS= read -r run_dir; do
+  if [ -f "$run_dir/eval/summary.json" ]; then
+    echo "[skip] $run_dir"
+  else
+    echo "[eval] $run_dir"
+    bash entropy_exp/scripts/run_eval.sh "$run_dir"
+  fi
+done < "$run_dir_list"
+```
 
-## 3. 批量补评测
+也可以评测单个 run：
 
-每个 `run_dir` 必须先拥有：
+```bash
+bash entropy_exp/scripts/run_eval.sh entropy_exp/outputs/runs/sparsevlm_entropy_alpha/gqa/<run_name>
+```
+
+评测完成后，每个 run 应有：
 
 ```text
 <run_dir>/eval/summary.json
 ```
 
-如果还没有，就批量补 `run_eval.sh`：
+## 6. 生成 summary
 
 ```bash
-while IFS= read -r run_dir; do
-  echo "===== EVAL $run_dir"
-  bash entropy_exp/scripts/run_eval.sh "$run_dir"
-done < "$run_dir_list"
-```
+label="<scheduler-label>"
+run_dir_list="/tmp/${label}_run_dirs.txt"
+summary_dir="entropy_exp/outputs/summary/${label}"
 
-评测完成后，可以快速检查是否还有缺口：
-
-```bash
-python - <<'PY'
-from pathlib import Path
-
-run_dir_list = Path("/tmp/<label>_run_dirs.txt")
-missing = []
-
-for line in run_dir_list.read_text(encoding="utf-8").splitlines():
-    run_dir = Path(line.strip())
-    if line.strip() and not (run_dir / "eval" / "summary.json").is_file():
-        missing.append(str(run_dir))
-
-print("missing_eval", len(missing))
-for run_dir in missing[:10]:
-    print(run_dir)
-PY
-```
-
-只有当 `missing_eval = 0` 时，才进入汇总。
-
----
-
-## 4. 生成本轮聚合 summary
-
-主入口是：
-
-```bash
 python entropy_exp/src/summarize_results.py \
-  --selection-label "<label>" \
-  --output-dir "entropy_exp/outputs/summary/<label>" \
+  --selection-label "$label" \
+  --output-dir "$summary_dir" \
   --run-dir $(tr '\n' ' ' < "$run_dir_list")
 ```
 
-这会生成：
+输出：
 
-```text
-entropy_exp/outputs/summary/<label>/
-  ├── summary.csv
-  ├── summary.json
-  └── skipped_runs.json
-```
+| 文件 | 说明 |
+| --- | --- |
+| `summary.json` | 完整 records 和 skipped runs |
+| `summary.csv` | 便于表格处理的汇总 |
+| `skipped_runs.json` | 缺文件或解析失败的 run |
 
-三个文件的用途：
+验收点：
 
-- `summary.csv`
-  - 最适合做表格、矩阵、快速比较
-- `summary.json`
-  - 保留完整 records，适合脚本二次分析
-- `skipped_runs.json`
-  - 记录没纳入 summary 的 run 以及原因
+- `included_run_count` 等于本轮 completed run 数
+- `skipped_run_count = 0`
+- 每行都有 `primary_metric_value`
 
-补充说明：
+## 7. 提取结果矩阵
 
-- 大矩阵主线推荐直接调 `summarize_results.py`
-- `bash entropy_exp/scripts/run_summary.sh <selector> [output_dir]` 更适合：
-  - 单 run
-  - 经过人工审核的 prefix
-  - 小范围手工结果集合
-- 对完整 scheduler matrix，不建议 `run_summary.sh runs`
-
----
-
-## 5. 从 `summary.csv` 提取全量结果矩阵
-
-跨数据集统一入口是：
-
-- `primary_metric_name`
-- `primary_metric_value`
-
-数据集主指标映射：
-
-- `gqa -> accuracy`
-- `mme -> overall_total_score`
-- `pope -> macro_f1`
-- `textvqa -> accuracy`
-- `scienceqa -> accuracy`
-
-说明：
-
-- `mmbench` 当前不进入 repo-native 本地指标汇总；它只保留 inference 输入兼容能力
-
-把 `summary.csv` 组织成 `layer × ratio` 矩阵的一个通用脚本：
+通用读取方式：
 
 ```bash
+summary_csv="entropy_exp/outputs/summary/<label>/summary.csv"
+
 python - <<'PY'
 import ast
 import csv
 from pathlib import Path
 
 csv_path = Path("entropy_exp/outputs/summary/<label>/summary.csv")
-rows = list(csv.DictReader(csv_path.open()))
+rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
 
-for dataset in ["gqa", "mme", "pope"]:
-    dataset_rows = [row for row in rows if row["dataset"] == dataset]
-    ratios = sorted({ast.literal_eval(row["prune_ratio"])[0] for row in dataset_rows})
-    layers = sorted({ast.literal_eval(row["effective_prune_layers"])[0] for row in dataset_rows})
-
-    print("===", dataset)
-    print("metric:", dataset_rows[0]["primary_metric_name"])
-    print("layer," + ",".join(str(ratio) for ratio in ratios))
-
-    for layer in layers:
-        values = []
-        for ratio in ratios:
-            row = next(
-                row
-                for row in dataset_rows
-                if ast.literal_eval(row["effective_prune_layers"])[0] == layer
-                and ast.literal_eval(row["prune_ratio"])[0] == ratio
-            )
-            values.append(row["primary_metric_value"])
-        print(str(layer) + "," + ",".join(values))
-    print()
-PY
-```
-
-这一步输出的就是我们日常所说的“全量结果矩阵”。
-
----
-
-## 6. 二次整理：最优配置、层均值、比率趋势、Top-k
-
-在 `summary.csv` 之上，最常做的二次整理有四类：
-
-### 6.1 找每个数据集的最优配置
-
-```bash
-python - <<'PY'
-import ast
-import csv
-from pathlib import Path
-
-rows = list(csv.DictReader(Path("entropy_exp/outputs/summary/<label>/summary.csv").open()))
-
-for dataset in ["gqa", "mme", "pope"]:
-    dataset_rows = [row for row in rows if row["dataset"] == dataset]
-    best = max(dataset_rows, key=lambda row: float(row["primary_metric_value"]))
+for row in sorted(rows, key=lambda r: (r["dataset"], r["strategy"], r["run_name"])):
     print(
-        dataset,
-        "layer=", ast.literal_eval(best["effective_prune_layers"])[0],
-        "ratio=", ast.literal_eval(best["prune_ratio"])[0],
-        "metric=", best["primary_metric_value"],
+        row["dataset"],
+        row["strategy"],
+        row["effective_prune_layers"],
+        row["prune_ratio"],
+        row["primary_metric_name"],
+        row["primary_metric_value"],
     )
 PY
 ```
 
-### 6.2 看分层均值
-
-```bash
-python - <<'PY'
-import csv
-from collections import defaultdict
-from pathlib import Path
-
-rows = list(csv.DictReader(Path("entropy_exp/outputs/summary/<label>/summary.csv").open()))
-
-for dataset in ["gqa", "mme", "pope"]:
-    bucket = defaultdict(list)
-    for row in rows:
-        if row["dataset"] != dataset:
-            continue
-        bucket[row["effective_prune_layers"]].append(float(row["primary_metric_value"]))
-    print(dataset, {layer: sum(vals) / len(vals) for layer, vals in sorted(bucket.items())})
-PY
-```
-
-### 6.3 看分剪枝率趋势
+如果要按 `dataset x layer x ratio` 组织：
 
 ```bash
 python - <<'PY'
@@ -336,139 +163,55 @@ import csv
 from collections import defaultdict
 from pathlib import Path
 
-rows = list(csv.DictReader(Path("entropy_exp/outputs/summary/<label>/summary.csv").open()))
+rows = list(csv.DictReader(Path("entropy_exp/outputs/summary/<label>/summary.csv").open(encoding="utf-8")))
+groups = defaultdict(list)
 
-for dataset in ["gqa", "mme", "pope"]:
-    bucket = defaultdict(list)
-    for row in rows:
-        if row["dataset"] != dataset:
-            continue
-        ratio = ast.literal_eval(row["prune_ratio"])[0]
-        bucket[ratio].append(float(row["primary_metric_value"]))
-    print(dataset, {ratio: sum(vals) / len(vals) for ratio, vals in sorted(bucket.items())})
+for row in rows:
+    layers = ast.literal_eval(row["effective_prune_layers"])
+    ratios = ast.literal_eval(row["prune_ratio"])
+    layer = layers[0] if layers else None
+    ratio = ratios[0] if isinstance(ratios, list) else ratios
+    groups[(row["dataset"], row["strategy"], layer, ratio)].append(float(row["primary_metric_value"]))
+
+for key, values in sorted(groups.items()):
+    print(*key, sum(values) / len(values))
 PY
 ```
 
-### 6.4 提取 Top-k 结果表
+## 8. Top-k 和趋势
+
+每个数据集 top-k：
 
 ```bash
 python - <<'PY'
 import csv
 from pathlib import Path
 
-rows = list(csv.DictReader(Path("entropy_exp/outputs/summary/<label>/summary.csv").open()))
+rows = list(csv.DictReader(Path("entropy_exp/outputs/summary/<label>/summary.csv").open(encoding="utf-8")))
 
-for dataset in ["gqa", "mme", "pope"]:
+for dataset in sorted({row["dataset"] for row in rows}):
     dataset_rows = [row for row in rows if row["dataset"] == dataset]
-    topk = sorted(dataset_rows, key=lambda row: float(row["primary_metric_value"]), reverse=True)[:3]
-    print("\\nTOP3", dataset)
+    topk = sorted(dataset_rows, key=lambda row: float(row["primary_metric_value"]), reverse=True)[:5]
+    print("\\nTOP5", dataset)
     for row in topk:
-        print(row["run_name"], row["effective_prune_layers"], row["prune_ratio"], row["primary_metric_value"])
+        print(row["strategy"], row["effective_prune_layers"], row["prune_ratio"], row["primary_metric_value"], row["run_name"])
 PY
 ```
 
----
+跨数据集比较时，先确认：
 
-## 7. 常见误区
+- 使用相同 `max_samples`
+- 使用相同 seed
+- 使用相同 `prune_layers` / `prune_ratio` 搜索空间
+- 不把 inference-only 的 `mmbench` 混入本地指标均值
 
-- `attempts/*.json` 为空，或还有 `running / pending / failed_final`
-  - 不要直接汇总，先把矩阵收口或做 recovery
-- 直接用 `run_summary.sh runs`
-  - 容易把别的策略、别的批次、旧结果一并扫进去
-- `run_dir` 里缺 `eval/summary.json`
-  - 先补 `run_eval.sh`，再做 summary
-- 重跑或 recovery 后仍沿用旧的 `selection_label` / `output_dir`
-  - 会把不同轮次结果混在一起，难以追溯
-- 只看 `run_name` 前缀，不看 scheduler state
-  - 对单 run / 小范围 prefix 可以，但对大矩阵不够稳
+## 9. 常见误区
 
----
+- `attempts/*.json` 还存在 running 或 failed，却直接汇总。
+- 直接扫 `outputs/runs`，把旧结果混入新矩阵。
+- run dir 还没有 `eval/summary.json` 就运行 summary。
+- 重跑 recovery 后继续沿用旧 `selection_label`，导致轮次混在一起。
+- 只看 run_name 前缀，不看 scheduler attempt 记录。
 
-## 8. Worked Example
+历史 keep-position-ids worked example 已移到 [HISTORICAL_WORKFLOWS.md](./HISTORICAL_WORKFLOWS.md)。
 
-下面以这次完成过的一轮矩阵为例：
-
-```text
-label = keep-position-ids-sparsevlm-adaptive-stratified-full-matrix
-```
-
-在你自己的实验里，把 `<label>` 替换成当前 matrix 的 label 即可。
-
-### 8.1 收集 run 清单
-
-```bash
-label="keep-position-ids-sparsevlm-adaptive-stratified-full-matrix"
-run_dir_list="/tmp/${label}_run_dirs.txt"
-
-RESULT_LABEL="$label" python - <<'PY' > "$run_dir_list"
-import json
-import os
-from pathlib import Path
-
-label = os.environ["RESULT_LABEL"]
-attempt_dir = Path(f"entropy_exp/outputs/scheduler/{label}/attempts")
-run_dirs = []
-
-for attempt_path in sorted(attempt_dir.glob("job_*__try*.json")):
-    payload = json.loads(attempt_path.read_text(encoding="utf-8"))
-    if payload.get("status") == "completed" and payload.get("run_dir"):
-        run_dirs.append(payload["run_dir"])
-
-for run_dir in dict.fromkeys(run_dirs):
-    print(run_dir)
-PY
-```
-
-### 8.2 补评测
-
-```bash
-while IFS= read -r run_dir; do
-  bash entropy_exp/scripts/run_eval.sh "$run_dir"
-done < "$run_dir_list"
-```
-
-### 8.3 生成总 summary
-
-```bash
-python entropy_exp/src/summarize_results.py \
-  --selection-label "$label" \
-  --output-dir "entropy_exp/outputs/summary/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix" \
-  --run-dir $(tr '\n' ' ' < "$run_dir_list")
-```
-
-### 8.4 取出矩阵
-
-```bash
-python - <<'PY'
-import ast
-import csv
-from pathlib import Path
-
-csv_path = Path("entropy_exp/outputs/summary/keep_position_ids_sparsevlm_adaptive_stratified_full_matrix/summary.csv")
-rows = list(csv.DictReader(csv_path.open()))
-
-for dataset in ["gqa", "mme", "pope"]:
-    dataset_rows = [row for row in rows if row["dataset"] == dataset]
-    ratios = sorted({ast.literal_eval(row["prune_ratio"])[0] for row in dataset_rows})
-    layers = sorted({ast.literal_eval(row["effective_prune_layers"])[0] for row in dataset_rows})
-
-    print("===", dataset)
-    print("metric:", dataset_rows[0]["primary_metric_name"])
-    print("layer," + ",".join(str(ratio) for ratio in ratios))
-
-    for layer in layers:
-        values = []
-        for ratio in ratios:
-            row = next(
-                row
-                for row in dataset_rows
-                if ast.literal_eval(row["effective_prune_layers"])[0] == layer
-                and ast.literal_eval(row["prune_ratio"])[0] == ratio
-            )
-            values.append(row["primary_metric_value"])
-        print(str(layer) + "," + ",".join(values))
-    print()
-PY
-```
-
-这就是一套可以复用于任何 `scheduler-first` 大矩阵的标准结果整理流程。

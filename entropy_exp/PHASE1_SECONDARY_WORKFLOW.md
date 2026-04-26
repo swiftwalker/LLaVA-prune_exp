@@ -3,6 +3,9 @@
 This document covers the retained **Phase 1** attention-capture and offline
 entropy-analysis path inside `entropy_exp`.
 
+For the broader historical-workflow index, see
+[`HISTORICAL_WORKFLOWS.md`](./HISTORICAL_WORKFLOWS.md).
+
 Status:
 
 - support level: `secondary`

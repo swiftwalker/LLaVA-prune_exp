@@ -24,6 +24,7 @@ KNOWN_STRATEGIES = (
     "random",
     "sparsevlm",
     "sparsevlm_adaptive_stratified",
+    "sparsevlm_entropy_alpha",
     "baseline",
 )
 
