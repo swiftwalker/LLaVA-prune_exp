@@ -710,6 +710,34 @@ class SchedulerGpuSelectionTests(unittest.TestCase):
         self.assertEqual(projected_free, observed)
         self.assertEqual(selected_gpu, 0)
 
+    def test_visible_gpu_env_filters_scheduler_candidates(self):
+        gpu_cfg = GPUConfig(
+            min_free_gib=16,
+            selection="max_free",
+            sample_seconds=3,
+            poll_interval_seconds=15,
+        )
+        observed = {0: 90000, 1: 89000, 4: 95000, 5: 94000}
+
+        from unittest import mock
+
+        with mock.patch(
+            "entropy_exp.src.scheduler.collect_average_gpu_free_mib",
+            return_value=observed,
+        ), mock.patch.dict(
+            "os.environ",
+            {"LLAVA_SCHEDULER_VISIBLE_GPUS": "4,5"},
+            clear=False,
+        ):
+            selected_gpu, observed_free, projected_free = select_gpu_for_dispatch(
+                gpu_cfg,
+                provisional_reservations_by_gpu={},
+            )
+
+        self.assertEqual(observed_free, {4: 95000, 5: 94000})
+        self.assertEqual(projected_free, {4: 95000, 5: 94000})
+        self.assertEqual(selected_gpu, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

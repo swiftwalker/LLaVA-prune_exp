@@ -57,6 +57,12 @@ pruning:
   sparsevlm_entropy_alpha:
     alpha_min: 0.4
     alpha_max: 0.95
+    mapping_type: "linear"          # linear | sigmoid | piecewise
+    sigmoid_k: 10.0
+    sigmoid_mu: 0.5
+    piecewise_threshold: 0.5
+    piecewise_slope_low: 0.3
+    piecewise_slope_high: 1.7
     grid_size: 6
     patch_per_row: 24
     intra_stratum_mode: "random"

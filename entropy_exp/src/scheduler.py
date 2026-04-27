@@ -47,6 +47,7 @@ SUPPORTED_STRATEGIES = {
     "sparsevlm_entropy_alpha",
 }
 MIN_FREE_MIB_DEFAULT = 16 * 1024
+VISIBLE_GPUS_ENV = "LLAVA_SCHEDULER_VISIBLE_GPUS"
 
 
 class SchedulerError(RuntimeError):
@@ -699,6 +700,41 @@ def build_tmux_window_command(launcher_path: Path, log_path: Path) -> str:
     return f"bash -lc 'set -euo pipefail; {launcher} 2>&1 | tee {log}'"
 
 
+def parse_visible_gpus_env(raw_value: Optional[str]) -> Optional[set[int]]:
+    if raw_value is None:
+        return None
+    text = raw_value.strip()
+    if not text or text.lower() == "all":
+        return None
+
+    visible_gpus: set[int] = set()
+    for raw_item in text.split(","):
+        item = raw_item.strip()
+        if not item:
+            raise SchedulerError(f"{VISIBLE_GPUS_ENV} contains an empty GPU id: {raw_value!r}")
+        try:
+            gpu_idx = int(item)
+        except ValueError as exc:
+            raise SchedulerError(f"{VISIBLE_GPUS_ENV} entries must be integer GPU ids: {raw_value!r}") from exc
+        if gpu_idx < 0:
+            raise SchedulerError(f"{VISIBLE_GPUS_ENV} entries must be non-negative GPU ids: {raw_value!r}")
+        visible_gpus.add(gpu_idx)
+    return visible_gpus
+
+
+def filter_visible_gpus(observed_free_mib: Dict[int, int]) -> Dict[int, int]:
+    visible_gpus = parse_visible_gpus_env(os.environ.get(VISIBLE_GPUS_ENV))
+    if visible_gpus is None:
+        return observed_free_mib
+
+    filtered = {gpu: free_mib for gpu, free_mib in observed_free_mib.items() if gpu in visible_gpus}
+    if not filtered:
+        raise SchedulerError(
+            f"{VISIBLE_GPUS_ENV}={os.environ.get(VISIBLE_GPUS_ENV)!r} did not match any GPUs reported by nvidia-smi"
+        )
+    return filtered
+
+
 def collect_average_gpu_free_mib(sample_seconds: int) -> Dict[int, int]:
     free_sums: Dict[int, int] = {}
     counts: Dict[int, int] = {}
@@ -727,7 +763,7 @@ def select_gpu_for_dispatch(
     gpu_cfg: GPUConfig,
     provisional_reservations_by_gpu: Optional[Dict[int, int]] = None,
 ) -> Tuple[Optional[int], Dict[int, int], Dict[int, int]]:
-    observed_free_mib = collect_average_gpu_free_mib(gpu_cfg.sample_seconds)
+    observed_free_mib = filter_visible_gpus(collect_average_gpu_free_mib(gpu_cfg.sample_seconds))
     reserve_per_job_mib = int(gpu_cfg.min_free_gib * 1024)
     provisional_reservations_by_gpu = dict(provisional_reservations_by_gpu or {})
 

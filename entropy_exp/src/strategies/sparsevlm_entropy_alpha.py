@@ -26,6 +26,7 @@ class SparseVLMEntropyAlphaStrategy(SparseVLMAdaptiveStratifiedStrategy):
     """Adaptive stratified SparseVLM with entropy-driven alpha."""
 
     _VALIDATION_HIGH_RATIO_PLACEHOLDER = 0.5
+    _VALID_MAPPING_TYPES = {"linear", "sigmoid", "piecewise"}
 
     def _get_alpha_bounds(self) -> Tuple[float, float]:
         alpha_min = float(self.config.get("alpha_min", 0.4))
@@ -36,11 +37,96 @@ class SparseVLMEntropyAlphaStrategy(SparseVLMAdaptiveStratifiedStrategy):
             )
         return alpha_min, alpha_max
 
+    def _get_mapping_type(self) -> str:
+        mapping_type = str(self.config.get("mapping_type", "linear")).lower()
+        if mapping_type not in self._VALID_MAPPING_TYPES:
+            valid = ", ".join(sorted(self._VALID_MAPPING_TYPES))
+            raise ValueError(f"mapping_type must be one of {{{valid}}}, got {mapping_type!r}")
+        return mapping_type
+
+    def _get_sigmoid_params(self) -> Tuple[float, float]:
+        sigmoid_k = float(self.config.get("sigmoid_k", 10.0))
+        sigmoid_mu = float(self.config.get("sigmoid_mu", 0.5))
+        if sigmoid_k <= 0.0:
+            raise ValueError(f"sigmoid_k must be > 0, got {sigmoid_k}")
+        if not 0.0 <= sigmoid_mu <= 1.0:
+            raise ValueError(f"sigmoid_mu must satisfy 0 <= sigmoid_mu <= 1, got {sigmoid_mu}")
+        return sigmoid_k, sigmoid_mu
+
+    def _get_piecewise_params(self) -> Tuple[float, float, float]:
+        threshold = float(self.config.get("piecewise_threshold", 0.5))
+        slope_low = float(self.config.get("piecewise_slope_low", 0.3))
+        slope_high = float(self.config.get("piecewise_slope_high", 1.7))
+        if not 0.0 < threshold < 1.0:
+            raise ValueError(f"piecewise_threshold must satisfy 0 < threshold < 1, got {threshold}")
+        if slope_low <= 0.0:
+            raise ValueError(f"piecewise_slope_low must be > 0, got {slope_low}")
+        if slope_high <= 0.0:
+            raise ValueError(f"piecewise_slope_high must be > 0, got {slope_high}")
+        return threshold, slope_low, slope_high
+
+    def _validate_active_mapping_config(self) -> str:
+        mapping_type = self._get_mapping_type()
+        if mapping_type == "sigmoid":
+            self._get_sigmoid_params()
+        elif mapping_type == "piecewise":
+            self._get_piecewise_params()
+        return mapping_type
+
+    def _map_entropy_norm_to_alpha(
+        self,
+        entropy_norm: torch.Tensor,
+        alpha_min: float,
+        alpha_max: float,
+    ) -> torch.Tensor:
+        mapping_type = self._get_mapping_type()
+        alpha_span = alpha_max - alpha_min
+        entropy_norm = torch.clamp(entropy_norm, min=0.0, max=1.0)
+
+        if mapping_type == "linear":
+            alpha = entropy_norm.new_tensor(alpha_min) + (1.0 - entropy_norm) * alpha_span
+        elif mapping_type == "sigmoid":
+            sigmoid_k, sigmoid_mu = self._get_sigmoid_params()
+            sigmoid_value = torch.sigmoid(
+                entropy_norm.new_tensor(sigmoid_k) * (entropy_norm - entropy_norm.new_tensor(sigmoid_mu))
+            )
+            alpha = entropy_norm.new_tensor(alpha_min) + (1.0 - sigmoid_value) * alpha_span
+        else:
+            threshold, slope_low, slope_high = self._get_piecewise_params()
+            threshold_t = entropy_norm.new_tensor(threshold)
+            low_extent = torch.minimum(entropy_norm, threshold_t)
+            high_extent = torch.clamp(entropy_norm - threshold_t, min=0.0)
+            denom = entropy_norm.new_tensor(slope_low * threshold + slope_high * (1.0 - threshold))
+            drop = (
+                entropy_norm.new_tensor(slope_low) * low_extent
+                + entropy_norm.new_tensor(slope_high) * high_extent
+            ) / denom
+            alpha = entropy_norm.new_tensor(alpha_max) - drop * alpha_span
+
+        return torch.clamp(alpha, min=alpha_min, max=alpha_max)
+
+    def _get_alpha_mapping_info(self) -> Dict[str, object]:
+        mapping_type = self._get_mapping_type()
+        sigmoid_k = float(self.config.get("sigmoid_k", 10.0))
+        sigmoid_mu = float(self.config.get("sigmoid_mu", 0.5))
+        piecewise_threshold = float(self.config.get("piecewise_threshold", 0.5))
+        piecewise_slope_low = float(self.config.get("piecewise_slope_low", 0.3))
+        piecewise_slope_high = float(self.config.get("piecewise_slope_high", 1.7))
+        return {
+            "alpha_mapping_type": mapping_type,
+            "sigmoid_k": sigmoid_k,
+            "sigmoid_mu": sigmoid_mu,
+            "piecewise_threshold": piecewise_threshold,
+            "piecewise_slope_low": piecewise_slope_low,
+            "piecewise_slope_high": piecewise_slope_high,
+        }
+
     def _compute_adaptive_alpha(self, visual_scores: torch.Tensor) -> Tuple[float, float, float]:
         if visual_scores.ndim != 1:
             raise ValueError(f"visual_scores must be 1D, got {tuple(visual_scores.shape)}")
 
         alpha_min, alpha_max = self._get_alpha_bounds()
+        self._validate_active_mapping_config()
         num_tokens = int(visual_scores.numel())
         if num_tokens <= 1:
             return alpha_max, 0.0, 0.0
@@ -55,8 +141,7 @@ class SparseVLMEntropyAlphaStrategy(SparseVLMAdaptiveStratifiedStrategy):
         entropy_raw = -(probs[positive_mask] * torch.log(probs[positive_mask])).sum()
         entropy_denom = torch.log(scores.new_tensor(float(num_tokens)))
         entropy_norm = torch.clamp(entropy_raw / entropy_denom, min=0.0, max=1.0)
-        alpha = scores.new_tensor(alpha_min) + (1.0 - entropy_norm) * (alpha_max - alpha_min)
-        alpha = torch.clamp(alpha, min=alpha_min, max=alpha_max)
+        alpha = self._map_entropy_norm_to_alpha(entropy_norm, alpha_min, alpha_max)
         return float(alpha.item()), float(entropy_raw.item()), float(entropy_norm.item())
 
     def prepare_sample(
@@ -257,5 +342,6 @@ class SparseVLMEntropyAlphaStrategy(SparseVLMAdaptiveStratifiedStrategy):
             "saliency_entropy_norm": entropy_norm,
             "alpha_min": alpha_min,
             "alpha_max": alpha_max,
+            **self._get_alpha_mapping_info(),
         }
         return keep_indices, info
