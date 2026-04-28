@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -16,15 +18,23 @@ from entropy_exp.src.scheduler import (
     build_run_command,
     build_run_prefix,
     build_window_base_name,
+    cleanup_tmux_session_if_idle,
     compute_retry_budget,
     DEFAULT_CONDA_SH,
+    DefaultsConfig,
+    EnvironmentConfig,
+    ExperimentScheduler,
     expand_jobs,
     finalize_attempt_result,
     format_progress_line,
-    load_scheduler_plan,
     GPUConfig,
+    list_tmux_windows,
+    load_scheduler_plan,
     resolve_conda_activate_target,
+    RetryConfig,
+    SchedulerPlan as SchedulerPlanConfig,
     select_gpu_for_dispatch,
+    TmuxConfig,
     validate_answers_file,
 )
 
@@ -463,6 +473,116 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertIn("running=6", line)
         self.assertIn("retry=31/33", line)
         self.assertIn("active_gpus=0,2,4,5", line)
+
+
+class SchedulerTmuxCleanupTests(unittest.TestCase):
+    def test_list_tmux_windows_returns_empty_for_missing_session(self):
+        with mock.patch("entropy_exp.src.scheduler.tmux_has_session", return_value=False):
+            self.assertEqual(list_tmux_windows("missing_session"), [])
+
+    def test_list_tmux_windows_parses_window_names(self):
+        completed = subprocess.CompletedProcess(
+            args=["tmux"],
+            returncode=0,
+            stdout="__controller\njob_window\n\n",
+            stderr="",
+        )
+        with mock.patch("entropy_exp.src.scheduler.tmux_has_session", return_value=True), mock.patch(
+            "entropy_exp.src.scheduler.subprocess.run", return_value=completed
+        ) as run_mock:
+            self.assertEqual(list_tmux_windows("sched_demo"), ["__controller", "job_window"])
+            run_mock.assert_called_once_with(
+                ["tmux", "list-windows", "-t", "sched_demo", "-F", "#{window_name}"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+    def test_cleanup_tmux_session_if_idle_ignores_missing_session(self):
+        with mock.patch("entropy_exp.src.scheduler.list_tmux_windows", return_value=[]), mock.patch(
+            "entropy_exp.src.scheduler.subprocess.run"
+        ) as run_mock:
+            self.assertFalse(cleanup_tmux_session_if_idle("missing_session"))
+            run_mock.assert_not_called()
+
+    def test_cleanup_tmux_session_if_idle_kills_controller_only_session(self):
+        with mock.patch("entropy_exp.src.scheduler.list_tmux_windows", return_value=["__controller"]), mock.patch(
+            "entropy_exp.src.scheduler.subprocess.run"
+        ) as run_mock:
+            self.assertTrue(cleanup_tmux_session_if_idle("sched_demo"))
+            run_mock.assert_called_once_with(["tmux", "kill-session", "-t", "sched_demo"], check=True)
+
+    def test_cleanup_tmux_session_if_idle_keeps_session_with_extra_windows(self):
+        with mock.patch(
+            "entropy_exp.src.scheduler.list_tmux_windows",
+            return_value=["__controller", "manual_shell"],
+        ), mock.patch("entropy_exp.src.scheduler.subprocess.run") as run_mock:
+            self.assertFalse(cleanup_tmux_session_if_idle("sched_demo"))
+            run_mock.assert_not_called()
+
+    def _make_scheduler(self, state: dict) -> ExperimentScheduler:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        plan = SchedulerPlanConfig(
+            version=1,
+            label="demo-cleanup",
+            pool_size=1,
+            gpu=GPUConfig(
+                min_free_gib=16,
+                selection="max_free",
+                sample_seconds=1,
+                poll_interval_seconds=1,
+            ),
+            retry=RetryConfig(budget_ratio=0.1, rounding="ceil"),
+            tmux=TmuxConfig(session_name="sched_demo", log_dir="entropy_exp/outputs/logs/tmux"),
+            environment=EnvironmentConfig(conda_sh=str(DEFAULT_CONDA_SH), conda_env="llava", extra_env=[]),
+            defaults=DefaultsConfig(max_samples=None, extra_sets=[]),
+            experiments=[],
+        )
+        return ExperimentScheduler(
+            repo_root=ROOT_DIR,
+            plan=plan,
+            state_dir=Path(temp_dir.name),
+            state=state,
+            scheduler_script=ROOT_DIR / "entropy_exp" / "scripts" / "run_scheduler.py",
+            scheduler_python=Path(sys.executable),
+        )
+
+    def test_run_cleans_up_tmux_session_when_already_complete(self):
+        scheduler = self._make_scheduler(
+            {
+                "label": "demo-cleanup",
+                "total_jobs": 1,
+                "pool_size": 1,
+                "retry_budget_total": 0,
+                "retry_budget_remaining": 0,
+                "pending": [],
+                "running": {},
+                "completed": ["job_0001"],
+                "failed_final": [],
+            }
+        )
+        with mock.patch("entropy_exp.src.scheduler.cleanup_tmux_session_if_idle") as cleanup_mock:
+            scheduler.run()
+            cleanup_mock.assert_called_once_with("sched_demo")
+
+    def test_cleanup_tmux_session_if_complete_skips_incomplete_state(self):
+        scheduler = self._make_scheduler(
+            {
+                "label": "demo-cleanup",
+                "total_jobs": 1,
+                "pool_size": 1,
+                "retry_budget_total": 0,
+                "retry_budget_remaining": 0,
+                "pending": ["job_0001"],
+                "running": {},
+                "completed": [],
+                "failed_final": [],
+            }
+        )
+        with mock.patch("entropy_exp.src.scheduler.cleanup_tmux_session_if_idle") as cleanup_mock:
+            scheduler.cleanup_tmux_session_if_complete()
+            cleanup_mock.assert_not_called()
 
 
 class SchedulerFinalizeTests(unittest.TestCase):

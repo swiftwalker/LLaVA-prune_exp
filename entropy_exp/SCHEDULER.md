@@ -20,7 +20,7 @@ Scheduler 不负责：
 - 汇总 `summary.csv/json`
 - 自动比较结果矩阵
 - 自定义 run root 发现
-- GPU allowlist / denylist
+- plan YAML 内置 GPU allowlist / denylist；需要时用启动环境 `LLAVA_SCHEDULER_VISIBLE_GPUS` 限制可见 GPU
 - 每卡固定并发额度
 
 ## 2. 快速命令
@@ -114,8 +114,8 @@ experiments:
 | --- | --- |
 | `version` | 当前必须是 `1` |
 | `label` | 状态目录、日志目录和进度显示用的批次名 |
-| `pool_size` | 全局并发上限，不是每卡并发上限 |
-| `gpu.min_free_gib` | 单个 job 派发前要求的最小空闲显存 |
+| `pool_size` | 全局并发上限，不是每卡并发上限；按下面的显存容量原则确定 |
+| `gpu.min_free_gib` | 单个 job 派发前要求的最小空闲显存；默认按每个 run 占用 `16 GiB` 设置 |
 | `gpu.selection` | 当前只支持 `max_free` |
 | `gpu.sample_seconds` | 采样 `nvidia-smi` 的秒数 |
 | `gpu.poll_interval_seconds` | 没有可派发 GPU 时的轮询间隔 |
@@ -128,6 +128,29 @@ experiments:
 | `defaults.max_samples` | 默认样本数；`null` 表示全量 |
 | `defaults.extra_sets` | 所有 job 共享的 `--set` 覆盖 |
 | `experiments` | 非空 experiment 列表 |
+
+### `pool_size` 确定原则
+
+默认把每个 pruning run 视为占用 `16 GiB` 显存，因此 `gpu.min_free_gib` 默认保持 `16`。`pool_size` 应该按当前可见 GPU 的空闲显存尽可能放大，不再使用固定保守值。
+
+推荐计算流程：
+
+1. 用 `nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits` 查看每张可用 GPU 的空闲显存。
+2. 若需要保护某些 GPU，先通过 `LLAVA_SCHEDULER_VISIBLE_GPUS=0,1,2` 这类启动环境限制 scheduler 可见 GPU；未限制或设为 `all` 时默认所有 GPU 都可参与调度。
+3. 对每张可见 GPU 计算可承载槽位：`slots_i = floor(free_mib_i / (16 * 1024))`。
+4. 令 `estimated_slots = sum(slots_i)`，再设置 `pool_size = min(total_jobs, estimated_slots)`。
+5. 如果机器是本批实验专用，且希望 scheduler 在别的任务释放显存后继续尽量补满，可以把 `pool_size` 设为 `total_jobs`；实际并发仍会被 `gpu.min_free_gib=16` 的显存门控限制。
+
+示例：
+
+```text
+8 张 96 GiB GPU 全空，每张约 97,250 MiB free：
+slots_i = floor(97250 / 16384) = 5
+estimated_slots = 8 * 5 = 40
+pool_size = min(total_jobs, 40)
+```
+
+如果某张 GPU 只剩约 `19 GiB` free，按激进最大吞吐原则仍可分配 `1` 个 run；如果想给其他用户或系统留更多余量，就不要把这张卡暴露给 scheduler，或手动降低 `pool_size`。
 
 ### `experiments[*]`
 
@@ -243,4 +266,3 @@ Scheduler 完成后，通常按这个顺序处理：
 4. 如果需要 patch 保留分布，再按 [PATCH_DISTRIBUTION_WORKFLOW.md](./PATCH_DISTRIBUTION_WORKFLOW.md) 处理。
 
 历史 keep-position-ids canonical plan 和旧工作流见 [HISTORICAL_WORKFLOWS.md](./HISTORICAL_WORKFLOWS.md)。
-

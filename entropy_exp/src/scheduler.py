@@ -671,6 +671,18 @@ def tmux_has_session(session_name: str) -> bool:
     return proc.returncode == 0
 
 
+def list_tmux_windows(session_name: str) -> List[str]:
+    if not tmux_has_session(session_name):
+        return []
+    proc = subprocess.run(
+        ["tmux", "list-windows", "-t", session_name, "-F", "#{window_name}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
 def ensure_tmux_session(session_name: str) -> None:
     if tmux_has_session(session_name):
         return
@@ -682,16 +694,25 @@ def ensure_tmux_session(session_name: str) -> None:
 
 
 def tmux_window_exists(session_name: str, window_name: str) -> bool:
-    if not tmux_has_session(session_name):
+    return window_name in set(list_tmux_windows(session_name))
+
+
+def cleanup_tmux_session_if_idle(session_name: str) -> bool:
+    windows = list_tmux_windows(session_name)
+    if not windows:
         return False
-    proc = subprocess.run(
-        ["tmux", "list-windows", "-t", session_name, "-F", "#{window_name}"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    windows = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
-    return window_name in windows
+
+    non_controller_windows = [window for window in windows if window != "__controller"]
+    if non_controller_windows:
+        print(
+            "[scheduler] Completed; tmux session "
+            f"{session_name} kept because windows remain: {','.join(windows)}"
+        )
+        return False
+
+    subprocess.run(["tmux", "kill-session", "-t", session_name], check=True)
+    print(f"[scheduler] Completed; cleaned up tmux session: {session_name}")
+    return True
 
 
 def build_tmux_window_command(launcher_path: Path, log_path: Path) -> str:
@@ -1171,6 +1192,11 @@ class ExperimentScheduler:
             if not self.state["pending"] and not self.state["running"]:
                 break
             time.sleep(self.plan.gpu.poll_interval_seconds)
+        self.cleanup_tmux_session_if_complete()
+
+    def cleanup_tmux_session_if_complete(self) -> None:
+        if not self.state["pending"] and not self.state["running"]:
+            cleanup_tmux_session_if_idle(self.plan.tmux.session_name)
 
 
 def scheduler_dry_run(
