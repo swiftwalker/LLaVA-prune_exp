@@ -274,6 +274,83 @@ def list_ints(value: Any) -> list[int]:
     return [int(item) for item in value]
 
 
+def _initial_patch_indices(row: dict[str, Any], patch_per_row: int = PATCH_PER_ROW) -> list[int]:
+    first_layer = min(PRUNE_LAYERS)
+    current_patch = list_ints(row.get(f"layer_{first_layer}_current_patch_indices"))
+    if current_patch:
+        return current_patch
+
+    before = int(row.get(f"layer_{first_layer}_before", patch_per_row * patch_per_row))
+    return list(range(before))
+
+
+def canonicalize_patch_indices(
+    row: dict[str, Any] | None,
+    layers: tuple[int, ...] = PRUNE_LAYERS,
+    patch_per_row: int = PATCH_PER_ROW,
+) -> dict[str, Any] | None:
+    """Return a stats row whose patch-index fields are original-image patch ids.
+
+    Older SparseVLM stats only store layer-local keep/pruned indices. For a
+    progressive prune run, layer-local index 0 at L6 means "the first token that
+    survived L2", not original patch 0. This helper reconstructs the cumulative
+    alive patch mapping so downstream visualizations always use original patch
+    coordinates.
+    """
+    if row is None:
+        return None
+
+    canonical = dict(row)
+    alive = _initial_patch_indices(row, patch_per_row=patch_per_row)
+    max_requested_layer = max(layers) if layers else max(PRUNE_LAYERS)
+    reconstruction_layers = tuple(layer for layer in PRUNE_LAYERS if layer <= max_requested_layer)
+
+    for layer in reconstruction_layers:
+        current_key = f"layer_{layer}_current_patch_indices"
+        keep_key = f"layer_{layer}_keep_patch_indices"
+        pruned_key = f"layer_{layer}_pruned_patch_indices"
+        high_key = f"layer_{layer}_high_keep_patch_indices"
+        low_key = f"layer_{layer}_low_keep_patch_indices"
+
+        current_patch = list_ints(row.get(current_key))
+        if current_patch:
+            alive = current_patch
+            canonical[current_key] = current_patch
+        else:
+            canonical[current_key] = list(alive)
+
+        keep_local = list_ints(row.get(f"layer_{layer}_keep_indices"))
+        pruned_local = list_ints(row.get(f"layer_{layer}_pruned_indices"))
+
+        if keep_local:
+            keep_patch = [alive[index] for index in keep_local if 0 <= index < len(alive)]
+        else:
+            keep_patch = list_ints(row.get(keep_key))
+        if pruned_local:
+            pruned_patch = [alive[index] for index in pruned_local if 0 <= index < len(alive)]
+        else:
+            pruned_patch = list_ints(row.get(pruned_key))
+
+        canonical[keep_key] = keep_patch
+        canonical[pruned_key] = pruned_patch
+
+        high_local = list_ints(row.get(f"layer_{layer}_high_keep_indices"))
+        low_local = list_ints(row.get(f"layer_{layer}_low_keep_indices"))
+        if high_local:
+            canonical[high_key] = [alive[index] for index in high_local if 0 <= index < len(alive)]
+        elif high_key in row:
+            canonical[high_key] = list_ints(row.get(high_key))
+        if low_local:
+            canonical[low_key] = [alive[index] for index in low_local if 0 <= index < len(alive)]
+        elif low_key in row:
+            canonical[low_key] = list_ints(row.get(low_key))
+
+        if keep_patch:
+            alive = keep_patch
+
+    return canonical
+
+
 def entropy_norm_from_scores(scores: list[float]) -> float:
     if len(scores) <= 1:
         return 0.0
@@ -307,6 +384,8 @@ def compute_patch_diff_metrics(
     ours_stats: dict[str, Any] | None,
     layers: tuple[int, ...] = PRUNE_LAYERS,
 ) -> dict[str, Any]:
+    sv2_stats = canonicalize_patch_indices(sv2_stats, layers=layers)
+    ours_stats = canonicalize_patch_indices(ours_stats, layers=layers)
     if sv2_stats is None or ours_stats is None:
         return {
             "patch_diff_score": 0.0,
@@ -458,6 +537,8 @@ def render_case_figure(
     sv2_run_dir: Path,
     output_path: Path,
 ) -> None:
+    sv2_stats = canonicalize_patch_indices(sv2_stats) or sv2_stats
+    ours_stats = canonicalize_patch_indices(ours_stats) or ours_stats
     image_file = case.get("image_file") or ours_stats.get("image_file") or sv2_stats.get("image_file")
     image = load_image(resolve_image_path(sv2_run_dir, str(case["dataset"]), str(image_file)))
 

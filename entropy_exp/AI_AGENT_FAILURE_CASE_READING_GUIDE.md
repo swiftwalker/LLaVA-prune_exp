@@ -65,6 +65,12 @@ Each selected case figure is organized as a matrix:
 - Rows are pruning layers: layer 2, layer 6, and layer 15.
 - Columns are visualization views.
 
+All patch locations in corrected figures are canonical original-image grid
+coordinates. If a source run only stored layer-local token indices, the analysis
+reconstructs the cumulative alive-token mapping before drawing or computing
+patch differences. Therefore, for a physically pruned run, later-layer keep
+masks should be subsets of earlier-layer keep masks for the same method.
+
 The five columns are:
 
 1. Reference keep mask: patches kept by the reference method.
@@ -107,6 +113,7 @@ Avoid overclaiming causal conclusions from a single figure. Use multiple samples
 - Do not assume every red region is semantically important; it is only a region kept by the reference method and not by the analyzed method.
 - Do not infer that a low/compensation token is bad by default. It is suspicious only when repeated failure cases show compensation displacing task-critical regions.
 - Do not ignore keep level. A pattern at 20 tokens may not apply at 118 tokens.
+- Do not interpret old non-canonical figures where a later-layer reference keep mask is not a subset of an earlier layer. That pattern indicates a visualization-coordinate bug, not token revival.
 
 ## Expected Archive Contents
 

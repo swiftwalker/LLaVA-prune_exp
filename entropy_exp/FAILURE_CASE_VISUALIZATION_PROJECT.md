@@ -121,6 +121,21 @@ L_B^l = low-compensation kept patch set of method B at layer l
 S_B^l(i) = saliency score of patch i under method B at layer l
 ```
 
+所有 patch 集合都使用原始图像网格坐标，而不是剪枝后序列中的局部 token index。对于只记录局部 index 的历史参考方法输出，分析阶段会离线重建累计映射：
+
+```text
+alive_0 = [0, 1, ..., N-1]
+K_A^l = alive_l[local_keep_indices_l]
+alive_{l+1} = K_A^l
+```
+
+因此在 corrected 可视化中，后续层保留集合满足：
+
+```text
+K_A^15 ⊆ K_A^6 ⊆ K_A^2
+K_B^15 ⊆ K_B^6 ⊆ K_B^2
+```
+
 计算以下诊断量：
 
 ```text
@@ -306,3 +321,5 @@ layer = 2, 6, 15
 这套分析是离线诊断工具，不重新运行模型，也不改变剪枝策略。它解释的是“已有实验结果中，两种方法在样本和 patch 层面的差异”，不能单独证明某个改动一定会提升指标。
 
 此外，样本排序分数是诊断启发式，不是新的评测指标。它用于帮助人更快找到高信息量失败样本，而不是替代最终 benchmark 结果。
+
+本版本的可视化已对历史参考方法输出做 canonical patch 映射修正。若看到旧版图片中后续层保留区域不属于上一层保留区域，那是局部 token index 被误投影到原始网格造成的显示问题，不应作为方法行为解释。
