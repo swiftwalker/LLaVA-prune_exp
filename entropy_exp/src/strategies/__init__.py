@@ -7,7 +7,10 @@ from .pre_attn_score import PreAttnScoreStrategy
 from .random import RandomStrategy
 from .sparsevlm import SparseVLMStrategy
 from .sparsevlm_adaptive_stratified import SparseVLMAdaptiveStratifiedStrategy
+from .sparsevlm_boost import SparseVLMBoostStrategy
+from .sparsevlm_compensated import SparseVLMCompensatedStrategy
 from .sparsevlm_entropy_alpha import SparseVLMEntropyAlphaStrategy
+from .sparsevlm_entropy_alpha_global import SparseVLMEntropyAlphaGlobalStrategy
 from .tail_masking_attn_score import TailMaskingAttnScoreStrategy
 
 STRATEGY_REGISTRY = {
@@ -18,7 +21,10 @@ STRATEGY_REGISTRY = {
     "random": RandomStrategy,
     "sparsevlm": SparseVLMStrategy,
     "sparsevlm_adaptive_stratified": SparseVLMAdaptiveStratifiedStrategy,
+    "sparsevlm_boost": SparseVLMBoostStrategy,
+    "sparsevlm_compensated": SparseVLMCompensatedStrategy,
     "sparsevlm_entropy_alpha": SparseVLMEntropyAlphaStrategy,
+    "sparsevlm_entropy_alpha_global": SparseVLMEntropyAlphaGlobalStrategy,
     "tail_masking_attn_score": TailMaskingAttnScoreStrategy,
 }
 

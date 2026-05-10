@@ -67,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("--gpu", required=True, type=int)
     finalize.add_argument("--tmux-session", required=True)
     finalize.add_argument("--tmux-window", required=True)
+    finalize.add_argument("--runs-dir", required=True)
     return parser
 
 
@@ -88,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             gpu=args.gpu,
             tmux_session=args.tmux_session,
             tmux_window=args.tmux_window,
+            runs_dir=Path(args.runs_dir),
         )
         return 0
 

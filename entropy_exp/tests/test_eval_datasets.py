@@ -1,11 +1,14 @@
 import json
+import importlib.util
 import os
 import sys
 import tempfile
 import unittest
 
 
-SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+ENTROPY_EXP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LLAVA_ROOT = os.path.dirname(ENTROPY_EXP_DIR)
+SRC_DIR = os.path.join(ENTROPY_EXP_DIR, "src")
 sys.path.insert(0, SRC_DIR)
 
 from eval_datasets import (
@@ -20,6 +23,13 @@ from summarize_results import primary_metric
 
 
 class PopeEvalDatasetsTests(unittest.TestCase):
+    def load_llava_pope_eval_module(self):
+        module_path = os.path.join(LLAVA_ROOT, "llava", "eval", "eval_pope.py")
+        spec = importlib.util.spec_from_file_location("llava_eval_pope_for_tests", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
     def test_parse_pope_metrics_extracts_category_metrics(self):
         stdout = """
 Category: popular, # samples: 3000
@@ -75,6 +85,18 @@ Yes ratio: 0.43
         name, value = primary_metric("pope", {"weighted_average": {"f1_score": 0.799}})
         self.assertEqual(name, "macro_f1")
         self.assertAlmostEqual(value, 0.799)
+
+    def test_llava_pope_question_lookup_accepts_int_and_string_ids(self):
+        eval_pope_module = self.load_llava_pope_eval_module()
+        question_lookup = eval_pope_module.build_question_lookup(
+            [
+                {"question_id": 1, "category": "popular"},
+                {"question_id": "2", "category": "adversarial"},
+            ]
+        )
+
+        self.assertEqual(eval_pope_module.get_question_category(question_lookup, "1"), "popular")
+        self.assertEqual(eval_pope_module.get_question_category(question_lookup, 2), "adversarial")
 
 
 class NewDatasetEvalTests(unittest.TestCase):

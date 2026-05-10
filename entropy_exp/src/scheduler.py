@@ -44,7 +44,10 @@ SUPPORTED_STRATEGIES = {
     "random",
     "sparsevlm",
     "sparsevlm_adaptive_stratified",
+    "sparsevlm_boost",
+    "sparsevlm_compensated",
     "sparsevlm_entropy_alpha",
+    "sparsevlm_entropy_alpha_global",
 }
 MIN_FREE_MIB_DEFAULT = 16 * 1024
 VISIBLE_GPUS_ENV = "LLAVA_SCHEDULER_VISIBLE_GPUS"
@@ -289,6 +292,16 @@ def build_run_command(job: JobSpec) -> List[str]:
     for override in job.extra_sets:
         command.extend(["--set", override])
     return command
+
+
+def runs_dir_for_extra_sets(extra_sets: Iterable[str], repo_root: Path) -> Path:
+    output_base_dir = parse_override_value(extra_sets, "output.base_dir")
+    if output_base_dir is None:
+        return repo_root / "entropy_exp" / "outputs" / "runs"
+    output_base_path = Path(output_base_dir)
+    if not output_base_path.is_absolute():
+        output_base_path = repo_root / output_base_path
+    return output_base_path.resolve() / "runs"
 
 
 def compute_retry_budget(total_jobs: int, budget_ratio: float, rounding: str) -> int:
@@ -880,8 +893,9 @@ def finalize_attempt_result(
     gpu: int,
     tmux_session: str,
     tmux_window: str,
+    runs_dir: Optional[Path] = None,
 ) -> Path:
-    runs_dir = repo_root / "entropy_exp" / "outputs" / "runs"
+    runs_dir = runs_dir or (repo_root / "entropy_exp" / "outputs" / "runs")
     finished_at = time.time()
     candidates = find_run_candidates(run_prefix=run_prefix, started_at=started_at, runs_dir=runs_dir)
 
@@ -991,7 +1005,8 @@ fi
   --log-path {shlex.quote(str(log_path))} \\
   --gpu {gpu} \\
   --tmux-session {shlex.quote(tmux_session)} \\
-  --tmux-window {shlex.quote(tmux_window)}
+  --tmux-window {shlex.quote(tmux_window)} \\
+  --runs-dir {shlex.quote(str(runs_dir_for_extra_sets(job.extra_sets, repo_root)))}
 
 exit "$JOB_EXIT_CODE"
 """
@@ -1150,6 +1165,7 @@ class ExperimentScheduler:
             "gpu": selected_gpu,
             "dataset": job.dataset,
             "run_prefix": job.run_prefix,
+            "runs_dir": str(runs_dir_for_extra_sets(job.extra_sets, self.repo_root)),
             "tmux_session": self.plan.tmux.session_name,
             "tmux_window": window_name,
             "started_at": started_at,

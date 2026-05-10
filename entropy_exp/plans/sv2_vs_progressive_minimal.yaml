@@ -1,0 +1,79 @@
+version: 1
+label: "sv2-vs-progressive-minimal"
+pool_size: 30
+
+gpu:
+  min_free_gib: 16
+  selection: "max_free"
+  sample_seconds: 3
+  poll_interval_seconds: 15
+
+retry:
+  budget_ratio: 0.1
+  rounding: "ceil"
+
+tmux:
+  session_name: "sched_sv2_vs_progressive_minimal"
+  log_dir: "entropy_exp/outputs/logs/tmux"
+
+environment:
+  conda_sh: "/home/liuyu/miniconda3/etc/profile.d/conda.sh"
+  conda_env: "llava"
+  extra_env:
+    - "HF_HUB_OFFLINE=1"
+    - "TRANSFORMERS_OFFLINE=1"
+
+defaults:
+  max_samples: null
+  extra_sets:
+    - "inference.seed=42"
+    - "pruning.layer_selection=fixed"
+    - "capture.save_attention=false"
+    - "capture.save_importance_scores=true"
+    - "capture.save_keep_indices=true"
+    - "pruning.sparsevlm.fallback_topk=4"
+    - "pruning.sparsevlm.exclude_special_tokens=true"
+    - "pruning.sparsevlm.min_visual_tokens_after_prune=16"
+    - "pruning.sparsevlm_entropy_alpha.alpha_min=0.5"
+    - "pruning.sparsevlm_entropy_alpha.alpha_max=1.0"
+    - "pruning.sparsevlm_entropy_alpha.mapping_type=linear"
+    - "pruning.sparsevlm_entropy_alpha.grid_size=6"
+    - "pruning.sparsevlm_entropy_alpha.patch_per_row=24"
+    - "pruning.sparsevlm_entropy_alpha.intra_stratum_mode=random"
+    - "pruning.sparsevlm_entropy_alpha.fallback_topk=4"
+    - "pruning.sparsevlm_entropy_alpha.exclude_special_tokens=true"
+    - "pruning.sparsevlm_entropy_alpha.min_visual_tokens_after_prune=16"
+
+experiments:
+  - {name: "gqa_sv2_avg_118", dataset: "gqa", strategies: ["sparsevlm"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.479,0.333,0.410]", "output.run_tag_suffix=sv2_avg_118"]}
+  - {name: "gqa_sv2_avg_60", dataset: "gqa", strategies: ["sparsevlm"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.587,0.546,0.444]", "output.run_tag_suffix=sv2_avg_60"]}
+  - {name: "gqa_ours_sv2ratio_118", dataset: "gqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.479,0.333,0.410]", "output.run_tag_suffix=ours_sv2ratio_118"]}
+  - {name: "gqa_ours_sv2ratio_60", dataset: "gqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.587,0.546,0.444]", "output.run_tag_suffix=ours_sv2ratio_60"]}
+  - {name: "gqa_ours_uniform_118", dataset: "gqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.410,0.410,0.410]", "output.run_tag_suffix=ours_uniform_118"]}
+  - {name: "gqa_ours_uniform_60", dataset: "gqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.529,0.529,0.529]", "output.run_tag_suffix=ours_uniform_60"]}
+  - {name: "gqa_strong_118_l2-6-12-20", dataset: "gqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,12,20]", "pruning.prune_ratio=[0.327,0.327,0.327,0.327]", "output.run_tag_suffix=strong_118_l2-6-12-20"]}
+  - {name: "gqa_strong_60_l2-6-12-20", dataset: "gqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,12,20]", "pruning.prune_ratio=[0.432,0.432,0.432,0.432]", "output.run_tag_suffix=strong_60_l2-6-12-20"]}
+  - {name: "gqa_strong_118_l4-10-20", dataset: "gqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[4,10,20]", "pruning.prune_ratio=[0.410,0.410,0.410]", "output.run_tag_suffix=strong_118_l4-10-20"]}
+  - {name: "gqa_strong_60_l4-10-20", dataset: "gqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[4,10,20]", "pruning.prune_ratio=[0.529,0.529,0.529]", "output.run_tag_suffix=strong_60_l4-10-20"]}
+
+  - {name: "textvqa_sv2_avg_118", dataset: "textvqa", strategies: ["sparsevlm"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.479,0.333,0.410]", "output.run_tag_suffix=sv2_avg_118"]}
+  - {name: "textvqa_sv2_avg_60", dataset: "textvqa", strategies: ["sparsevlm"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.587,0.546,0.444]", "output.run_tag_suffix=sv2_avg_60"]}
+  - {name: "textvqa_ours_sv2ratio_118", dataset: "textvqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.479,0.333,0.410]", "output.run_tag_suffix=ours_sv2ratio_118"]}
+  - {name: "textvqa_ours_sv2ratio_60", dataset: "textvqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.587,0.546,0.444]", "output.run_tag_suffix=ours_sv2ratio_60"]}
+  - {name: "textvqa_ours_uniform_118", dataset: "textvqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.410,0.410,0.410]", "output.run_tag_suffix=ours_uniform_118"]}
+  - {name: "textvqa_ours_uniform_60", dataset: "textvqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.529,0.529,0.529]", "output.run_tag_suffix=ours_uniform_60"]}
+  - {name: "textvqa_strong_118_l2-6-12-20", dataset: "textvqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,12,20]", "pruning.prune_ratio=[0.327,0.327,0.327,0.327]", "output.run_tag_suffix=strong_118_l2-6-12-20"]}
+  - {name: "textvqa_strong_60_l2-6-12-20", dataset: "textvqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,12,20]", "pruning.prune_ratio=[0.432,0.432,0.432,0.432]", "output.run_tag_suffix=strong_60_l2-6-12-20"]}
+  - {name: "textvqa_strong_118_l4-10-20", dataset: "textvqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[4,10,20]", "pruning.prune_ratio=[0.410,0.410,0.410]", "output.run_tag_suffix=strong_118_l4-10-20"]}
+  - {name: "textvqa_strong_60_l4-10-20", dataset: "textvqa", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[4,10,20]", "pruning.prune_ratio=[0.529,0.529,0.529]", "output.run_tag_suffix=strong_60_l4-10-20"]}
+
+  - {name: "pope_sv2_avg_118", dataset: "pope", strategies: ["sparsevlm"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.479,0.333,0.410]", "output.run_tag_suffix=sv2_avg_118"]}
+  - {name: "pope_sv2_avg_60", dataset: "pope", strategies: ["sparsevlm"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.587,0.546,0.444]", "output.run_tag_suffix=sv2_avg_60"]}
+  - {name: "pope_ours_sv2ratio_118", dataset: "pope", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.479,0.333,0.410]", "output.run_tag_suffix=ours_sv2ratio_118"]}
+  - {name: "pope_ours_sv2ratio_60", dataset: "pope", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.587,0.546,0.444]", "output.run_tag_suffix=ours_sv2ratio_60"]}
+  - {name: "pope_ours_uniform_118", dataset: "pope", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.410,0.410,0.410]", "output.run_tag_suffix=ours_uniform_118"]}
+  - {name: "pope_ours_uniform_60", dataset: "pope", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,15]", "pruning.prune_ratio=[0.529,0.529,0.529]", "output.run_tag_suffix=ours_uniform_60"]}
+  - {name: "pope_strong_118_l2-6-12-20", dataset: "pope", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,12,20]", "pruning.prune_ratio=[0.327,0.327,0.327,0.327]", "output.run_tag_suffix=strong_118_l2-6-12-20"]}
+  - {name: "pope_strong_60_l2-6-12-20", dataset: "pope", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[2,6,12,20]", "pruning.prune_ratio=[0.432,0.432,0.432,0.432]", "output.run_tag_suffix=strong_60_l2-6-12-20"]}
+  - {name: "pope_strong_118_l4-10-20", dataset: "pope", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[4,10,20]", "pruning.prune_ratio=[0.410,0.410,0.410]", "output.run_tag_suffix=strong_118_l4-10-20"]}
+  - {name: "pope_strong_60_l4-10-20", dataset: "pope", strategies: ["sparsevlm_entropy_alpha"], extra_sets: ["pruning.prune_layers=[4,10,20]", "pruning.prune_ratio=[0.529,0.529,0.529]", "output.run_tag_suffix=strong_60_l4-10-20"]}

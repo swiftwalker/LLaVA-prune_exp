@@ -241,9 +241,41 @@ def append_layer_stats_fields(
         "patch_per_row",
         "high_ratio",
         "intra_stratum_mode",
+        "adaptive_alpha",
+        "saliency_entropy_norm",
+        "global_prune_step",
+        "global_current_weight",
+        "global_ema_decay",
+        "global_debt_weight",
+        "global_first_layer_fallback",
+        "global_use_global",
+        "global_use_ema",
+        "boost_weight",
+        "boost_weight_min",
+        "boost_weight_max",
+        "beta",
+        "beta_min",
+        "beta_max",
+        "shuffle_seed",
+        "sampling_fill_count",
     ):
         if key in layer_info and layer_info[key] is not None:
             sample_stats[f"layer_{layer_idx}_{key}"] = _serialize_optional_sequence(layer_info[key])
+
+    for key in (
+        "global_selection_score",
+        "global_saliency_ema",
+        "current_saliency_norm",
+        "current_rank_score",
+        "mixed_score",
+        "token_boost",
+        "adjusted_scores",
+        "stratum_deficit",
+        "sampling_weights",
+        "stratum_history_debt",
+        "stratum_combined_debt",
+    ):
+        _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_{key}", layer_info.get(key))
 
 
 def load_config(config_path: str) -> dict:

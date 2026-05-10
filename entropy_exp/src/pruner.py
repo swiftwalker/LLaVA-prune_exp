@@ -542,7 +542,7 @@ class VisualTokenPruner:
 
                     cur_v_num = len(keep_indices)
                     cur_text_start = cur_v_start + cur_v_num
-                    self.strategy.update_after_prune(keep_indices=keep_indices, layer_idx=layer_idx)
+                self.strategy.update_after_prune(keep_indices=keep_indices, layer_idx=layer_idx)
 
                 if need_capture:
                     layer_info["tv_attn"] = tv_attn  # [H, L_t, L_v]

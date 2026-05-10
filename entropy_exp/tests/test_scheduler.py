@@ -31,6 +31,7 @@ from entropy_exp.src.scheduler import (
     list_tmux_windows,
     load_scheduler_plan,
     resolve_conda_activate_target,
+    runs_dir_for_extra_sets,
     RetryConfig,
     SchedulerPlan as SchedulerPlanConfig,
     select_gpu_for_dispatch,
@@ -269,6 +270,50 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(jobs[0].strategy, "sparsevlm_entropy_alpha")
         self.assertEqual(jobs[0].run_prefix, "mme_sparsevlm_entropy_alpha_l2_r0p4__")
 
+    def test_scheduler_accepts_sparsevlm_entropy_alpha_global_strategy(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-entropy-alpha-global",
+                "pool_size": 1,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {"conda_env": "llava"},
+                "defaults": {"max_samples": 2, "extra_sets": []},
+                "experiments": [
+                    {
+                        "name": "mme_entropy_alpha_global",
+                        "dataset": "mme",
+                        "strategies": ["sparsevlm_entropy_alpha_global"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[2,8,16]",
+                            "pruning.prune_ratio=[0.08,0.22,0.38]",
+                        ],
+                    }
+                ],
+            }
+        )
+
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+        self.assertEqual(jobs[0].strategy, "sparsevlm_entropy_alpha_global")
+        self.assertEqual(jobs[0].run_prefix, "mme_sparsevlm_entropy_alpha_global_l2-8-16_r0p08-0p22-0p38__")
+
+    def test_runs_dir_for_extra_sets_uses_custom_output_base_dir(self):
+        runs_dir = runs_dir_for_extra_sets(
+            ["output.base_dir=entropy_exp/outputs/custom_root"],
+            ROOT_DIR,
+        )
+
+        self.assertEqual(runs_dir, (ROOT_DIR / "entropy_exp" / "outputs" / "custom_root" / "runs").resolve())
+
     def test_scheduler_accepts_new_inference_datasets(self):
         plan_path = self._write_plan(
             {
@@ -448,6 +493,60 @@ class SchedulerPlanTests(unittest.TestCase):
             window_name,
             "textvqa_sparsevlm_entropy_alpha_l3_r0p6",
         )
+
+    def test_build_run_prefix_and_window_name_support_sparsevlm_entropy_alpha_global(self):
+        extra_sets = [
+            "pruning.prune_layers=[2,8,16]",
+            "pruning.prune_ratio=[0.08,0.22,0.38]",
+        ]
+        job_prefix = build_run_prefix("gqa", "sparsevlm_entropy_alpha_global", extra_sets)
+        window_name = build_window_base_name("gqa", "sparsevlm_entropy_alpha_global", extra_sets)
+
+        self.assertEqual(
+            job_prefix,
+            "gqa_sparsevlm_entropy_alpha_global_l2-8-16_r0p08-0p22-0p38__",
+        )
+        self.assertEqual(
+            window_name,
+            "gqa_sparsevlm_entropy_alpha_global_l2-8-16_r0p08-0p22-0p38",
+        )
+
+    def test_scheduler_accepts_boost_and_compensated_strategies(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-boost-compensated",
+                "pool_size": 1,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {"conda_env": "llava"},
+                "defaults": {"max_samples": 2, "extra_sets": []},
+                "experiments": [
+                    {
+                        "name": "gqa_boost_compensated",
+                        "dataset": "gqa",
+                        "strategies": ["sparsevlm_boost", "sparsevlm_compensated"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[2,8,16]",
+                            "pruning.prune_ratio=[0.21,0.21,0.21]",
+                        ],
+                    }
+                ],
+            }
+        )
+
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+        self.assertEqual([job.strategy for job in jobs], ["sparsevlm_boost", "sparsevlm_compensated"])
+        self.assertEqual(jobs[0].run_prefix, "gqa_sparsevlm_boost_l2-8-16_r0p21-0p21-0p21__")
+        self.assertEqual(jobs[1].run_prefix, "gqa_sparsevlm_compensated_l2-8-16_r0p21-0p21-0p21__")
 
     def test_retry_budget_and_progress_format(self):
         self.assertEqual(compute_retry_budget(324, 0.1, "ceil"), 33)
@@ -671,6 +770,50 @@ class SchedulerFinalizeTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["validation"]["expected_answers"], 3)
             self.assertEqual(payload["validation"]["valid_answers"], 3)
+
+    def test_finalize_attempt_finds_run_in_custom_runs_dir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            custom_runs_dir = repo_root / "entropy_exp" / "outputs" / "custom_root" / "runs"
+            (custom_runs_dir / "random" / "gqa").mkdir(parents=True)
+            (repo_root / "entropy_exp" / "datasets").mkdir(parents=True)
+            questions_path = repo_root / "entropy_exp" / "datasets" / "questions.jsonl"
+            questions_path.write_text("{}\n{}\n", encoding="utf-8")
+
+            run_dir = custom_runs_dir / "random" / "gqa" / "gqa_random_l1_r0p2__20260323_120000_000001"
+            run_dir.mkdir(parents=True)
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "_run_meta": {"dataset": "gqa", "max_samples": 2},
+                        "datasets": {"gqa": {"question_file": "entropy_exp/datasets/questions.jsonl"}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "answers.jsonl").write_text('{"ok": true}\n{"ok": true}\n', encoding="utf-8")
+
+            state_dir = repo_root / "state"
+            state_dir.mkdir(parents=True)
+            result_path = finalize_attempt_result(
+                repo_root=repo_root,
+                state_dir=state_dir,
+                job_id="job_0001",
+                attempt=1,
+                run_prefix="gqa_random_l1_r0p2__",
+                dataset="gqa",
+                started_at=run_dir.stat().st_mtime,
+                exit_code=0,
+                log_path="/tmp/demo.log",
+                gpu=0,
+                tmux_session="sched_demo",
+                tmux_window="gqa_random_l1_r0p2_try1",
+                runs_dir=custom_runs_dir,
+            )
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["run_dir"], str(run_dir.resolve()))
 
     def test_validate_answers_file_supports_scienceqa_json_list(self):
         with tempfile.TemporaryDirectory() as temp_dir:

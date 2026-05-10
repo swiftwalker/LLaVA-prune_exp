@@ -29,6 +29,9 @@ from strategies.sparsevlm_adaptive_stratified import (
     SparseVLMAdaptiveStratifiedStrategy,
     patch_index_to_stratum_id,
 )
+from strategies.sparsevlm_entropy_alpha_global import SparseVLMEntropyAlphaGlobalStrategy
+from strategies.sparsevlm_boost import SparseVLMBoostStrategy
+from strategies.sparsevlm_compensated import SparseVLMCompensatedStrategy
 
 
 class DummyAttentionLayer:
@@ -409,6 +412,194 @@ class SparseVLMPrunerTests(unittest.TestCase):
         self.assertEqual(hidden_states.shape[1], 7)
         self.assertEqual(prune_info["layers"][0]["num_visual_after"], 4)
         self.assertEqual(prune_info["layers"][0]["pruned_indices"].tolist(), [])
+
+    def test_global_entropy_alpha_records_cross_layer_stats(self):
+        layer0_attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.9, 0.2, 0.1, 0.05], [0.8, 0.2, 0.1, 0.05]],
+        )
+        layer1_attn = _full_attention(
+            seq_len=5,
+            text_rows=[3, 4],
+            visual_cols=[1, 2],
+            values=[[0.1, 0.9], [0.1, 0.9]],
+        )
+        model = DummyModel(
+            [
+                DummyAttentionLayer(0, {7: layer0_attn}),
+                DummyAttentionLayer(1, {5: layer1_attn}),
+            ]
+        )
+        strategy = SparseVLMEntropyAlphaGlobalStrategy(
+            {
+                "prune_ratio": [0.5, 0.5],
+                "fallback_topk": 4,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+                "grid_size": 2,
+                "patch_per_row": 2,
+                "intra_stratum_mode": "random",
+                "alpha_min": 0.5,
+                "alpha_max": 1.0,
+                "global_current_weight": 0.5,
+                "global_ema_decay": 0.6,
+                "global_debt_weight": 0.5,
+                "global_first_layer_fallback": True,
+            }
+        )
+        pruner = VisualTokenPruner(
+            model,
+            strategy,
+            {
+                "layer_selection": "fixed",
+                "prune_layers": [0, 1],
+                "prune_ratio": [0.5, 0.5],
+            },
+        )
+
+        hidden_states, _, prune_info = pruner._pruned_prefill(
+            inputs_embeds=self._make_grid_inputs(num_visual_tokens=4),
+            initial_position_ids=None,
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12]),
+            text_special_token_mask=torch.tensor([False, False]),
+            save_tv_attn=False,
+            capture_layers=None,
+        )
+
+        self.assertEqual(hidden_states.shape[1], 4)
+        self.assertFalse(prune_info["layers"][0]["global_use_global"])
+        self.assertTrue(prune_info["layers"][1]["global_use_global"])
+        self.assertEqual(len(prune_info["layers"][1]["global_selection_score"]), 2)
+        self.assertEqual(len(prune_info["layers"][1]["global_saliency_ema"]), 2)
+        self.assertEqual(len(prune_info["layers"][1]["current_saliency_norm"]), 2)
+        self.assertIn("global_selection_score", prune_info["layers"][1])
+        self.assertIn("stratum_history_debt", prune_info["layers"][1])
+        self.assertIn("stratum_combined_debt", prune_info["layers"][1])
+        self.assertEqual(prune_info["layers"][1]["global_prune_step"], 1)
+
+    def test_boost_pruner_records_multilayer_stats(self):
+        layer0_attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.9, 0.2, 0.1, 0.05], [0.8, 0.2, 0.1, 0.05]],
+        )
+        layer1_attn = _full_attention(
+            seq_len=5,
+            text_rows=[3, 4],
+            visual_cols=[1, 2],
+            values=[[0.1, 0.9], [0.1, 0.9]],
+        )
+        model = DummyModel(
+            [
+                DummyAttentionLayer(0, {7: layer0_attn}),
+                DummyAttentionLayer(1, {5: layer1_attn}),
+            ]
+        )
+        strategy = SparseVLMBoostStrategy(
+            {
+                "prune_ratio": [0.5, 0.5],
+                "fallback_topk": 4,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+                "boost_weight_min": 0.0,
+                "boost_weight_max": 0.15,
+                "grid_size": 2,
+                "patch_per_row": 2,
+            }
+        )
+        pruner = VisualTokenPruner(
+            model,
+            strategy,
+            {
+                "layer_selection": "fixed",
+                "prune_layers": [0, 1],
+                "prune_ratio": [0.5, 0.5],
+            },
+        )
+
+        hidden_states, _, prune_info = pruner._pruned_prefill(
+            inputs_embeds=self._make_grid_inputs(num_visual_tokens=4),
+            initial_position_ids=None,
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12]),
+            text_special_token_mask=torch.tensor([False, False]),
+            save_tv_attn=False,
+            capture_layers=None,
+        )
+
+        self.assertEqual(hidden_states.shape[1], 4)
+        self.assertIn("boost_weight", prune_info["layers"][0])
+        self.assertIn("token_boost", prune_info["layers"][0])
+        self.assertIn("adjusted_scores", prune_info["layers"][0])
+        self.assertFalse(prune_info["layers"][0]["global_use_ema"])
+        self.assertTrue(prune_info["layers"][1]["global_use_ema"])
+
+    def test_compensated_pruner_records_multilayer_stats(self):
+        layer0_attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.9, 0.2, 0.1, 0.05], [0.8, 0.2, 0.1, 0.05]],
+        )
+        layer1_attn = _full_attention(
+            seq_len=5,
+            text_rows=[3, 4],
+            visual_cols=[1, 2],
+            values=[[0.1, 0.9], [0.1, 0.9]],
+        )
+        model = DummyModel(
+            [
+                DummyAttentionLayer(0, {7: layer0_attn}),
+                DummyAttentionLayer(1, {5: layer1_attn}),
+            ]
+        )
+        strategy = SparseVLMCompensatedStrategy(
+            {
+                "prune_ratio": [0.5, 0.5],
+                "fallback_topk": 4,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+                "beta_min": 0.3,
+                "beta_max": 1.0,
+                "seed": 42,
+            }
+        )
+        pruner = VisualTokenPruner(
+            model,
+            strategy,
+            {
+                "layer_selection": "fixed",
+                "prune_layers": [0, 1],
+                "prune_ratio": [0.5, 0.5],
+            },
+        )
+
+        hidden_states, _, prune_info = pruner._pruned_prefill(
+            inputs_embeds=self._make_grid_inputs(num_visual_tokens=4),
+            initial_position_ids=None,
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12]),
+            text_special_token_mask=torch.tensor([False, False]),
+            save_tv_attn=False,
+            capture_layers=None,
+        )
+
+        self.assertEqual(hidden_states.shape[1], 4)
+        self.assertIn("beta", prune_info["layers"][0])
+        self.assertIn("sampling_weights", prune_info["layers"][0])
+        self.assertIn("shuffle_seed", prune_info["layers"][0])
+        self.assertFalse(prune_info["layers"][0]["global_use_ema"])
+        self.assertTrue(prune_info["layers"][1]["global_use_ema"])
 
 
 if __name__ == "__main__":

@@ -2,6 +2,19 @@ import os
 import json
 import argparse
 
+
+def normalize_question_id(question_id):
+    return str(question_id)
+
+
+def build_question_lookup(questions):
+    return {normalize_question_id(question['question_id']): question for question in questions}
+
+
+def get_question_category(question_lookup, question_id):
+    return question_lookup[normalize_question_id(question_id)]['category']
+
+
 def eval_pope(answers, label_file):
     label_list = [json.loads(q)['label'] for q in open(label_file, 'r')]
 
@@ -69,13 +82,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     questions = [json.loads(line) for line in open(args.question_file)]
-    questions = {question['question_id']: question for question in questions}
+    questions = build_question_lookup(questions)
     answers = [json.loads(q) for q in open(args.result_file)]
     for file in os.listdir(args.annotation_dir):
         assert file.startswith('coco_pope_')
         assert file.endswith('.json')
         category = file[10:-5]
-        cur_answers = [x for x in answers if questions[x['question_id']]['category'] == category]
+        cur_answers = [x for x in answers if get_question_category(questions, x['question_id']) == category]
         print('Category: {}, # samples: {}'.format(category, len(cur_answers)))
         eval_pope(cur_answers, os.path.join(args.annotation_dir, file))
         print("====================================")
