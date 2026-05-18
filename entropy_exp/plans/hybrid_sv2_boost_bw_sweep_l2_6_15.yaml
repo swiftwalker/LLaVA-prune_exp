@@ -1,0 +1,1118 @@
+version: 1
+label: hybrid-sv2-boost-bw-sweep-l2-6-15
+pool_size: 12
+gpu:
+  min_free_gib: 16
+  selection: max_free
+  sample_seconds: 3
+  poll_interval_seconds: 15
+retry:
+  budget_ratio: 0.1
+  rounding: ceil
+tmux:
+  session_name: sched_hybrid_sv2_boost_bw_sweep_l2_6_15
+  log_dir: entropy_exp/outputs/logs/tmux
+environment:
+  conda_sh: /home/liuyu/miniconda3/etc/profile.d/conda.sh
+  conda_env: llava
+  extra_env:
+  - HF_HUB_OFFLINE=1
+  - TRANSFORMERS_OFFLINE=1
+defaults:
+  max_samples: null
+  extra_sets:
+  - inference.seed=42
+  - pruning.layer_selection=fixed
+  - pruning.prune_layers=[2,6,15]
+  - capture.save_attention=false
+  - capture.save_importance_scores=true
+  - capture.save_keep_indices=true
+  - output.base_dir=entropy_exp/outputs/hybrid_sv2_boost_bw_sweep_l2_6_15
+  - pruning.sparsevlm_boost_hybrid.boost_weight_min=0.0
+  - pruning.sparsevlm_boost_hybrid.grid_size=6
+  - pruning.sparsevlm_boost_hybrid.patch_per_row=24
+  - pruning.sparsevlm_boost_hybrid.use_score_memory=false
+  - pruning.sparsevlm_boost_hybrid.fallback_topk=4
+  - pruning.sparsevlm_boost_hybrid.exclude_special_tokens=true
+  - pruning.sparsevlm_boost_hybrid.min_visual_tokens_after_prune=16
+experiments:
+- name: gqa_target118_early_only_bw0p05
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p05
+- name: gqa_target118_shallow_mid_bw0p05
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p05
+- name: gqa_target60_early_only_bw0p05
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p05
+- name: gqa_target60_shallow_mid_bw0p05
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p05
+- name: gqa_target28_early_only_bw0p05
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p05
+- name: gqa_target28_shallow_mid_bw0p05
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p05
+- name: gqa_target118_early_only_bw0p10
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p10
+- name: gqa_target118_shallow_mid_bw0p10
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p10
+- name: gqa_target60_early_only_bw0p10
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p10
+- name: gqa_target60_shallow_mid_bw0p10
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p10
+- name: gqa_target28_early_only_bw0p10
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p10
+- name: gqa_target28_shallow_mid_bw0p10
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p10
+- name: gqa_target118_early_only_bw0p20
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p20
+- name: gqa_target118_shallow_mid_bw0p20
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p20
+- name: gqa_target60_early_only_bw0p20
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p20
+- name: gqa_target60_shallow_mid_bw0p20
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p20
+- name: gqa_target28_early_only_bw0p20
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p20
+- name: gqa_target28_shallow_mid_bw0p20
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p20
+- name: gqa_target118_early_only_bw0p25
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p25
+- name: gqa_target118_shallow_mid_bw0p25
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p25
+- name: gqa_target60_early_only_bw0p25
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p25
+- name: gqa_target60_shallow_mid_bw0p25
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p25
+- name: gqa_target28_early_only_bw0p25
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p25
+- name: gqa_target28_shallow_mid_bw0p25
+  dataset: gqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p25
+- name: textvqa_target118_early_only_bw0p05
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p05
+- name: textvqa_target118_shallow_mid_bw0p05
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p05
+- name: textvqa_target60_early_only_bw0p05
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p05
+- name: textvqa_target60_shallow_mid_bw0p05
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p05
+- name: textvqa_target28_early_only_bw0p05
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p05
+- name: textvqa_target28_shallow_mid_bw0p05
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p05
+- name: textvqa_target118_early_only_bw0p10
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p10
+- name: textvqa_target118_shallow_mid_bw0p10
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p10
+- name: textvqa_target60_early_only_bw0p10
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p10
+- name: textvqa_target60_shallow_mid_bw0p10
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p10
+- name: textvqa_target28_early_only_bw0p10
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p10
+- name: textvqa_target28_shallow_mid_bw0p10
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p10
+- name: textvqa_target118_early_only_bw0p20
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p20
+- name: textvqa_target118_shallow_mid_bw0p20
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p20
+- name: textvqa_target60_early_only_bw0p20
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p20
+- name: textvqa_target60_shallow_mid_bw0p20
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p20
+- name: textvqa_target28_early_only_bw0p20
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p20
+- name: textvqa_target28_shallow_mid_bw0p20
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p20
+- name: textvqa_target118_early_only_bw0p25
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p25
+- name: textvqa_target118_shallow_mid_bw0p25
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p25
+- name: textvqa_target60_early_only_bw0p25
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p25
+- name: textvqa_target60_shallow_mid_bw0p25
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p25
+- name: textvqa_target28_early_only_bw0p25
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p25
+- name: textvqa_target28_shallow_mid_bw0p25
+  dataset: textvqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p25
+- name: pope_target118_early_only_bw0p05
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p05
+- name: pope_target118_shallow_mid_bw0p05
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p05
+- name: pope_target60_early_only_bw0p05
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p05
+- name: pope_target60_shallow_mid_bw0p05
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p05
+- name: pope_target28_early_only_bw0p05
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p05
+- name: pope_target28_shallow_mid_bw0p05
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p05
+- name: pope_target118_early_only_bw0p10
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p10
+- name: pope_target118_shallow_mid_bw0p10
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p10
+- name: pope_target60_early_only_bw0p10
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p10
+- name: pope_target60_shallow_mid_bw0p10
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p10
+- name: pope_target28_early_only_bw0p10
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p10
+- name: pope_target28_shallow_mid_bw0p10
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p10
+- name: pope_target118_early_only_bw0p20
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p20
+- name: pope_target118_shallow_mid_bw0p20
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p20
+- name: pope_target60_early_only_bw0p20
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p20
+- name: pope_target60_shallow_mid_bw0p20
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p20
+- name: pope_target28_early_only_bw0p20
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p20
+- name: pope_target28_shallow_mid_bw0p20
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p20
+- name: pope_target118_early_only_bw0p25
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p25
+- name: pope_target118_shallow_mid_bw0p25
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p25
+- name: pope_target60_early_only_bw0p25
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p25
+- name: pope_target60_shallow_mid_bw0p25
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p25
+- name: pope_target28_early_only_bw0p25
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p25
+- name: pope_target28_shallow_mid_bw0p25
+  dataset: pope
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p25
+- name: mme_target118_early_only_bw0p05
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p05
+- name: mme_target118_shallow_mid_bw0p05
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p05
+- name: mme_target60_early_only_bw0p05
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p05
+- name: mme_target60_shallow_mid_bw0p05
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p05
+- name: mme_target28_early_only_bw0p05
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p05
+- name: mme_target28_shallow_mid_bw0p05
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p05
+- name: mme_target118_early_only_bw0p10
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p10
+- name: mme_target118_shallow_mid_bw0p10
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p10
+- name: mme_target60_early_only_bw0p10
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p10
+- name: mme_target60_shallow_mid_bw0p10
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p10
+- name: mme_target28_early_only_bw0p10
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p10
+- name: mme_target28_shallow_mid_bw0p10
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p10
+- name: mme_target118_early_only_bw0p20
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p20
+- name: mme_target118_shallow_mid_bw0p20
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p20
+- name: mme_target60_early_only_bw0p20
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p20
+- name: mme_target60_shallow_mid_bw0p20
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p20
+- name: mme_target28_early_only_bw0p20
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p20
+- name: mme_target28_shallow_mid_bw0p20
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p20
+- name: mme_target118_early_only_bw0p25
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p25
+- name: mme_target118_shallow_mid_bw0p25
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p25
+- name: mme_target60_early_only_bw0p25
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p25
+- name: mme_target60_shallow_mid_bw0p25
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p25
+- name: mme_target28_early_only_bw0p25
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p25
+- name: mme_target28_shallow_mid_bw0p25
+  dataset: mme
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p25
+- name: scienceqa_target118_early_only_bw0p05
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p05
+- name: scienceqa_target118_shallow_mid_bw0p05
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p05
+- name: scienceqa_target60_early_only_bw0p05
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p05
+- name: scienceqa_target60_shallow_mid_bw0p05
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p05
+- name: scienceqa_target28_early_only_bw0p05
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p05
+- name: scienceqa_target28_shallow_mid_bw0p05
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.05
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p05
+- name: scienceqa_target118_early_only_bw0p10
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p10
+- name: scienceqa_target118_shallow_mid_bw0p10
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p10
+- name: scienceqa_target60_early_only_bw0p10
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p10
+- name: scienceqa_target60_shallow_mid_bw0p10
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p10
+- name: scienceqa_target28_early_only_bw0p10
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p10
+- name: scienceqa_target28_shallow_mid_bw0p10
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.10
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p10
+- name: scienceqa_target118_early_only_bw0p20
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p20
+- name: scienceqa_target118_shallow_mid_bw0p20
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p20
+- name: scienceqa_target60_early_only_bw0p20
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p20
+- name: scienceqa_target60_shallow_mid_bw0p20
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p20
+- name: scienceqa_target28_early_only_bw0p20
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p20
+- name: scienceqa_target28_shallow_mid_bw0p20
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.20
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p20
+- name: scienceqa_target118_early_only_bw0p25
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_mid_bw0p25
+- name: scienceqa_target118_shallow_mid_bw0p25
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.479,0.333,0.410]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target118_hybrid_deep_bw0p25
+- name: scienceqa_target60_early_only_bw0p25
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_mid_bw0p25
+- name: scienceqa_target60_shallow_mid_bw0p25
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.587,0.546,0.444]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target60_hybrid_deep_bw0p25
+- name: scienceqa_target28_early_only_bw0p25
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_mid_bw0p25
+- name: scienceqa_target28_shallow_mid_bw0p25
+  dataset: scienceqa
+  strategies:
+  - sparsevlm_boost_hybrid
+  extra_sets:
+  - pruning.prune_ratio=[0.573,0.780,0.481]
+  - pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]
+  - pruning.sparsevlm_boost_hybrid.boost_weight_max=0.25
+  - output.run_tag_suffix=target28_hybrid_deep_bw0p25

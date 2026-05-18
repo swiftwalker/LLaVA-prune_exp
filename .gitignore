@@ -69,6 +69,8 @@ entropy_exp/plans/*
 !entropy_exp/plans/adaptive_hparam_round1_layer2_remote.yaml
 !entropy_exp/plans/sv2_vs_progressive_minimal.yaml
 !entropy_exp/plans/sv2_vs_progressive_extension.yaml
+!entropy_exp/plans/hybrid_sv2_boost_l2_6_15.yaml
+!entropy_exp/plans/hybrid_sv2_boost_bw_sweep_l2_6_15.yaml
 
 # FLOPs experiment — generated outputs (keep placeholder .gitkeep files)
 flops_exp/outputs/batch_flops/*

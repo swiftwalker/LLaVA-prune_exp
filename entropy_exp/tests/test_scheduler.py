@@ -548,6 +548,47 @@ class SchedulerPlanTests(unittest.TestCase):
         self.assertEqual(jobs[0].run_prefix, "gqa_sparsevlm_boost_l2-8-16_r0p21-0p21-0p21__")
         self.assertEqual(jobs[1].run_prefix, "gqa_sparsevlm_compensated_l2-8-16_r0p21-0p21-0p21__")
 
+    def test_scheduler_accepts_boost_hybrid_strategy(self):
+        plan_path = self._write_plan(
+            {
+                "version": 1,
+                "label": "demo-boost-hybrid",
+                "pool_size": 1,
+                "gpu": {
+                    "min_free_gib": 16,
+                    "selection": "max_free",
+                    "sample_seconds": 1,
+                    "poll_interval_seconds": 5,
+                },
+                "retry": {"budget_ratio": 0.1, "rounding": "ceil"},
+                "tmux": {"session_name": "sched_demo", "log_dir": "entropy_exp/outputs/logs/tmux"},
+                "environment": {"conda_env": "llava"},
+                "defaults": {"max_samples": None, "extra_sets": []},
+                "experiments": [
+                    {
+                        "name": "gqa_hybrid_deep",
+                        "dataset": "gqa",
+                        "strategies": ["sparsevlm_boost_hybrid"],
+                        "extra_sets": [
+                            "pruning.layer_selection=fixed",
+                            "pruning.prune_layers=[2,6,15]",
+                            "pruning.prune_ratio=[0.479,0.333,0.410]",
+                            'pruning.sparsevlm_boost_hybrid.layer_modes=["O","O","S"]',
+                            "output.run_tag_suffix=target118_hybrid_deep",
+                        ],
+                    }
+                ],
+            }
+        )
+
+        plan = load_scheduler_plan(plan_path)
+        jobs = expand_jobs(plan)
+        self.assertEqual([job.strategy for job in jobs], ["sparsevlm_boost_hybrid"])
+        self.assertEqual(
+            jobs[0].run_prefix,
+            "gqa_sparsevlm_boost_hybrid_target118_hybrid_deep_l2-6-15_r0p479-0p333-0p41__",
+        )
+
     def test_retry_budget_and_progress_format(self):
         self.assertEqual(compute_retry_budget(324, 0.1, "ceil"), 33)
         state = {

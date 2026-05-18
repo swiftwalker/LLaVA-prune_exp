@@ -115,6 +115,9 @@ class SparseVLMScoreMemoryStrategy(SparseVLMStrategy):
             raise ValueError(f"global_ema_decay must be in [0, 1], got {ema_decay}")
         return current_weight, ema_decay
 
+    def _use_score_memory(self) -> bool:
+        return bool(self.config.get("use_score_memory", True))
+
     def _require_current_patch_indices(self, context: Dict[str, Any], v_token_num: int) -> torch.Tensor:
         current_patch_indices = context["current_patch_indices"]
         if int(current_patch_indices.numel()) != int(v_token_num):
@@ -177,19 +180,24 @@ class SparseVLMScoreMemoryStrategy(SparseVLMStrategy):
         )
         current_rank_score = rank_normalize_scores(visual_scores)
         global_prune_step = int(context.get("score_prune_step", 0))
-        global_use_ema = global_prune_step > 0
-        alive_ema = self._alive_ema(context, current_patch_indices, device=current_rank_score.device)
+        use_score_memory = self._use_score_memory()
+        global_use_ema = use_score_memory and global_prune_step > 0
+        if use_score_memory:
+            alive_ema = self._alive_ema(context, current_patch_indices, device=current_rank_score.device)
+        else:
+            alive_ema = torch.zeros_like(current_rank_score, dtype=torch.float32)
         if global_use_ema:
             mixed_score = current_rank_score * current_weight + alive_ema * (1.0 - current_weight)
         else:
             mixed_score = current_rank_score
 
-        self._update_ema(
-            context=context,
-            current_patch_indices=current_patch_indices,
-            current_rank_score=current_rank_score,
-            ema_decay=ema_decay,
-        )
+        if use_score_memory:
+            self._update_ema(
+                context=context,
+                current_patch_indices=current_patch_indices,
+                current_rank_score=current_rank_score,
+                ema_decay=ema_decay,
+            )
 
         return {
             "context": context,
@@ -200,6 +208,7 @@ class SparseVLMScoreMemoryStrategy(SparseVLMStrategy):
             "mixed_score": mixed_score.to(dtype=torch.float32),
             "global_prune_step": global_prune_step,
             "global_use_ema": global_use_ema,
+            "use_score_memory": use_score_memory,
             "global_current_weight": current_weight,
             "global_ema_decay": ema_decay,
         }

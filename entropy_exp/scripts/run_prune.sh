@@ -16,6 +16,7 @@
 #   bash scripts/run_prune.sh sparsevlm_adaptive_stratified mme 10
 #   bash scripts/run_prune.sh sparsevlm_entropy_alpha mme 10
 #   bash scripts/run_prune.sh sparsevlm_boost mme 10
+#   bash scripts/run_prune.sh sparsevlm_boost_hybrid mme 10 --set 'pruning.sparsevlm_boost_hybrid.layer_modes=["O","O"]'
 #   bash scripts/run_prune.sh sparsevlm_compensated mme 10
 #   bash scripts/run_prune.sh baseline mme 10
 #   bash scripts/run_prune.sh attn_score mme 10 --auto-gpu
@@ -48,6 +49,7 @@ Examples:
   bash scripts/run_prune.sh sparsevlm_adaptive_stratified mme 10
   bash scripts/run_prune.sh sparsevlm_entropy_alpha mme 10
   bash scripts/run_prune.sh sparsevlm_boost mme 10
+  bash scripts/run_prune.sh sparsevlm_boost_hybrid mme 10 --set 'pruning.sparsevlm_boost_hybrid.layer_modes=["O","O"]'
   bash scripts/run_prune.sh sparsevlm_compensated mme 10
   bash scripts/run_prune.sh baseline mme 10
   bash scripts/run_prune.sh attn_score mme 10 --auto-gpu
@@ -69,7 +71,7 @@ DATASET="${2:?$(usage)}"
 shift 2
 
 case "$STRATEGY" in
-    baseline|attn_score|pre_attn_score|masking_attn_score|tail_masking_attn_score|entropy|random|sparsevlm|sparsevlm_adaptive_stratified|sparsevlm_entropy_alpha|sparsevlm_entropy_alpha_global|sparsevlm_boost|sparsevlm_compensated)
+    baseline|attn_score|pre_attn_score|masking_attn_score|tail_masking_attn_score|entropy|random|sparsevlm|sparsevlm_adaptive_stratified|sparsevlm_entropy_alpha|sparsevlm_entropy_alpha_global|sparsevlm_boost|sparsevlm_boost_hybrid|sparsevlm_compensated)
         ;;
     compare)
         echo "Strategy 'compare' has been removed. Please run strategies explicitly." >&2
@@ -77,7 +79,7 @@ case "$STRATEGY" in
         ;;
     *)
         echo "Unknown strategy: $STRATEGY" >&2
-        echo "Supported strategies: baseline, attn_score, pre_attn_score, masking_attn_score, tail_masking_attn_score, entropy, random, sparsevlm, sparsevlm_adaptive_stratified, sparsevlm_entropy_alpha, sparsevlm_entropy_alpha_global, sparsevlm_boost, sparsevlm_compensated" >&2
+        echo "Supported strategies: baseline, attn_score, pre_attn_score, masking_attn_score, tail_masking_attn_score, entropy, random, sparsevlm, sparsevlm_adaptive_stratified, sparsevlm_entropy_alpha, sparsevlm_entropy_alpha_global, sparsevlm_boost, sparsevlm_boost_hybrid, sparsevlm_compensated" >&2
         exit 1
         ;;
 esac

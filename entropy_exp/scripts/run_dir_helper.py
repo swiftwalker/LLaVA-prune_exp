@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
             "sparsevlm",
             "sparsevlm_adaptive_stratified",
             "sparsevlm_boost",
+            "sparsevlm_boost_hybrid",
             "sparsevlm_compensated",
             "sparsevlm_entropy_alpha",
             "sparsevlm_entropy_alpha_global",

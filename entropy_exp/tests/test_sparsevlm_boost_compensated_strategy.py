@@ -9,7 +9,9 @@ sys.path.insert(0, SRC_DIR)
 
 from strategies import get_strategy
 from strategies.sparsevlm_boost import SparseVLMBoostStrategy
+from strategies.sparsevlm_boost_hybrid import SparseVLMBoostHybridStrategy
 from strategies.sparsevlm_compensated import SparseVLMCompensatedStrategy
+from strategies.sparsevlm import SparseVLMStrategy
 from strategies.sparsevlm_score_memory import rank_normalize_scores
 
 
@@ -38,6 +40,7 @@ def _make_grid_inputs(num_visual_tokens):
 class SparseVLMBoostCompensatedTests(unittest.TestCase):
     def test_registry_instantiates_new_strategies(self):
         self.assertIsInstance(get_strategy("sparsevlm_boost", {}), SparseVLMBoostStrategy)
+        self.assertIsInstance(get_strategy("sparsevlm_boost_hybrid", {}), SparseVLMBoostHybridStrategy)
         self.assertIsInstance(get_strategy("sparsevlm_compensated", {}), SparseVLMCompensatedStrategy)
 
     def test_boost_zero_weight_degenerates_to_sparsevlm_topk(self):
@@ -153,6 +156,197 @@ class SparseVLMBoostCompensatedTests(unittest.TestCase):
         self.assertFalse(info0["global_use_ema"])
         self.assertTrue(info1["global_use_ema"])
         self.assertTrue(torch.allclose(torch.tensor(info1["mixed_score"]), expected))
+
+    def test_boost_can_disable_score_memory(self):
+        strategy = SparseVLMBoostStrategy(
+            {
+                "prune_ratio": 0.5,
+                "prune_ratio_map": {0: 0.25, 1: 0.5},
+                "fallback_topk": 4,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+                "boost_weight_min": 0.0,
+                "boost_weight_max": 0.0,
+                "grid_size": 2,
+                "patch_per_row": 2,
+                "global_current_weight": 0.0,
+                "global_ema_decay": 0.6,
+                "use_score_memory": False,
+            }
+        )
+        strategy.prepare_sample(
+            inputs_embeds=_make_grid_inputs(4),
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12]),
+            text_special_token_mask=torch.tensor([False, False]),
+        )
+        layer0_attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.9, 0.6, 0.4, 0.1], [0.8, 0.6, 0.4, 0.1]],
+        )
+        keep0, _info0 = strategy.compute_keep_mask(layer0_attn, 1, 4, 5, 0)
+        strategy.update_after_prune(keep0, 0)
+
+        layer1_attn = _full_attention(
+            seq_len=6,
+            text_rows=[4, 5],
+            visual_cols=[1, 2, 3],
+            values=[[0.1, 0.9, 0.2], [0.1, 0.8, 0.2]],
+        )
+        _keep1, info1 = strategy.compute_keep_mask(layer1_attn, 1, 3, 4, 1)
+
+        self.assertFalse(info1["global_use_ema"])
+        self.assertFalse(info1["use_score_memory"])
+        self.assertTrue(torch.allclose(torch.tensor(info1["mixed_score"]), torch.tensor(info1["current_rank_score"])))
+
+    def test_hybrid_rejects_layer_mode_length_mismatch(self):
+        strategy = SparseVLMBoostHybridStrategy(
+            {
+                "prune_layers": [0, 1],
+                "layer_modes": ["S"],
+                "prune_ratio": [0.5, 0.5],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "same length"):
+            strategy._layer_mode_map()
+
+    def test_hybrid_all_s_matches_sparsevlm_topk(self):
+        attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.1, 0.8, 0.4, 0.2], [0.1, 0.7, 0.3, 0.2]],
+        )
+        base = SparseVLMStrategy(
+            {
+                "prune_ratio": 0.5,
+                "fallback_topk": 4,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+            }
+        )
+        hybrid = SparseVLMBoostHybridStrategy(
+            {
+                "prune_layers": [0],
+                "layer_modes": ["S"],
+                "prune_ratio": 0.5,
+                "fallback_topk": 4,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+                "grid_size": 2,
+                "patch_per_row": 2,
+                "use_score_memory": False,
+            }
+        )
+        for strategy in (base, hybrid):
+            strategy.prepare_sample(
+                inputs_embeds=_make_grid_inputs(4),
+                v_token_start=1,
+                v_token_num=4,
+                text_token_start=5,
+                text_token_ids=torch.tensor([11, 12]),
+                text_special_token_mask=torch.tensor([False, False]),
+            )
+
+        base_keep, _base_info = base.compute_keep_mask(
+            attn,
+            1,
+            4,
+            5,
+            0,
+            current_visual_embeds=_make_grid_inputs(4)[0, 1:5],
+        )
+        hybrid_keep, hybrid_info = hybrid.compute_keep_mask(attn, 1, 4, 5, 0)
+
+        self.assertEqual(hybrid_keep.tolist(), base_keep.tolist())
+        self.assertEqual(hybrid_info["layer_mode"], "S")
+        self.assertEqual(hybrid_info["layer_strategy_effective"], "sparsevlm")
+
+    def test_hybrid_all_o_uses_current_layer_without_memory(self):
+        strategy = SparseVLMBoostHybridStrategy(
+            {
+                "prune_layers": [0, 1],
+                "layer_modes": ["O", "O"],
+                "prune_ratio_map": {0: 0.25, 1: 0.5},
+                "fallback_topk": 4,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+                "boost_weight_min": 0.0,
+                "boost_weight_max": 0.0,
+                "grid_size": 2,
+                "patch_per_row": 2,
+                "global_current_weight": 0.0,
+                "use_score_memory": False,
+            }
+        )
+        strategy.prepare_sample(
+            inputs_embeds=_make_grid_inputs(4),
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12]),
+            text_special_token_mask=torch.tensor([False, False]),
+        )
+        layer0_attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.9, 0.6, 0.4, 0.1], [0.8, 0.6, 0.4, 0.1]],
+        )
+        keep0, _info0 = strategy.compute_keep_mask(layer0_attn, 1, 4, 5, 0)
+        strategy.update_after_prune(keep0, 0)
+        layer1_attn = _full_attention(
+            seq_len=6,
+            text_rows=[4, 5],
+            visual_cols=[1, 2, 3],
+            values=[[0.1, 0.9, 0.2], [0.1, 0.8, 0.2]],
+        )
+        _keep1, info1 = strategy.compute_keep_mask(layer1_attn, 1, 3, 4, 1)
+
+        self.assertEqual(info1["layer_mode"], "O")
+        self.assertEqual(info1["layer_strategy_effective"], "sparsevlm_boost")
+        self.assertFalse(info1["global_use_ema"])
+        self.assertFalse(info1["use_score_memory"])
+        self.assertTrue(torch.allclose(torch.tensor(info1["mixed_score"]), torch.tensor(info1["current_rank_score"])))
+
+    def test_hybrid_oos_marks_third_layer_as_sparsevlm(self):
+        attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.1, 0.8, 0.4, 0.2], [0.1, 0.7, 0.3, 0.2]],
+        )
+        strategy = SparseVLMBoostHybridStrategy(
+            {
+                "prune_layers": [2, 6, 15],
+                "layer_modes": ["O", "O", "S"],
+                "prune_ratio": 0.5,
+                "fallback_topk": 4,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+                "grid_size": 2,
+                "patch_per_row": 2,
+                "use_score_memory": False,
+            }
+        )
+        strategy.prepare_sample(
+            inputs_embeds=_make_grid_inputs(4),
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12]),
+            text_special_token_mask=torch.tensor([False, False]),
+        )
+        _keep, info = strategy.compute_keep_mask(attn, 1, 4, 5, 15)
+
+        self.assertEqual(info["layer_mode"], "S")
+        self.assertEqual(info["layer_strategy_effective"], "sparsevlm")
+        self.assertNotIn("boost_weight", info)
 
     def test_compensated_fixed_seed_is_reproducible(self):
         layer0_attn = _full_attention(

@@ -167,6 +167,7 @@ class SparseVLMBoostStrategy(SparseVLMScoreMemoryStrategy):
             "global_current_weight": memory["global_current_weight"],
             "global_ema_decay": memory["global_ema_decay"],
             "global_use_ema": memory["global_use_ema"],
+            "use_score_memory": memory["use_score_memory"],
             "global_saliency_ema": memory["global_saliency_ema"].detach().cpu().numpy(),
         }
         return keep_indices, info
