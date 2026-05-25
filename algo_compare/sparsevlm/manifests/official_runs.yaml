@@ -1,0 +1,3 @@
+method: sparsevlm
+description: "Manually registered official SparseVLM runs."
+runs: []

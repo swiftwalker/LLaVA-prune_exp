@@ -1,0 +1,10 @@
+# Do not commit fetched official repositories.
+*/third_party/*
+!*/third_party/.gitkeep
+
+# Do not commit method outputs, logs, or caches.
+*/outputs/*
+!*/outputs/.gitkeep
+*/cache/*
+*.tmp
+*.log

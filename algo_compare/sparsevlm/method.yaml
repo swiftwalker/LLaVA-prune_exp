@@ -1,0 +1,32 @@
+name: SparseVLM
+paper:
+  title: "SparseVLM: Visual Token Sparsification for Efficient Vision-Language Model Inference"
+  notes: "Official comparison target for SparseVLM / SparseVLM-v2 style pruning."
+official:
+  repo_url: "https://github.com/Gumpest/SparseVLMs.git"
+  repo_web: "https://github.com/Gumpest/SparseVLMs"
+  target_commit: "87fe4319430e079a778c25d4ddf4588a3c4038ca"
+  local_checkout: "algo_compare/sparsevlm/third_party/SparseVLMs"
+entrypoints:
+  inference_module: "llava.eval.model_vqa_loader"
+  official_eval_scripts:
+    mme: "scripts/v1_5/eval/mme.sh"
+    gqa: "scripts/v1_5/eval/gqa.sh"
+    pope: "scripts/v1_5/eval/pope.sh"
+variants:
+  - name: "sparsevlm_v1"
+    use_version: "1_0"
+    notes: "Official v1 style if supported by the checked-out repo."
+  - name: "sparsevlm_v2"
+    use_version: "2_0"
+    notes: "Official v2 style; expected to use SparseVLM+ head/token scheduling behavior."
+defaults:
+  model_name: "llava-v1.5-7b"
+  retain_token: 192
+  use_version: "2_0"
+  conv_mode: "vicuna_v1"
+  temperature: 0
+local_comparison_notes:
+  - "entropy_exp local S-S-S is a local SV2-style reference, not an official SparseVLM-v2 reproduction."
+  - "Local S-S-S uses the local pruning engine and may differ in head aggregation, token schedule, and position-id behavior."
+  - "Official results should be recorded with source_type=official and the checked-out official repo commit."
