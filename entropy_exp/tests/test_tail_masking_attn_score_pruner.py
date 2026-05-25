@@ -9,7 +9,7 @@ import torch
 SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 sys.path.insert(0, SRC_DIR)
 
-from prune_inference import derive_effective_prune_config  # noqa: E402
+from prune_inference import derive_effective_prune_config, load_model_config_metadata  # noqa: E402
 from pruner import VisualTokenPruner, _apply_rotary_pos_emb, _repeat_kv  # noqa: E402
 from strategies.tail_masking_attn_score import TailMaskingAttnScoreStrategy  # noqa: E402
 
@@ -116,12 +116,83 @@ class DummyModel:
 
 
 class TailMaskingConfigExpansionTests(unittest.TestCase):
+    def _write_model_config(self, model_dir, **overrides):
+        os.makedirs(model_dir, exist_ok=True)
+        payload = {
+            "hidden_size": 4096,
+            "num_hidden_layers": 32,
+            "num_attention_heads": 32,
+            "num_key_value_heads": 32,
+            "mm_vision_tower": "openai/clip-vit-large-patch14-336",
+        }
+        payload.update(overrides)
+        with open(os.path.join(model_dir, "config.json"), "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+    def test_load_model_config_metadata_reads_shape_without_weights(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = os.path.join(tmpdir, "llava-v1.5-13b")
+            self._write_model_config(
+                model_dir,
+                hidden_size=5120,
+                num_hidden_layers=40,
+                num_attention_heads=40,
+                num_key_value_heads=40,
+            )
+
+            metadata = load_model_config_metadata(model_dir)
+            self.assertEqual(metadata["hidden_size"], 5120)
+            self.assertEqual(metadata["num_hidden_layers"], 40)
+            self.assertEqual(metadata["num_attention_heads"], 40)
+            self.assertEqual(metadata["num_key_value_heads"], 40)
+            self.assertEqual(metadata["mm_vision_tower"], "openai/clip-vit-large-patch14-336")
+
+    def test_fixed_prune_layers_are_validated_for_7b_and_13b_configs(self):
+        cfg = {
+            "strategy": "sparsevlm",
+            "layer_selection": "fixed",
+            "prune_layers": [2, 6, 15],
+            "prune_ratio": [0.479, 0.333, 0.410],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_7b = os.path.join(tmpdir, "llava-v1.5-7b")
+            model_13b = os.path.join(tmpdir, "llava-v1.5-13b")
+            self._write_model_config(model_7b, hidden_size=4096, num_hidden_layers=32, num_attention_heads=32)
+            self._write_model_config(model_13b, hidden_size=5120, num_hidden_layers=40, num_attention_heads=40)
+
+            _, layers_7b, tail_7b = derive_effective_prune_config(cfg, model_7b)
+            _, layers_13b, tail_13b = derive_effective_prune_config(cfg, model_13b)
+            self.assertEqual(layers_7b, [2, 6, 15])
+            self.assertEqual(layers_13b, [2, 6, 15])
+            self.assertIsNone(tail_7b)
+            self.assertIsNone(tail_13b)
+
+    def test_fixed_prune_layers_reject_out_of_range_13b_layer(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_dir = os.path.join(tmpdir, "llava-v1.5-13b")
+            self._write_model_config(
+                model_dir,
+                hidden_size=5120,
+                num_hidden_layers=40,
+                num_attention_heads=40,
+                num_key_value_heads=40,
+            )
+
+            with self.assertRaisesRegex(ValueError, r"\[0, 39\]"):
+                derive_effective_prune_config(
+                    {
+                        "strategy": "sparsevlm",
+                        "layer_selection": "fixed",
+                        "prune_layers": [40],
+                        "prune_ratio": [0.2],
+                    },
+                    model_dir,
+                )
+
     def test_derive_effective_prune_config_expands_tail_layers(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_dir = os.path.join(tmpdir, "model")
-            os.makedirs(model_dir, exist_ok=True)
-            with open(os.path.join(model_dir, "config.json"), "w", encoding="utf-8") as f:
-                json.dump({"num_hidden_layers": 32}, f)
+            self._write_model_config(model_dir, num_hidden_layers=32)
 
             effective_cfg, effective_layers, tail_start_layer = derive_effective_prune_config(
                 {
@@ -153,9 +224,7 @@ class TailMaskingConfigExpansionTests(unittest.TestCase):
     def test_derive_effective_prune_config_rejects_invalid_tail_configs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             model_dir = os.path.join(tmpdir, "model")
-            os.makedirs(model_dir, exist_ok=True)
-            with open(os.path.join(model_dir, "config.json"), "w", encoding="utf-8") as f:
-                json.dump({"num_hidden_layers": 32}, f)
+            self._write_model_config(model_dir, num_hidden_layers=32)
 
             invalid_configs = [
                 {

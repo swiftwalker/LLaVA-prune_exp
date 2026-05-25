@@ -102,6 +102,8 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
         return None, {"run_dir": str(run_dir), "reason": f"Failed to load files: {exc}"}
 
     pruning = config.get("pruning", {}) or {}
+    model_cfg = config.get("model", {}) or {}
+    model_config_metadata = config.get("model_config_metadata", {}) or {}
     entropy_cfg = pruning.get("entropy", {}) or {}
     run_meta = config.get("_run_meta", {}) or {}
     metrics = eval_summary.get("metrics", {}) or {}
@@ -118,6 +120,12 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
         "run_mode": run_meta.get("run_mode"),
         "timestamp": run_meta.get("timestamp"),
         "strategy": run_meta.get("strategy") or pruning.get("strategy"),
+        "model_name": model_cfg.get("name"),
+        "model_path": model_cfg.get("path"),
+        "model_hidden_size": model_config_metadata.get("hidden_size"),
+        "model_num_hidden_layers": model_config_metadata.get("num_hidden_layers"),
+        "model_num_attention_heads": model_config_metadata.get("num_attention_heads"),
+        "model_num_key_value_heads": model_config_metadata.get("num_key_value_heads"),
         "layer_selection": pruning.get("layer_selection"),
         "prune_layers": pruning.get("prune_layers"),
         "effective_prune_layers": pruning.get("effective_prune_layers"),
@@ -142,6 +150,7 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
         "scienceqa_accuracy": metrics.get("accuracy") if dataset == "scienceqa" else None,
         "adaptive_grid_size": adaptive_grid_size,
         "adaptive_high_ratio": adaptive_high_ratio,
+        "model_config_metadata": model_config_metadata,
         "pruning_config": pruning,
         "eval_metrics": metrics,
     }
@@ -175,6 +184,12 @@ def build_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "config_file": record["config_file"],
                 "eval_summary_file": record["eval_summary_file"],
                 "strategy": record["strategy"],
+                "model_name": csv_value(record["model_name"]),
+                "model_path": csv_value(record["model_path"]),
+                "model_hidden_size": csv_value(record["model_hidden_size"]),
+                "model_num_hidden_layers": csv_value(record["model_num_hidden_layers"]),
+                "model_num_attention_heads": csv_value(record["model_num_attention_heads"]),
+                "model_num_key_value_heads": csv_value(record["model_num_key_value_heads"]),
                 "layer_selection": record["layer_selection"],
                 "prune_layers": csv_value(record["prune_layers"]),
                 "effective_prune_layers": csv_value(record["effective_prune_layers"]),
@@ -211,6 +226,12 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "config_file",
         "eval_summary_file",
         "strategy",
+        "model_name",
+        "model_path",
+        "model_hidden_size",
+        "model_num_hidden_layers",
+        "model_num_attention_heads",
+        "model_num_key_value_heads",
         "layer_selection",
         "prune_layers",
         "effective_prune_layers",

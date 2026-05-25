@@ -23,6 +23,9 @@
 - scheduler 策略白名单：`entropy_exp/src/scheduler.py::SUPPORTED_STRATEGIES`
 - run 目录识别：`entropy_exp/src/run_layout.py::KNOWN_STRATEGIES`
 - 默认配置：`entropy_exp/configs/prune.yaml`
+- 7B/13B 切换入口：`model.path` 和 `model.name`；默认 7B，13B 建议通过
+  `--set model.path=entropy_exp/models/llava-v1.5-13b --set model.name=llava-v1.5-13b`
+  或 plan override 显式启用，详见 [USAGE.md](./USAGE.md)
 
 ## 能力边界
 
@@ -30,4 +33,3 @@
 - Repo-native 本地评测和 summary：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`
 - `mmbench` 当前只保证 inference 输入兼容，不进入本地 official score 汇总
 - Patch distribution 当前只覆盖 `baseline`、`random`、`sparsevlm`、`sparsevlm_adaptive_stratified`
-

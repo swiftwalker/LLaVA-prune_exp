@@ -190,6 +190,14 @@ def load_jsonl(path: str) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+def normalize_open_answer(text: str) -> str:
+    return str(text).strip().lower().rstrip(".")
+
+
+def is_subset_answers_file(answers_file: str, full_count: int) -> bool:
+    return len(load_jsonl(answers_file)) < int(full_count)
+
+
 def load_textvqa_evaluator():
     evaluator_path = os.path.join(LLAVA_ROOT, "llava", "eval", "m4c_evaluator.py")
     spec = importlib.util.spec_from_file_location("textvqa_evaluator_local", evaluator_path)
@@ -198,6 +206,142 @@ def load_textvqa_evaluator():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.TextVQAAccuracyEvaluator()
+
+
+def eval_gqa_subset(answers_file: str, output_dir: str) -> dict:
+    question_file = os.path.join(LLAVA_ROOT, "entropy_exp", "datasets", "gqa", "testdev_balanced_questions.json")
+    questions = load_json(question_file)
+    answers = load_jsonl(answers_file)
+
+    details = []
+    correct = 0
+    for answer in answers:
+        question_id = str(answer["question_id"])
+        question = questions[question_id]
+        pred_text = normalize_open_answer(answer.get("text", ""))
+        gt_text = normalize_open_answer(question.get("answer", ""))
+        is_correct = pred_text == gt_text
+        correct += int(is_correct)
+        details.append(
+            {
+                "question_id": question_id,
+                "prediction": pred_text,
+                "answer": gt_text,
+                "correct": is_correct,
+            }
+        )
+
+    total = len(details)
+    accuracy = (correct / total * 100.0) if total else 0.0
+    stdout_text = (
+        f"Subset GQA evaluation\n"
+        f"Samples: {total}\n"
+        f"Correct: {correct}\n"
+        f"Accuracy: {accuracy:.2f}\n"
+    )
+    print(stdout_text, end="")
+    write_text(os.path.join(output_dir, "stdout.txt"), stdout_text)
+    analysis_file = os.path.join(output_dir, "subset_analysis.json")
+    write_json(analysis_file, {"results": details})
+    return {
+        "question_file": question_file,
+        "analysis_file": analysis_file,
+        "subset_evaluation": True,
+        "metrics": {
+            "accuracy": accuracy,
+            "correct": correct,
+            "count": total,
+        },
+    }
+
+
+def normalize_pope_answer(text: str) -> int:
+    first_sentence = str(text).split(".")[0].replace(",", "")
+    words = first_sentence.split()
+    return 0 if ("No" in words or "not" in words or "no" in words) else 1
+
+
+def compute_binary_metrics(pred_list: list[int], label_list: list[int]) -> dict:
+    tp = fp = tn = fn = 0
+    for pred, label in zip(pred_list, label_list):
+        if pred == 1 and label == 1:
+            tp += 1
+        elif pred == 1 and label == 0:
+            fp += 1
+        elif pred == 0 and label == 0:
+            tn += 1
+        elif pred == 0 and label == 1:
+            fn += 1
+    total = tp + fp + tn + fn
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    accuracy = (tp + tn) / total if total else 0.0
+    yes_ratio = pred_list.count(1) / len(pred_list) if pred_list else 0.0
+    return {
+        "samples": total,
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1,
+        "yes_ratio": yes_ratio,
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+    }
+
+
+def eval_pope_subset(answers_file: str, output_dir: str) -> dict:
+    question_file = os.path.join(LLAVA_ROOT, "entropy_exp", "eval_questions", "pope", "llava_pope_test.jsonl")
+    annotation_dir = os.path.join(LLAVA_ROOT, "entropy_exp", "datasets", "pope", "coco")
+    questions = {str(item["question_id"]): item for item in load_jsonl(question_file)}
+    answers = load_jsonl(answers_file)
+
+    labels_by_category: dict[str, dict[str, int]] = {}
+    for filename in os.listdir(annotation_dir):
+        if not filename.startswith("coco_pope_") or not filename.endswith(".json"):
+            continue
+        category = filename[10:-5]
+        labels_by_category[category] = {
+            str(item["question_id"]): 1 if item["label"] == "yes" else 0
+            for item in load_jsonl(os.path.join(annotation_dir, filename))
+        }
+
+    grouped_predictions: dict[str, list[tuple[int, int]]] = {}
+    for answer in answers:
+        question_id = str(answer["question_id"])
+        category = questions[question_id]["category"]
+        label = labels_by_category[category][question_id]
+        pred = normalize_pope_answer(answer.get("text", ""))
+        grouped_predictions.setdefault(category, []).append((pred, label))
+
+    metrics = {}
+    stdout_parts = ["Subset POPE evaluation"]
+    for category in sorted(grouped_predictions):
+        pairs = grouped_predictions[category]
+        pred_list = [pred for pred, _label in pairs]
+        label_list = [label for _pred, label in pairs]
+        metrics[category] = compute_binary_metrics(pred_list, label_list)
+        stdout_parts.append(f"Category: {category}, # samples: {metrics[category]['samples']}")
+        stdout_parts.append(f"Accuracy: {metrics[category]['accuracy']}")
+        stdout_parts.append(f"Precision: {metrics[category]['precision']}")
+        stdout_parts.append(f"Recall: {metrics[category]['recall']}")
+        stdout_parts.append(f"F1 score: {metrics[category]['f1_score']}")
+        stdout_parts.append(f"Yes ratio: {metrics[category]['yes_ratio']}")
+        stdout_parts.append("====================================")
+    metrics = add_pope_macro_f1(metrics)
+    if "macro_f1" in metrics:
+        stdout_parts.append(format_pope_macro_f1(metrics["macro_f1"]))
+    stdout_text = "\n".join(stdout_parts) + "\n"
+    print(stdout_text, end="")
+    write_text(os.path.join(output_dir, "stdout.txt"), stdout_text)
+    return {
+        "question_file": question_file,
+        "annotation_dir": annotation_dir,
+        "subset_evaluation": True,
+        "metrics": metrics,
+    }
 
 
 def textvqa_prompt_processor(prompt: str) -> str:
@@ -312,11 +456,14 @@ def eval_gqa(answers_file: str, output_dir: str) -> dict:
     data_dir = os.path.join(LLAVA_ROOT, "entropy_exp", "datasets", "gqa")
     convert_script = os.path.join(LLAVA_ROOT, "scripts", "convert_gqa_for_eval.py")
     eval_script = os.path.join(data_dir, "eval.py")
+    question_file = os.path.join(data_dir, "testdev_balanced_questions.json")
 
     if not os.path.exists(convert_script):
         raise FileNotFoundError(f"GQA convert script not found: {convert_script}")
     if not os.path.exists(eval_script):
         raise FileNotFoundError(f"GQA eval script not found: {eval_script}")
+    if is_subset_answers_file(answers_file, len(load_json(question_file))):
+        return eval_gqa_subset(answers_file, output_dir)
 
     pred_file = os.path.join(output_dir, "testdev_balanced_predictions.json")
     print(f"Converting: {answers_file} -> {pred_file}")
@@ -415,6 +562,8 @@ def eval_pope(answers_file: str, output_dir: str) -> dict:
 
     if not os.path.exists(eval_script):
         raise FileNotFoundError(f"POPE eval script not found: {eval_script}")
+    if is_subset_answers_file(answers_file, len(load_jsonl(question_file))):
+        return eval_pope_subset(answers_file, output_dir)
 
     print("Running POPE evaluation...")
     result = subprocess.run(

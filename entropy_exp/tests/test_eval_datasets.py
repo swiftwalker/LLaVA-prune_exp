@@ -13,8 +13,11 @@ sys.path.insert(0, SRC_DIR)
 
 from eval_datasets import (
     add_pope_macro_f1,
+    compute_binary_metrics,
     format_pope_macro_f1,
     load_scienceqa_metrics,
+    normalize_open_answer,
+    normalize_pope_answer,
     parse_pope_metrics,
     parse_textvqa_metrics,
     unsupported_local_metric_message,
@@ -97,6 +100,18 @@ Yes ratio: 0.43
 
         self.assertEqual(eval_pope_module.get_question_category(question_lookup, "1"), "popular")
         self.assertEqual(eval_pope_module.get_question_category(question_lookup, 2), "adversarial")
+
+    def test_subset_metric_helpers_are_deterministic(self):
+        self.assertEqual(normalize_open_answer("No."), "no")
+        self.assertEqual(normalize_pope_answer("No, there is not."), 0)
+        self.assertEqual(normalize_pope_answer("Yes, clearly."), 1)
+
+        metrics = compute_binary_metrics([1, 0, 1, 0], [1, 0, 0, 1])
+        self.assertEqual(metrics["samples"], 4)
+        self.assertAlmostEqual(metrics["accuracy"], 0.5)
+        self.assertAlmostEqual(metrics["precision"], 0.5)
+        self.assertAlmostEqual(metrics["recall"], 0.5)
+        self.assertAlmostEqual(metrics["f1_score"], 0.5)
 
 
 class NewDatasetEvalTests(unittest.TestCase):

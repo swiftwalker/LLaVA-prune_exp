@@ -118,6 +118,60 @@ class SummarizeResultsPopeTests(unittest.TestCase):
             self.assertEqual(rows[0]["effective_prune_layers"], "[3, 4, 5]")
             self.assertEqual(rows[0]["tail_start_layer"], 3)
 
+    def test_extract_record_and_csv_rows_include_model_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir) / "gqa_sparsevlm_l2-6-15_r0p479-0p333-0p410__demo"
+            eval_dir = run_dir / "eval"
+            eval_dir.mkdir(parents=True)
+
+            config = {
+                "model": {
+                    "path": "entropy_exp/models/llava-v1.5-13b",
+                    "name": "llava-v1.5-13b",
+                },
+                "model_config_metadata": {
+                    "hidden_size": 5120,
+                    "num_hidden_layers": 40,
+                    "num_attention_heads": 40,
+                    "num_key_value_heads": 40,
+                    "mm_vision_tower": "openai/clip-vit-large-patch14-336",
+                },
+                "_run_meta": {"dataset": "gqa", "run_mode": "prune", "timestamp": "demo"},
+                "pruning": {
+                    "strategy": "sparsevlm",
+                    "layer_selection": "fixed",
+                    "prune_layers": [2, 6, 15],
+                    "prune_ratio": [0.479, 0.333, 0.410],
+                    "v_token_num": 576,
+                    "max_samples": 4,
+                    "entropy": {},
+                },
+            }
+            metrics = {"accuracy": 62.5}
+
+            (run_dir / "config.yaml").write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+            (eval_dir / "summary.json").write_text(
+                json.dumps({"dataset": "gqa", "metrics": metrics}, indent=2),
+                encoding="utf-8",
+            )
+
+            record, skipped = extract_record(run_dir)
+            self.assertIsNone(skipped)
+            self.assertEqual(record["model_name"], "llava-v1.5-13b")
+            self.assertEqual(record["model_path"], "entropy_exp/models/llava-v1.5-13b")
+            self.assertEqual(record["model_hidden_size"], 5120)
+            self.assertEqual(record["model_num_hidden_layers"], 40)
+            self.assertEqual(record["model_num_attention_heads"], 40)
+
+            rows = build_csv_rows([record])
+            self.assertEqual(rows[0]["model_name"], "llava-v1.5-13b")
+            self.assertEqual(rows[0]["model_hidden_size"], 5120)
+            self.assertEqual(rows[0]["model_num_hidden_layers"], 40)
+            self.assertEqual(rows[0]["model_num_attention_heads"], 40)
+
     def test_extract_record_and_csv_rows_include_textvqa_and_scienceqa_accuracy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir) / "textvqa_random_l1_r0p2__demo"

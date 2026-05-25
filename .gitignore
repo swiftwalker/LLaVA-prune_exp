@@ -71,6 +71,9 @@ entropy_exp/plans/*
 !entropy_exp/plans/sv2_vs_progressive_extension.yaml
 !entropy_exp/plans/hybrid_sv2_boost_l2_6_15.yaml
 !entropy_exp/plans/hybrid_sv2_boost_bw_sweep_l2_6_15.yaml
+!entropy_exp/plans/llava13b_smoke.yaml
+!entropy_exp/plans/llava13b_hybrid_sv2_boost_bw_sweep_l2_6_15.yaml
+!entropy_exp/plans/llava13b_layer_bw_fullgrid_l3scan.yaml
 
 # FLOPs experiment — generated outputs (keep placeholder .gitkeep files)
 flops_exp/outputs/batch_flops/*

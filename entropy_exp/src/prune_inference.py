@@ -64,6 +64,23 @@ from dataset_adapters import SUPPORTED_DATASETS, load_dataset_samples
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 
 
+MODEL_CONFIG_METADATA_KEYS = (
+    "_name_or_path",
+    "model_type",
+    "architectures",
+    "hidden_size",
+    "num_hidden_layers",
+    "num_attention_heads",
+    "num_key_value_heads",
+    "mm_vision_tower",
+    "mm_vision_select_layer",
+    "mm_vision_select_feature",
+    "image_aspect_ratio",
+    "mm_projector_type",
+    "torch_dtype",
+)
+
+
 # ---------------------------------------------------------------------------
 # Dataset (same as inference.py)
 # ---------------------------------------------------------------------------
@@ -418,26 +435,68 @@ def _normalize_single_tail_ratio(value) -> float:
     )
 
 
-def _load_num_hidden_layers(model_path: str) -> int:
+def load_model_config_metadata(model_path: str) -> dict[str, Any]:
+    """Read lightweight model metadata from config.json without loading weights."""
     config_path = os.path.join(model_path, "config.json")
     if not os.path.isfile(config_path):
         raise FileNotFoundError(f"Model config not found: {config_path}")
     with open(config_path, "r", encoding="utf-8") as f:
         model_config = json.load(f)
-    num_hidden_layers = model_config.get("num_hidden_layers")
+
+    metadata = {
+        key: model_config.get(key)
+        for key in MODEL_CONFIG_METADATA_KEYS
+        if key in model_config
+    }
+    metadata["config_path"] = config_path
+    return metadata
+
+
+def _num_hidden_layers_from_metadata(model_config_metadata: dict[str, Any]) -> int:
+    num_hidden_layers = model_config_metadata.get("num_hidden_layers")
     if not isinstance(num_hidden_layers, int):
         raise ValueError(
-            f"model config at {config_path} is missing integer num_hidden_layers, got {num_hidden_layers!r}"
+            "model config metadata is missing integer num_hidden_layers, "
+            f"got {num_hidden_layers!r} from {model_config_metadata.get('config_path')}"
         )
     return num_hidden_layers
 
 
-def derive_effective_prune_config(prune_cfg: dict, model_path: str) -> tuple[dict, list[int], Optional[int]]:
+def _load_num_hidden_layers(model_path: str) -> int:
+    return _num_hidden_layers_from_metadata(load_model_config_metadata(model_path))
+
+
+def validate_fixed_prune_layers(
+    prune_layers: list[int],
+    num_hidden_layers: int,
+    *,
+    field_name: str = "prune_layers",
+) -> None:
+    if num_hidden_layers <= 0:
+        raise ValueError(f"num_hidden_layers must be > 0, got {num_hidden_layers}")
+    invalid_layers = [layer for layer in prune_layers if layer < 0 or layer >= num_hidden_layers]
+    if invalid_layers:
+        raise ValueError(
+            f"{field_name} must be within [0, {num_hidden_layers - 1}] for this model, "
+            f"got invalid layers {invalid_layers} from {prune_layers}"
+        )
+
+
+def derive_effective_prune_config(
+    prune_cfg: dict,
+    model_path: str,
+    model_config_metadata: Optional[dict[str, Any]] = None,
+) -> tuple[dict, list[int], Optional[int]]:
     import copy
 
     configured_prune_layers = _normalize_configured_prune_layers(prune_cfg["prune_layers"])
     effective_prune_cfg = copy.deepcopy(prune_cfg)
     strategy_name = prune_cfg["strategy"]
+    model_config_metadata = model_config_metadata or load_model_config_metadata(model_path)
+    num_hidden_layers = _num_hidden_layers_from_metadata(model_config_metadata)
+
+    if prune_cfg.get("layer_selection", "fixed") == "fixed":
+        validate_fixed_prune_layers(configured_prune_layers, num_hidden_layers)
 
     if strategy_name != "tail_masking_attn_score":
         effective_prune_cfg["prune_layers"] = configured_prune_layers
@@ -448,7 +507,6 @@ def derive_effective_prune_config(prune_cfg: dict, model_path: str) -> tuple[dic
 
     start_layer = _normalize_single_tail_start_layer(prune_cfg["prune_layers"])
     shared_ratio = _normalize_single_tail_ratio(prune_cfg.get("prune_ratio", 0.5))
-    num_hidden_layers = _load_num_hidden_layers(model_path)
     if start_layer < 0 or start_layer >= num_hidden_layers:
         raise ValueError(
             f"tail_masking_attn_score start layer must be within [0, {num_hidden_layers - 1}], got {start_layer}"
@@ -458,6 +516,60 @@ def derive_effective_prune_config(prune_cfg: dict, model_path: str) -> tuple[dic
     effective_prune_cfg["prune_layers"] = effective_prune_layers
     effective_prune_cfg["prune_ratio"] = shared_ratio
     return effective_prune_cfg, effective_prune_layers, start_layer
+
+
+def _actual_decoder_layer_count(model) -> Optional[int]:
+    backbone = getattr(model, "model", None)
+    layers = getattr(backbone, "layers", None)
+    if layers is None:
+        return None
+    try:
+        return len(layers)
+    except TypeError:
+        return None
+
+
+def validate_loaded_model_runtime(
+    model,
+    model_config_metadata: dict[str, Any],
+    configured_v_token_num: int,
+) -> dict[str, Any]:
+    """Validate loaded model shape against config metadata and pruning settings."""
+    runtime_metadata: dict[str, Any] = {}
+
+    actual_num_layers = _actual_decoder_layer_count(model)
+    runtime_metadata["actual_num_layers"] = actual_num_layers
+    expected_num_layers = model_config_metadata.get("num_hidden_layers")
+    if (
+        isinstance(expected_num_layers, int)
+        and actual_num_layers is not None
+        and actual_num_layers != expected_num_layers
+    ):
+        raise RuntimeError(
+            "Loaded model layer count does not match config.json: "
+            f"actual={actual_num_layers}, config={expected_num_layers}"
+        )
+
+    vision_token_count = None
+    vision_patches_per_side = None
+    if hasattr(model, "get_vision_tower"):
+        vision_tower = model.get_vision_tower()
+        if vision_tower is not None:
+            vision_token_count = getattr(vision_tower, "num_patches", None)
+            vision_patches_per_side = getattr(vision_tower, "num_patches_per_side", None)
+    runtime_metadata["vision_token_count"] = vision_token_count
+    runtime_metadata["vision_patches_per_side"] = vision_patches_per_side
+
+    if (
+        isinstance(vision_token_count, int)
+        and int(configured_v_token_num) != vision_token_count
+    ):
+        raise RuntimeError(
+            "Configured pruning.v_token_num does not match the loaded vision tower: "
+            f"configured={configured_v_token_num}, vision_tower={vision_token_count}"
+        )
+
+    return runtime_metadata
 
 
 # ---------------------------------------------------------------------------
@@ -491,13 +603,16 @@ def run_prune_inference(
 
     model_path = resolve(model_cfg["path"])
     model_name = model_cfg["name"]
+    model_config_metadata = load_model_config_metadata(model_path)
     question_file = resolve(ds_cfg["question_file"])
     image_folder = resolve(ds_cfg["image_folder"])
     strategy_name = prune_cfg["strategy"]
+    v_token_num = int(prune_cfg.get("v_token_num", 576))
     configured_prune_layers = _normalize_configured_prune_layers(prune_cfg["prune_layers"])
     effective_prune_cfg, effective_prune_layers, tail_start_layer = derive_effective_prune_config(
         prune_cfg,
         model_path,
+        model_config_metadata=model_config_metadata,
     )
     strategy_extra = effective_prune_cfg.get(strategy_name, {})
     strategy_config = {**effective_prune_cfg, **strategy_extra}
@@ -551,6 +666,7 @@ def run_prune_inference(
     # --- save config snapshot (after --set overrides) ---
     config_snapshot = {
         **config,
+        "model_config_metadata": model_config_metadata,
         "pruning": {
             **config["pruning"],
             "prune_layers": (
@@ -597,7 +713,19 @@ def run_prune_inference(
     if enable_sparse_position_ids_compat(model):
         print("[position-ids] Enabled sparse position-id compatibility for Llama attention.")
     model.eval()
-    print(f"Model loaded.  attn={attn_impl}, device={target_device}")
+    model_runtime_metadata = validate_loaded_model_runtime(
+        model,
+        model_config_metadata=model_config_metadata,
+        configured_v_token_num=v_token_num,
+    )
+    config_snapshot["_run_meta"]["model_runtime_metadata"] = model_runtime_metadata
+    with open(config_snapshot_path, 'w') as f:
+        yaml.dump(config_snapshot, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    print(
+        f"Model loaded.  attn={attn_impl}, device={target_device}, "
+        f"hidden_size={model_config_metadata.get('hidden_size')}, "
+        f"layers={model_runtime_metadata.get('actual_num_layers')}"
+    )
 
     # --- build pruner ---
     pruner = VisualTokenPruner(model, strategy, effective_prune_cfg)
@@ -623,7 +751,6 @@ def run_prune_inference(
     num_workers = int(os.environ.get("DATALOADER_NUM_WORKERS", "0"))
     data_loader = DataLoader(dataset, batch_size=1, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
 
-    v_token_num = prune_cfg.get("v_token_num", 576)
     eos_token_id = tokenizer.eos_token_id or 2
 
     total_time = 0.0

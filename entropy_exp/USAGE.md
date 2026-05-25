@@ -29,6 +29,37 @@ entropy_exp/eval_questions
 entropy_exp/configs/prune.yaml
 ```
 
+### 7B / 13B 模型切换入口
+
+剪枝实验的模型大小由 `model.path` 和 `model.name` 决定。默认入口在
+`entropy_exp/configs/prune.yaml`，当前保持 7B：
+
+```yaml
+model:
+  path: "entropy_exp/models/llava-v1.5-7b"
+  name: "llava-v1.5-7b"
+```
+
+如果要全局默认切到 13B，可以把这两项改成：
+
+```yaml
+model:
+  path: "entropy_exp/models/llava-v1.5-13b"
+  name: "llava-v1.5-13b"
+```
+
+更推荐在单次命令或 scheduler plan 中显式覆盖，避免把 7B/13B 结果混入同一实验口径：
+
+```bash
+bash entropy_exp/scripts/run_prune.sh sparsevlm gqa 4 --no-auto-gpu \
+  --set model.path=entropy_exp/models/llava-v1.5-13b \
+  --set model.name=llava-v1.5-13b
+```
+
+LLaVA-1.5 7B/13B 当前都使用 `v_token_num=576`、`patch_per_row=24`。13B
+使用 40 层 decoder，`prune_layers` 仍按绝对层号写，例如 `[2,6,15]`；代码会从
+模型 `config.json` 读取 `hidden_size`、`num_hidden_layers` 等元信息并校验层号范围。
+
 ## 2. 快速开始
 
 推荐入口是 `run_prune.sh`：
@@ -209,4 +240,3 @@ entropy_exp/outputs/runs/{strategy}/{dataset}/{run_name}/
 | `textvqa` | 支持 | 支持，主指标 `accuracy` |
 | `scienceqa` | 支持 | 支持，主指标 `accuracy` |
 | `mmbench` | 支持 | 不支持本地 official score |
-
