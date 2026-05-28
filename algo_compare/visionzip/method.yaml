@@ -1,0 +1,30 @@
+name: VisionZip
+paper:
+  title: "VisionZip: Longer is Better but Not Necessary in Vision Language Models"
+  notes: "Official comparison target for CVPR 2025 VisionZip."
+official:
+  repo_url: "https://github.com/dvlab-research/VisionZip.git"
+  repo_web: "https://github.com/dvlab-research/VisionZip"
+  target_ref: "main"
+  target_commit: "8f86b55c6f000eb033e6912538af2dd7dcb30502"
+  local_checkout: "algo_compare/visionzip/third_party/VisionZip"
+entrypoints:
+  inference_script: "algo_compare/visionzip/scripts/visionzip_vqa_runner.py"
+variants:
+  - name: "visionzip_64"
+    notes: "Official quick-start setting: dominant=54, contextual=10, total retained visual tokens=64."
+defaults:
+  model_name: "llava-v1.5-7b"
+  variant: "visionzip_64"
+  conv_mode: "vicuna_v1"
+  temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
+  visionzip:
+    dominant: 54
+    contextual: 10
+local_comparison_notes:
+  - "VisionZip official code is fetched into third_party and is not vendored."
+  - "The wrapper loads local LLaVA, then applies official visionzip(model, dominant, contextual)."
+  - "Local metrics are produced by entropy_exp/src/eval_datasets.py for comparison consistency."

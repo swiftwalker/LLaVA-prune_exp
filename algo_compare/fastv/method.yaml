@@ -1,0 +1,38 @@
+name: FastV
+paper:
+  title: "An Image is Worth 1/2 Tokens After Layer 2: Plug-and-Play Inference Acceleration for Large Vision-Language Models"
+  notes: "Official comparison target for ECCV 2024 FastV."
+official:
+  repo_url: "https://github.com/pkunlp-icler/FastV.git"
+  repo_web: "https://github.com/pkunlp-icler/FastV"
+  target_ref: "main"
+  target_commit: "d1659729b5bf1be225e99ee15783deeea80f63b1"
+  local_checkout: "algo_compare/fastv/third_party/FastV"
+entrypoints:
+  inference_script: "algo_compare/fastv/scripts/fastv_vqa_runner.py"
+variants:
+  - name: "fastv_token_mask"
+    notes: "Default official FastV token masking style."
+  - name: "fastv_inplace"
+    notes: "Reserved for official inplace pruning mode if enabled by the checkout."
+  - name: "fastv_hf"
+    notes: "Reserved for the official Hugging Face / LMMs-Eval path."
+defaults:
+  model_name: "llava-v1.5-7b"
+  variant: "fastv_token_mask"
+  conv_mode: "vicuna_v1"
+  temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
+  fastv:
+    k: 2
+    r: 0.5
+    mode: "token_mask"
+    sys_length: 35
+    image_token_length: 576
+    max_expanded_tokens: 0
+local_comparison_notes:
+  - "FastV official code is fetched into third_party and is not vendored."
+  - "Local metrics are produced by entropy_exp/src/eval_datasets.py for comparison consistency."
+  - "Default K/R follows the commonly reported K=2, R=0.5 setting for LLaVA-1.5 576 visual tokens."

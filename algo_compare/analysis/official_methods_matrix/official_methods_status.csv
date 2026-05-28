@@ -1,0 +1,6 @@
+dataset,SparseVLM-v1-192,SparseVLM-v2-192,FastV-k2-r0.5,PDROP-v1.5,VisionZip-64,DivPrune-r0.098
+gqa,complete,complete,complete,complete,complete,complete
+textvqa,complete,complete,complete,complete,complete,complete
+pope,complete,complete,complete,complete,complete,complete
+mme,complete,complete,complete,complete,complete,complete
+scienceqa,complete,missing,complete,complete,complete,complete

@@ -1,0 +1,13 @@
+target_retain,label,method,variant,equiv_token_layer_sum,approx_token_layer_sum,avg_tokens_per_layer,compute_prune_rate,params,note
+128,SparseVLM-v1-128,sparsevlm,sparsevlm_v1,4040,4040,126.250000,0.78081597,--retain-token 128 --use-version 1_0,Official SV1 reference; primary budget source.
+128,SparseVLM-v2-128,sparsevlm,sparsevlm_v2,4040,4144,129.500000,0.77517361,--retain-token 128 --use-version 2_0,Official SV2 same RETAIN_TOKN reference; compute differs from SV1 schedule.
+128,FastV-sv1r128compute,fastv,fastv_token_mask,4040,4032,126.000000,0.78125000,--fastv-k 2 --fastv-r 0.833333 --fastv-attention-rank 96,Exact continuous rank 96.267; integer rank 96.
+128,PDROP-sv1r128compute,pdrop,pdrop_v1_5,4040,4040,126.250000,0.78081597,"--pdrop-layer-list '[2,6,16]' --pdrop-image-token-ratio-list '[0.526043,0.190974,0.062502]'","Uses 1-based PDROP boundaries [2,6,16] to mirror SV1 2/4/10/16 stage lengths."
+128,VisionZip-sv1r128compute,visionzip,visionzip_64,4040,4032,126.000000,0.78125000,--visionzip-dominant 106 --visionzip-contextual 20,Retains 126 visual tokens; dominant/contextual split preserves 54:10 ratio.
+128,DivPrune-sv1r128compute,divprune,divprune_r0p098,4040,4032,126.000000,0.78125000,--divprune-subset-ratio 0.218750,round(0.218750 * 576) = 126 retained visual tokens.
+64,SparseVLM-v1-64,sparsevlm,sparsevlm_v1,1988,1988,62.125000,0.89214410,--retain-token 64 --use-version 1_0,Official SV1 reference; primary budget source.
+64,SparseVLM-v2-64,sparsevlm,sparsevlm_v2,1988,2076,64.875000,0.88736979,--retain-token 64 --use-version 2_0,Official SV2 same RETAIN_TOKN reference; compute differs from SV1 schedule.
+64,FastV-sv1r64compute,fastv,fastv_token_mask,1988,1992,62.250000,0.89192708,--fastv-k 2 --fastv-r 0.951389 --fastv-attention-rank 28,Exact continuous rank 27.867; integer rank 28.
+64,PDROP-sv1r64compute,pdrop,pdrop_v1_5,1988,1988,62.125000,0.89214410,"--pdrop-layer-list '[2,6,16]' --pdrop-image-token-ratio-list '[0.114585,0.052085,0.029516]'","Uses 1-based PDROP boundaries [2,6,16] to mirror SV1 2/4/10/16 stage lengths."
+64,VisionZip-sv1r64compute,visionzip,visionzip_64,1988,1984,62.000000,0.89236111,--visionzip-dominant 52 --visionzip-contextual 10,Retains 62 visual tokens; dominant/contextual split preserves 54:10 ratio.
+64,DivPrune-sv1r64compute,divprune,divprune_r0p098,1988,1984,62.000000,0.89236111,--divprune-subset-ratio 0.107639,round(0.107639 * 576) = 62 retained visual tokens.

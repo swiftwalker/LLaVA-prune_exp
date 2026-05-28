@@ -1,0 +1,6 @@
+dataset,metric,DivPrune_r0p098,answers,complete
+gqa,accuracy,57.01,12578,True
+textvqa,accuracy,54.21400000000005,5000,True
+pope,macro_f1,0.8525803933994037,8910,True
+mme,overall_total_score,1606.9869947979191,2374,True
+scienceqa,accuracy,69.67696298042915,4241,True

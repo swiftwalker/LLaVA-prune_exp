@@ -1,0 +1,43 @@
+name: PyramidDrop
+paper:
+  title: "PyramidDrop: Accelerating Your Large Vision-Language Models via Pyramid Visual Redundancy Reduction"
+  venue: "CVPR 2025"
+  notes: "Official comparison target for PDROP / PyramidDrop."
+official:
+  repo_url: "https://github.com/Cooperx521/PyramidDrop.git"
+  repo_web: "https://github.com/Cooperx521/PyramidDrop"
+  target_ref: "main"
+  target_commit: "6444f304aee4b7edcb022839fb9e8cd07859704a"
+  local_checkout: "algo_compare/pdrop/third_party/PyramidDrop"
+entrypoints:
+  inference_module: "llava.eval.model_vqa_loader"
+  dataset_inference_modules:
+    gqa: "llava.eval.model_vqa_loader"
+    mme: "llava.eval.model_vqa_loader"
+    pope: "llava.eval.model_vqa_loader"
+    textvqa: "llava.eval.model_vqa_loader"
+    scienceqa: "llava.eval.model_vqa_science"
+  official_eval_scripts:
+    gqa: "scripts/v1_5/pdrop_eval/gqa.sh"
+    mme: "scripts/v1_5/pdrop_eval/mme.sh"
+    pope: "scripts/v1_5/pdrop_eval/pope.sh"
+    textvqa: "scripts/v1_5/pdrop_eval/textvqa.sh"
+    scienceqa: "scripts/v1_5/pdrop_eval/sqa.sh"
+variants:
+  - name: "pdrop_v1_5"
+    notes: "Official LLaVA-1.5 PDROP path using modeling_llama_pdrop.py."
+defaults:
+  model_name: "llava-v1.5-7b"
+  variant: "pdrop_v1_5"
+  conv_mode: "vicuna_v1"
+  temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
+  pdrop:
+    layer_list: "[8,16,24]"
+    image_token_ratio_list: "[0.5,0.25,0.125]"
+local_comparison_notes:
+  - "PyramidDrop official code is fetched into third_party and is not vendored."
+  - "Local metrics are produced by entropy_exp/src/eval_datasets.py for comparison consistency."
+  - "The wrapper passes official PDROP layer_list and image_token_ratio_list arguments without changing model code."

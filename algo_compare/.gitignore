@@ -3,8 +3,12 @@
 !*/third_party/.gitkeep
 
 # Do not commit method outputs, logs, or caches.
+outputs/*
+!outputs/.gitkeep
 */outputs/*
 !*/outputs/.gitkeep
 */cache/*
+__pycache__/
+*.pyc
 *.tmp
 *.log

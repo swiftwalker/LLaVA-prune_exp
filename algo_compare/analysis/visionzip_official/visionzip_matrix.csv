@@ -1,0 +1,6 @@
+dataset,metric_name,visionzip_64,answers_count
+gqa,accuracy,55.15,12578
+textvqa,accuracy,55.49800000000006,5000
+pope,macro_f1,0.7707536119102074,8910
+mme,overall_total_score,1695.1281512605042,2374
+scienceqa,accuracy,69.98349445885404,4241

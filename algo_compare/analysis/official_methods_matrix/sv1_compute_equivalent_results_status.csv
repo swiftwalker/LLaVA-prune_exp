@@ -1,0 +1,6 @@
+dataset,metric,SparseVLM-v1-192,SparseVLM-v2-192,FastV-sv1compute,PDROP-sv1compute,VisionZip-sv1compute,DivPrune-sv1compute
+gqa,accuracy,OK,OK,OK,OK,OK,OK
+textvqa,accuracy,OK,OK,OK,OK,OK,OK
+pope,macro_f1,OK,OK,OK,OK,OK,OK
+mme,overall_total_score,OK,OK,OK,OK,OK,OK
+scienceqa,accuracy,OK,MISSING,OK,OK,OK,OK

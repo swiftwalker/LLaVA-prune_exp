@@ -1,0 +1,33 @@
+name: DivPrune
+paper:
+  title: "DivPrune: Diversity-based Visual Token Pruning for Large Multimodal Models"
+  venue: "CVPR 2025"
+  notes: "Official comparison target for DivPrune."
+official:
+  repo_url: "https://github.com/vbdi/divprune.git"
+  repo_web: "https://github.com/vbdi/divprune"
+  target_ref: "main"
+  target_commit: "799e2d950aa01ba7860907f5a6d86061f885dca6"
+  local_checkout: "algo_compare/divprune/third_party/divprune"
+entrypoints:
+  inference_script: "algo_compare/divprune/scripts/divprune_vqa_runner.py"
+variants:
+  - name: "divprune_r0p098"
+    notes: "Official default retained ratio SUBSET_RATIO=0.098 at LAYER_INDEX=0 for LLaVA-1.5."
+defaults:
+  model_name: "llava-v1.5-7b"
+  variant: "divprune_r0p098"
+  conv_mode: "vicuna_v1"
+  temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
+  divprune:
+    baseline: "OURS"
+    layer_index: 0
+    subset_ratio: 0.098
+    visual_token_count: 576
+local_comparison_notes:
+  - "DivPrune official code is fetched into third_party and is not vendored."
+  - "The wrapper imports the official LLaVA checkout and enables DivPrune through BASELINE/LAYER_INDEX/SUBSET_RATIO."
+  - "Local metrics are produced by entropy_exp/src/eval_datasets.py for comparison consistency."

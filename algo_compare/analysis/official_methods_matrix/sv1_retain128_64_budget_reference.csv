@@ -1,0 +1,7 @@
+target_retain,reference,schedule,token_layer_sum,avg_tokens_per_layer,compute_prune_rate,note
+128,SparseVLM-v1 intended topk,2x576 + 4x303 + 10x110 + 16x36,4040,126.250000,0.78081597,Primary alignment target; matches previous sv1compute convention.
+128,SparseVLM-v1 physical after merge estimate,2x576 + 4x312 + 10x117 + 16x39,4194,131.062500,0.77246094,Diagnostic only; v1 merge can add clustered tokens after top-k.
+128,SparseVLM-v2 official retain-token reference,2x576 + 4x238 + 10x108 + 16x60,4144,129.500000,0.77517361,Reference baseline at same RETAIN_TOKN; not forced to SV1 budget.
+64,SparseVLM-v1 intended topk,2x576 + 4x66 + 10x30 + 16x17,1988,62.125000,0.89214410,Primary alignment target; matches previous sv1compute convention.
+64,SparseVLM-v1 physical after merge estimate,2x576 + 4x82 + 10x32 + 16x18,2088,65.250000,0.88671875,Diagnostic only; v1 merge can add clustered tokens after top-k.
+64,SparseVLM-v2 official retain-token reference,2x576 + 4x66 + 10x34 + 16x20,2076,64.875000,0.88736979,Reference baseline at same RETAIN_TOKN; not forced to SV1 budget.

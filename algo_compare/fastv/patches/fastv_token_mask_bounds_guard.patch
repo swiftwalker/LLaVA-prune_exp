@@ -1,0 +1,85 @@
+diff --git a/src/transformers/src/transformers/models/llama/modeling_llama.py b/src/transformers/src/transformers/models/llama/modeling_llama.py
+index 1a4b0be..ab5d25d 100644
+--- a/src/transformers/src/transformers/models/llama/modeling_llama.py
++++ b/src/transformers/src/transformers/models/llama/modeling_llama.py
+@@ -316,7 +316,11 @@ class LlamaAttention(nn.Module):
+         if past_key_value is not None:
+             kv_seq_len += past_key_value[0].shape[-2]
+
+-        cos, sin = self.rotary_emb(value_states, seq_len=1000)
++        # The official FastV checkout hard-codes this to 1000, which is enough
++        # for its demo/eval prompts but crashes on local TextVQA/ScienceQA OCR
++        # prompts. Keep the algorithm unchanged and size RoPE to the real cache.
++        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+
+         if past_key_value is not None:
+@@ -740,12 +740,29 @@ class LlamaModel(LlamaPreTrainedModel):
+                         last_layer_attention_avg = torch.mean(last_layer_attention, dim=1)[0]
+                         # generate new attention mask based on the average attention, sample the top ATTENTION_RANK tokens with highest attention
+                         last_layer_attention_avg_last_tok = last_layer_attention_avg[-1]
+-                        # get the attention in image token
+-                        last_layer_attention_avg_last_tok_image = last_layer_attention_avg_last_tok[SYS_LENGTH:SYS_LENGTH+IMAGE_TOKEN_LENGTH]
+-                        # get the indexs of the top ATTENTION_RANK tokens
+-                        top_attention_rank_index = last_layer_attention_avg_last_tok_image.topk(ATTENTION_RANK).indices + SYS_LENGTH
+-                        # keep index
+-                        keep_indexs = torch.cat( (torch.arange(SYS_LENGTH,device=device), top_attention_rank_index, torch.arange(SYS_LENGTH+IMAGE_TOKEN_LENGTH,seq_length_with_past,device=device)))
++                        # get the attention in image token. The local wrapper may feed
++                        # longer prompts than the official demos, so clamp the fixed
++                        # FastV image window to the real sequence bounds.
++                        attention_seq_length = last_layer_attention_avg_last_tok.shape[-1]
++                        hidden_seq_length = hidden_states.shape[1]
++                        image_start = min(max(SYS_LENGTH, 0), attention_seq_length, hidden_seq_length)
++                        image_end = min(image_start + IMAGE_TOKEN_LENGTH, attention_seq_length, hidden_seq_length)
++                        image_window_length = max(image_end - image_start, 0)
++                        if image_window_length > 0:
++                            last_layer_attention_avg_last_tok_image = last_layer_attention_avg_last_tok[image_start:image_end]
++                            attention_rank = min(ATTENTION_RANK, image_window_length)
++                            # get the indexs of the top attention_rank tokens
++                            top_attention_rank_index = last_layer_attention_avg_last_tok_image.topk(attention_rank).indices + image_start
++                            top_attention_rank_index = top_attention_rank_index[
++                                (top_attention_rank_index >= 0) & (top_attention_rank_index < hidden_seq_length)
++                            ]
++                            keep_indexs = torch.cat((
++                                torch.arange(image_start, device=device),
++                                top_attention_rank_index,
++                                torch.arange(image_end, hidden_seq_length, device=device),
++                            ))
++                        else:
++                            keep_indexs = torch.arange(hidden_seq_length, device=device)
+                         # sort index
+                         keep_indexs = keep_indexs.sort().values
+                         # update seq length
+@@ -777,14 +794,26 @@ class LlamaModel(LlamaPreTrainedModel):
+                             last_layer_attention_avg = torch.mean(last_layer_attention, dim=1)[0]
+                             # generate new attention mask based on the average attention, sample the top ATTENTION_RANK tokens with highest attention
+                             last_layer_attention_avg_last_tok = last_layer_attention_avg[-1]
+-                            # get the attention in image token
+-                            last_layer_attention_avg_last_tok_image = last_layer_attention_avg_last_tok[SYS_LENGTH:SYS_LENGTH+IMAGE_TOKEN_LENGTH]
+-                            # get the indexs of the top ATTENTION_RANK tokens
+-                            top_attention_rank_index = last_layer_attention_avg_last_tok_image.topk(ATTENTION_RANK).indices + SYS_LENGTH
+                             # generate new attention mask
+                             gen_attention_mask = torch.ones((batch_size, seq_length_with_past), dtype=torch.bool, device=inputs_embeds.device)
+-                            gen_attention_mask[:,SYS_LENGTH:SYS_LENGTH+IMAGE_TOKEN_LENGTH] = False
+-                            gen_attention_mask[:,top_attention_rank_index] = True
++                            # get the attention in image token. Clamp the fixed FastV
++                            # image window to current attention/mask bounds for long
++                            # prompts such as TextVQA OCR strings and ScienceQA context.
++                            attention_seq_length = last_layer_attention_avg_last_tok.shape[-1]
++                            image_start = min(max(SYS_LENGTH, 0), attention_seq_length, seq_length_with_past)
++                            image_end = min(image_start + IMAGE_TOKEN_LENGTH, attention_seq_length, seq_length_with_past)
++                            image_window_length = max(image_end - image_start, 0)
++                            if image_window_length > 0:
++                                last_layer_attention_avg_last_tok_image = last_layer_attention_avg_last_tok[image_start:image_end]
++                                attention_rank = min(ATTENTION_RANK, image_window_length)
++                                # get the indexs of the top attention_rank tokens
++                                top_attention_rank_index = last_layer_attention_avg_last_tok_image.topk(attention_rank).indices + image_start
++                                top_attention_rank_index = top_attention_rank_index[
++                                    (top_attention_rank_index >= 0) & (top_attention_rank_index < seq_length_with_past)
++                                ]
++                                gen_attention_mask[:,image_start:image_end] = False
++                                if top_attention_rank_index.numel() > 0:
++                                    gen_attention_mask[:,top_attention_rank_index] = True
+
+                             gen_attention_mask = self._prepare_decoder_attention_mask(
+                                 gen_attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length

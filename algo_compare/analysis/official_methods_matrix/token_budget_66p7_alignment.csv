@@ -1,0 +1,5 @@
+method,variant,target_retained,keep_rate,prune_rate,params,notes
+FastV,fastv_token_mask_192,192,0.3333333333333333,0.6666666666666666,--fastv-k 2 --fastv-r 0.6666667 --fastv-attention-rank 192,Use explicit attention_rank=192; r=1-192/576. Later layers keep 192 visual tokens; first K=2 layers remain unpruned.
+PDROP,pdrop_v1_5_final192_geometric,192,0.3333333333333333,0.6666666666666666,"--pdrop-layer-list '[8,16,24]' --pdrop-image-token-ratio-list '[0.693361,0.480750,0.333334]'","Final ratio is 0.333334 to force int(576*r)=192; earlier ratios are geometric steps from 1.0 to 1/3, preserving pyramid style better than a hard late drop."
+VisionZip,visionzip_192,192,0.3333333333333333,0.6666666666666666,--visionzip-dominant 162 --visionzip-contextual 30,"Scale official 54+10 quick-start by 3x, preserving dominant/contextual split while retaining 192 total."
+DivPrune,divprune_r0p333334,192,0.3333333333333333,0.6666666666666666,--divprune-subset-ratio 0.333334,Use 0.333334 instead of rounded 0.333333 so official int(img_feature_len*ratio) keeps 192 rather than risking 191.

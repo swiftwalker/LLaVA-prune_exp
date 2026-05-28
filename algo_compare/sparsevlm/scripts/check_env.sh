@@ -8,6 +8,9 @@ OFFICIAL_REPO="${OFFICIAL_REPO:-$METHOD_DIR/third_party/SparseVLMs}"
 MODEL_PATH="${MODEL_PATH:-$REPO_ROOT/entropy_exp/models/llava-v1.5-7b}"
 MME_DATA_PATH="${MME_DATA_PATH:-$REPO_ROOT/entropy_exp/datasets/MME_Benchmark_release_version}"
 GQA_DATA_PATH="${GQA_DATA_PATH:-$REPO_ROOT/entropy_exp/datasets/gqa/images}"
+POPE_DATA_PATH="${POPE_DATA_PATH:-$REPO_ROOT/entropy_exp/datasets/pope/val2014}"
+TEXTVQA_DATA_PATH="${TEXTVQA_DATA_PATH:-$REPO_ROOT/entropy_exp/datasets/textvqa/train_images}"
+SCIENCEQA_DATA_PATH="${SCIENCEQA_DATA_PATH:-$REPO_ROOT/entropy_exp/eval_questions/scienceqa/test}"
 PYTHON_BIN="${PYTHON_BIN:-/home/liuyu/miniconda3/envs/llava/bin/python}"
 
 status=0
@@ -25,8 +28,16 @@ check_path() {
 
 check_path "official repo" "$OFFICIAL_REPO/.git"
 check_path "model path" "$MODEL_PATH"
+check_path "GQA questions" "$REPO_ROOT/entropy_exp/eval_questions/gqa/llava_gqa_testdev_balanced.jsonl"
 check_path "MME data" "$MME_DATA_PATH"
+check_path "MME questions" "$REPO_ROOT/entropy_exp/eval_questions/MME/llava_mme.jsonl"
 check_path "GQA images" "$GQA_DATA_PATH"
+check_path "POPE questions" "$REPO_ROOT/entropy_exp/eval_questions/pope/llava_pope_test.jsonl"
+check_path "POPE images" "$POPE_DATA_PATH"
+check_path "TextVQA questions" "$REPO_ROOT/entropy_exp/eval_questions/textvqa/llava_textvqa_val_v051_ocr.jsonl"
+check_path "TextVQA images" "$TEXTVQA_DATA_PATH"
+check_path "ScienceQA questions" "$REPO_ROOT/entropy_exp/eval_questions/scienceqa/llava_test_CQM-A.json"
+check_path "ScienceQA images" "$SCIENCEQA_DATA_PATH"
 
 if [[ -x "$PYTHON_BIN" ]]; then
   echo "OK      python: $PYTHON_BIN"

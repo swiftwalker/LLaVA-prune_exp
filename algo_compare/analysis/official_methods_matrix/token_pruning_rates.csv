@@ -1,0 +1,7 @@
+method,base_visual_tokens,retained_visual_tokens,keep_rate,prune_rate,schedule,layer_average_keep_rate_32layer_rough,layer_average_prune_rate_32layer_rough,notes
+SparseVLM-v1-192,576,192,0.3333333333333333,0.6666666666666667,retain_token=192,,,Official RETAIN_TOKN=192; same token budget for v1 reference.
+SparseVLM-v2-192,576,192,0.3333333333333333,0.6666666666666667,retain_token=192,,,Official RETAIN_TOKN=192; same final visual token budget as v1.
+FastV-k2-r0.5,576,288,0.5,0.5,"K=2, R=0.5, attention_rank=288",0.53125,0.46875,Final/active visual token count is 288; rough layer-average assumes first 2 of 32 layers see 576 and later layers see 288.
+PDROP-v1.5,576,72,0.125,0.875,"layers=[8,16,24], keep ratios=[0.5,0.25,0.125] => 576->288->144->72",0.46875,0.53125,image_token_ratio_list is a keep-ratio schedule relative to the original visual token count.
+VisionZip-64,576,64,0.1111111111111111,0.8888888888888888,dominant=54 + contextual=10,0.1111111111111111,0.8888888888888888,Prunes before LLM; all layers see the compressed visual token set.
+DivPrune-r0.098,576,56,0.09722222222222222,0.9027777777777778,SUBSET_RATIO=0.098 => round(0.098*576)=56,0.09722222222222222,0.9027777777777778,Configured keep ratio is 9.8%; rounded actual retained-token count gives 9.72% keep.

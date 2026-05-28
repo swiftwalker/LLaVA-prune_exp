@@ -130,6 +130,20 @@ class VQADataset(Dataset):
         return len(self.questions)
 
 
+def strip_prompt_prefix_if_present(output_ids: torch.Tensor, input_ids: torch.Tensor) -> tuple[torch.Tensor, bool]:
+    """Remove the prompt prefix only when generate() returned prompt+continuation."""
+    prompt_length = int(input_ids.shape[1])
+    output_length = int(output_ids.shape[1])
+    if output_length < prompt_length:
+        return output_ids, False
+
+    input_ids_for_compare = input_ids.to(device=output_ids.device)
+    if torch.equal(output_ids[:, :prompt_length], input_ids_for_compare):
+        return output_ids[:, prompt_length:], True
+
+    return output_ids, False
+
+
 def collate_fn(batch):
     input_ids, image_tensors, image_sizes = zip(*batch)
     input_ids = torch.stack(input_ids, dim=0)
@@ -842,12 +856,14 @@ def run_prune_inference(
                     total_time += (t1 - t0)
 
                     prompt_length = int(input_ids_cuda.shape[1])
-                    generated_ids = output_ids[:, prompt_length:]
+                    generated_ids, stripped_prompt_prefix = strip_prompt_prefix_if_present(output_ids, input_ids_cuda)
                     answer_text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
                     prune_info = {
                         "original_seq_len": prompt_length,
                         "final_seq_len": prompt_length,
+                        "output_seq_len": int(output_ids.shape[1]),
                         "num_generated_tokens": int(generated_ids.shape[1]),
+                        "stripped_prompt_prefix": bool(stripped_prompt_prefix),
                         "prefill_time": None,
                         "decode_time": None,
                         "total_time": t1 - t0,

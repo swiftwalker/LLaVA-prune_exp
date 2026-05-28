@@ -9,10 +9,14 @@ official:
   local_checkout: "algo_compare/sparsevlm/third_party/SparseVLMs"
 entrypoints:
   inference_module: "llava.eval.model_vqa_loader"
+  dataset_inference_scripts:
+    scienceqa: "algo_compare/sparsevlm/scripts/model_vqa_science_compat.py"
   official_eval_scripts:
     mme: "scripts/v1_5/eval/mme.sh"
     gqa: "scripts/v1_5/eval/gqa.sh"
     pope: "scripts/v1_5/eval/pope.sh"
+    textvqa: "scripts/v1_5/eval/textvqa.sh"
+    scienceqa: "scripts/v1_5/eval/sqa.sh"
 variants:
   - name: "sparsevlm_v1"
     use_version: "1_0"
@@ -22,10 +26,14 @@ variants:
     notes: "Official v2 style; expected to use SparseVLM+ head/token scheduling behavior."
 defaults:
   model_name: "llava-v1.5-7b"
+  variant: "sparsevlm_v2"
   retain_token: 192
   use_version: "2_0"
   conv_mode: "vicuna_v1"
   temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
 local_comparison_notes:
   - "entropy_exp local S-S-S is a local SV2-style reference, not an official SparseVLM-v2 reproduction."
   - "Local S-S-S uses the local pruning engine and may differ in head aggregation, token schedule, and position-id behavior."

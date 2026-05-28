@@ -1,0 +1,4 @@
+method,params,token_schedule,token_layer_sum,avg_visual_tokens,compute_prune_rate,note
+SparseVLM-v1 reference,"RETAIN_TOKN=192, USE_VERSION=1_0",2x576 + 4x300 + 10x200 + 16x110,6112,191.0,0.6684027777777778,Official intended 32-layer visual token schedule from score.py comment.
+FastV aligned,--fastv-k 2 --fastv-r 0.713542 --fastv-attention-rank 165,2x576 + 30x165,6102,190.6875,0.6689453125,Closest integer rank to exact 165.333; rank=166 is slightly over budget.
+PDROP aligned,"--pdrop-layer-list '[8,16,24]' --pdrop-image-token-ratio-list '[0.248264,0.062500,0.015625]'",8x576 + 8x143 + 8x36 + 8x9,6112,191.0,0.6684027777777778,Exact SV1 token-layer sum with pyramid-like stage ratios; final stage keeps only 9 visual tokens.
