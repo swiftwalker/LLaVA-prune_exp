@@ -14,10 +14,14 @@ sys.path.insert(0, SRC_DIR)
 from eval_datasets import (
     add_pope_macro_f1,
     compute_binary_metrics,
+    eval_ai2d,
+    eval_mmbench,
+    eval_mmvet,
     format_pope_macro_f1,
     load_scienceqa_metrics,
     normalize_open_answer,
     normalize_pope_answer,
+    parse_choice_answer,
     parse_pope_metrics,
     parse_textvqa_metrics,
     unsupported_local_metric_message,
@@ -140,11 +144,74 @@ class NewDatasetEvalTests(unittest.TestCase):
             self.assertEqual(metrics["correct"], 1570)
             self.assertEqual(metrics["count"], 2000)
 
-    def test_unsupported_local_metric_message_for_mmbench_is_clear(self):
-        message = unsupported_local_metric_message("mmbench")
-        self.assertIn("mmbench", message)
+    def test_unsupported_local_metric_message_for_mmvet_is_clear(self):
+        message = unsupported_local_metric_message("mmvet")
+        self.assertIn("mmvet", message)
         self.assertIn("inference input compatibility", message)
         self.assertIn("local final-metric evaluation", message)
+
+    def test_choice_answer_parser_handles_common_formats_and_option_text(self):
+        options = {"A": "red apple", "B": "blue car"}
+        self.assertEqual(parse_choice_answer("A."), "A")
+        self.assertEqual(parse_choice_answer("The answer is B."), "B")
+        self.assertEqual(parse_choice_answer("I choose A."), "A")
+        self.assertEqual(parse_choice_answer("blue car", options), "B")
+
+    def test_eval_mmbench_computes_local_accuracy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            question_file = os.path.join(temp_dir, "mmbench.tsv")
+            answers_file = os.path.join(temp_dir, "answers.jsonl")
+            output_dir = os.path.join(temp_dir, "eval")
+            with open(question_file, "w", encoding="utf-8") as handle:
+                handle.write("index\tquestion\thint\tA\tB\tC\tD\tanswer\tcategory\timage\tsource\tl2-category\tcomment\tsplit\n")
+                handle.write("1\tPick one\t\tcat\tdog\t\t\tB\tcat\tZmFrZQ==\tsrc\tl2\t\tdev\n")
+                handle.write("2\tPick two\t\tred\tblue\t\t\tA\tcat\tZmFrZQ==\tsrc\tl2\t\tdev\n")
+            with open(answers_file, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"question_id": "1", "text": "The answer is B."}) + "\n")
+                handle.write(json.dumps({"question_id": "2", "text": "blue"}) + "\n")
+
+            summary = eval_mmbench(answers_file, output_dir, question_file=question_file)
+            self.assertEqual(summary["metrics"]["count"], 2)
+            self.assertEqual(summary["metrics"]["correct"], 1)
+            self.assertAlmostEqual(summary["metrics"]["accuracy"], 50.0)
+
+    def test_eval_ai2d_computes_local_accuracy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            question_file = os.path.join(temp_dir, "ai2d.jsonl")
+            answers_file = os.path.join(temp_dir, "answers.jsonl")
+            output_dir = os.path.join(temp_dir, "eval")
+            rows = [
+                {"question_id": "ai2d_000000", "answer": "A", "metadata": {"options": ["cat", "dog"]}},
+                {"question_id": "ai2d_000001", "answer": "B", "metadata": {"options": ["red", "blue"]}},
+            ]
+            with open(question_file, "w", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+            with open(answers_file, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"question_id": "ai2d_000000", "text": "cat"}) + "\n")
+                handle.write(json.dumps({"question_id": "ai2d_000001", "text": "A"}) + "\n")
+
+            summary = eval_ai2d(answers_file, output_dir, question_file=question_file)
+            self.assertEqual(summary["metrics"]["count"], 2)
+            self.assertEqual(summary["metrics"]["correct"], 1)
+            self.assertAlmostEqual(summary["metrics"]["accuracy"], 50.0)
+
+    def test_eval_mmvet_exports_official_predictions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            question_file = os.path.join(temp_dir, "mmvet.jsonl")
+            answers_file = os.path.join(temp_dir, "answers.jsonl")
+            output_dir = os.path.join(temp_dir, "eval")
+            with open(question_file, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"question_id": "v1_0", "text": "What?", "answer": "42"}) + "\n")
+            with open(answers_file, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"question_id": "v1_0", "text": "42"}) + "\n")
+
+            summary = eval_mmvet(answers_file, output_dir, question_file=question_file)
+            self.assertTrue(summary["inference_only"])
+            self.assertEqual(summary["metrics"]["count"], 1)
+            with open(summary["official_predictions_file"], "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            self.assertEqual(payload, {"v1_0": "42"})
 
 
 if __name__ == "__main__":

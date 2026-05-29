@@ -118,7 +118,7 @@ bash entropy_exp/scripts/run_prune.sh <strategy|baseline> <dataset|all> [max_sam
 | 参数 | 可选值 | 说明 |
 | --- | --- | --- |
 | `strategy` | `baseline` 或 9 个剪枝策略 | 当前策略列表见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md) |
-| `dataset` | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` / `all` | `mmbench` 当前只保证 inference 输入兼容 |
+| `dataset` | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` / `mmvet` / `ai2d` / `all` | `mmvet` 当前为 inference-only 导出口径 |
 | `max_samples` | 整数，可选 | 省略则使用配置中的 `pruning.max_samples`；仍为空则跑全量 |
 | `--auto-gpu` | flag | 运行前自动选择可用显存最多的 GPU |
 | `--no-auto-gpu` | flag | 不自动选择 GPU，使用当前 `CUDA_VISIBLE_DEVICES` |
@@ -239,4 +239,6 @@ entropy_exp/outputs/runs/{strategy}/{dataset}/{run_name}/
 | `pope` | 支持 | 支持，主指标 `macro_f1` |
 | `textvqa` | 支持 | 支持，主指标 `accuracy` |
 | `scienceqa` | 支持 | 支持，主指标 `accuracy` |
-| `mmbench` | 支持 | 不支持本地 official score |
+| `mmbench` | 支持 | 支持，主指标 `accuracy` |
+| `ai2d` | 支持 | 支持，主指标 `accuracy` |
+| `mmvet` | 支持 | inference-only，导出 official/GPT judge JSON |

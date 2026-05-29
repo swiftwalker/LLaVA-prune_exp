@@ -28,7 +28,7 @@ from algo_compare.official_runner import (  # noqa: E402
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--method", default="sparsevlm", help="Method directory under algo_compare")
-    parser.add_argument("--dataset", required=True, choices=["gqa", "mme", "pope", "textvqa", "scienceqa"])
+    parser.add_argument("--dataset", required=True, choices=["gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench", "mmvet", "ai2d"])
     parser.add_argument("--variant", default=None, help="Official variant name from method.yaml")
     parser.add_argument("--retain-token", type=int, default=None, help="Official RETAIN_TOKN value")
     parser.add_argument("--use-version", default=None, help="Override official USE_VERSION")

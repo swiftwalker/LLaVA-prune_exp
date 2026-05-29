@@ -20,13 +20,20 @@ from tqdm import tqdm
 def _add_divprune_paths() -> None:
     official_repo = Path(os.environ.get("DIVPRUNE_OFFICIAL_REPO") or os.getcwd()).resolve()
     llava_root = Path(os.environ.get("DIVPRUNE_LLAVA_ROOT") or official_repo / "LLaVA").resolve()
-    for path in (llava_root, official_repo):
+    algo_src = Path(__file__).resolve().parents[2] / "src"
+    for path in (algo_src, llava_root, official_repo):
         if path.exists():
             sys.path.insert(0, str(path))
 
 
 _add_divprune_paths()
 
+from algo_compare.vqa_compat import (  # noqa: E402
+    SUPPORTED_DATASETS as VQA_DATASETS,
+    load_questions as load_compat_questions,
+    normalize_item as normalize_compat_item,
+    open_image as open_compat_image,
+)
 from llava.constants import (  # noqa: E402
     DEFAULT_IMAGE_TOKEN,
     DEFAULT_IM_END_TOKEN,
@@ -54,27 +61,11 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def load_questions(dataset: str, path: Path) -> list[dict[str, Any]]:
-    if dataset == "scienceqa":
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    return load_jsonl(path)
+    return load_compat_questions(dataset, path)
 
 
 def normalize_item(dataset: str, item: dict[str, Any]) -> dict[str, Any]:
-    if dataset == "scienceqa":
-        question = item["conversations"][0]
-        return {
-            "question_id": item["id"],
-            "image": item.get("image"),
-            "text": str(question["value"]).replace("<image>", "").strip(),
-            "single_pred_prompt": True,
-        }
-    return {
-        "question_id": item["question_id"],
-        "image": item["image"],
-        "text": item["text"],
-        "single_pred_prompt": False,
-    }
+    return normalize_compat_item(dataset, item)
 
 
 def configure_divprune_env(args: argparse.Namespace) -> None:
@@ -90,14 +81,13 @@ def build_prompt_and_image(
     model_config: Any,
     image_processor: Any,
 ) -> tuple[str, str, torch.Tensor | None, list[tuple[int, int]] | None]:
-    image_file = item.get("image")
     qs = item["text"]
     cur_prompt = qs
     image_tensor = None
     image_sizes = None
 
-    if image_file:
-        image = Image.open(image_folder / image_file).convert("RGB")
+    image = open_compat_image(item, image_folder)
+    if image is not None:
         image_tensor = process_images([image], image_processor, model_config)[0].unsqueeze(0).half().cuda()
         image_sizes = [image.size]
         if getattr(model_config, "mm_use_im_start_end", False):
@@ -180,7 +170,7 @@ def eval_model(args: argparse.Namespace) -> None:
                             "divprune_subset_ratio": args.divprune_subset_ratio,
                             "divprune_visual_token_count": args.divprune_visual_token_count,
                             "divprune_retained_visual_tokens": retained_visual_tokens,
-                            "divprune_enabled": bool(item.get("image")),
+                            "divprune_enabled": image_tensor is not None,
                         },
                     }
                 )
@@ -191,7 +181,7 @@ def eval_model(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", choices=["gqa", "mme", "pope", "textvqa", "scienceqa"], required=True)
+    parser.add_argument("--dataset", choices=list(VQA_DATASETS), required=True)
     parser.add_argument("--model-path", type=str, default="facebook/opt-350m")
     parser.add_argument("--model-base", type=str, default=None)
     parser.add_argument("--image-folder", type=str, default="")

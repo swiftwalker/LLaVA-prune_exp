@@ -23,7 +23,9 @@
 | `pope` | 支持 | `macro_f1` |
 | `textvqa` | 支持 | `accuracy` |
 | `scienceqa` | 支持 | `accuracy` |
-| `mmbench` | 不支持本地 official score | 不进入 repo-native summary 主指标 |
+| `mmbench` | 支持 | `accuracy` |
+| `ai2d` | 支持 | `accuracy` |
+| `mmvet` | inference-only | 导出 official/GPT judge JSON，不进入指标均值 |
 
 `summarize_results.py` 会把各数据集主指标统一写入：
 
@@ -203,7 +205,7 @@ PY
 - 使用相同 `max_samples`
 - 使用相同 seed
 - 使用相同 `prune_layers` / `prune_ratio` 搜索空间
-- 不把 inference-only 的 `mmbench` 混入本地指标均值
+- 不把 inference-only 的 `mmvet` 混入本地指标均值
 
 ## 9. 常见误区
 
@@ -214,4 +216,3 @@ PY
 - 只看 run_name 前缀，不看 scheduler attempt 记录。
 
 历史 keep-position-ids worked example 已移到 [HISTORICAL_WORKFLOWS.md](./HISTORICAL_WORKFLOWS.md)。
-

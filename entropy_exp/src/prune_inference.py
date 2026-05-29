@@ -620,6 +620,7 @@ def run_prune_inference(
     model_config_metadata = load_model_config_metadata(model_path)
     question_file = resolve(ds_cfg["question_file"])
     image_folder = resolve(ds_cfg["image_folder"])
+    max_new_tokens = int(ds_cfg.get("max_new_tokens", infer_cfg["max_new_tokens"]))
     strategy_name = prune_cfg["strategy"]
     v_token_num = int(prune_cfg.get("v_token_num", 576))
     configured_prune_layers = _normalize_configured_prune_layers(prune_cfg["prune_layers"])
@@ -832,7 +833,7 @@ def run_prune_inference(
                         text_token_start=text_token_start,
                         text_token_ids=text_token_ids,
                         text_special_token_mask=text_special_token_mask,
-                        max_new_tokens=infer_cfg["max_new_tokens"],
+                        max_new_tokens=max_new_tokens,
                         eos_token_id=eos_token_id,
                         save_tv_attn=save_attention,
                         capture_layers=capture_layers_set,
@@ -849,7 +850,7 @@ def run_prune_inference(
                         temperature=infer_cfg["temperature"],
                         top_p=infer_cfg["top_p"],
                         num_beams=infer_cfg["num_beams"],
-                        max_new_tokens=infer_cfg["max_new_tokens"],
+                        max_new_tokens=max_new_tokens,
                         use_cache=True,
                     )
                     t1 = time.time()

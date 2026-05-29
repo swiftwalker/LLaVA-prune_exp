@@ -85,11 +85,11 @@ case "$STRATEGY" in
 esac
 
 case "$DATASET" in
-    gqa|mme|pope|textvqa|scienceqa|mmbench|all)
+    gqa|mme|pope|textvqa|scienceqa|mmbench|mmvet|ai2d|all)
         ;;
     *)
         echo "Unknown dataset: $DATASET" >&2
-        echo "Supported datasets: gqa, mme, pope, textvqa, scienceqa, mmbench, all" >&2
+        echo "Supported datasets: gqa, mme, pope, textvqa, scienceqa, mmbench, mmvet, ai2d, all" >&2
         exit 1
         ;;
 esac
@@ -356,7 +356,7 @@ run_dataset() {
     local ds="$2"
 
     if [ "$ds" = "all" ]; then
-        for d in gqa mme pope textvqa scienceqa mmbench; do
+        for d in gqa mme pope textvqa scienceqa mmbench mmvet ai2d; do
             run_single "$strategy" "$d"
         done
     else

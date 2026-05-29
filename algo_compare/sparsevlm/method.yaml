@@ -9,6 +9,8 @@ official:
   local_checkout: "algo_compare/sparsevlm/third_party/SparseVLMs"
 entrypoints:
   inference_module: "llava.eval.model_vqa_loader"
+  dataset_inference_modules:
+    mmbench: "llava.eval.model_vqa_mmbench"
   dataset_inference_scripts:
     scienceqa: "algo_compare/sparsevlm/scripts/model_vqa_science_compat.py"
   official_eval_scripts:

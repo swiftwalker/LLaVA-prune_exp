@@ -33,6 +33,14 @@ class SummarizeResultsPopeTests(unittest.TestCase):
         self.assertEqual(scienceqa_name, "accuracy")
         self.assertAlmostEqual(scienceqa_value, 77.2)
 
+    def test_primary_metric_uses_accuracy_for_mmbench_and_ai2d(self):
+        mmbench_name, mmbench_value = primary_metric("mmbench", {"accuracy": 64.2})
+        ai2d_name, ai2d_value = primary_metric("ai2d", {"accuracy": 70.5})
+        self.assertEqual(mmbench_name, "accuracy")
+        self.assertAlmostEqual(mmbench_value, 64.2)
+        self.assertEqual(ai2d_name, "accuracy")
+        self.assertAlmostEqual(ai2d_value, 70.5)
+
     def test_extract_record_and_csv_rows_use_pope_macro_f1(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir) / "pope_masking_attn_score_l1_r0p6__demo"

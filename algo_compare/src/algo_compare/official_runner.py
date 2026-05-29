@@ -17,7 +17,7 @@ from .manifest import load_yaml
 from .paths import ALGO_COMPARE_ROOT, REPO_ROOT, resolve_repo_path
 
 
-SUPPORTED_DATASETS = ("gqa", "mme", "pope", "textvqa", "scienceqa")
+SUPPORTED_DATASETS = ("gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench", "mmvet", "ai2d")
 
 
 @dataclass
@@ -115,6 +115,7 @@ def _dataset_defaults(dataset: str, method_env: dict[str, Any], prune_cfg: dict[
         "question_file": _prefer(method_ds.get("question_file"), prune_ds.get("question_file")),
         "image_folder": _prefer(method_ds.get("image_folder"), prune_ds.get("image_folder")),
         "supports_local_eval": bool(method_ds.get("supports_local_eval", True)),
+        "max_new_tokens": _prefer(method_ds.get("max_new_tokens"), prune_ds.get("max_new_tokens")),
         "notes": method_ds.get("notes"),
     }
 
@@ -147,7 +148,7 @@ def fastv_params(method_cfg: dict[str, Any], args: Any) -> dict[str, Any]:
     if attention_rank is None:
         attention_rank = int(round((1.0 - ratio) * image_token_length))
     return {
-        "k": int(args.fastv_k or defaults.get("k") or 2),
+        "k": int(args.fastv_k if args.fastv_k is not None else defaults.get("k") or 2),
         "r": ratio,
         "attention_rank": int(attention_rank),
         "image_token_length": image_token_length,
@@ -291,7 +292,13 @@ def build_official_run(args: Any) -> OfficialRun:
     top_p = _prefer(args.top_p, defaults.get("top_p"), inference_defaults.get("top_p"))
     num_beams = int(_prefer(args.num_beams, defaults.get("num_beams"), inference_defaults.get("num_beams"), 1))
     max_new_tokens = int(
-        _prefer(args.max_new_tokens, defaults.get("max_new_tokens"), inference_defaults.get("max_new_tokens"), 128)
+        _prefer(
+            args.max_new_tokens,
+            ds_defaults.get("max_new_tokens"),
+            defaults.get("max_new_tokens"),
+            inference_defaults.get("max_new_tokens"),
+            128,
+        )
     )
     num_chunks = int(_prefer(args.num_chunks, 1))
     chunk_idx = int(_prefer(args.chunk_idx, 0))
@@ -380,6 +387,8 @@ def build_official_run(args: Any) -> OfficialRun:
         )
         if dataset == "scienceqa":
             command.extend(["--single-pred-prompt"])
+        elif dataset == "mmbench":
+            command.extend(["--single-pred-prompt", "--lang", "en", "--pdrop_infer"])
         else:
             command.extend(["--num_beams", str(num_beams), "--max_new_tokens", str(max_new_tokens), "--pdrop_infer"])
     elif method == "visionzip":
@@ -418,6 +427,8 @@ def build_official_run(args: Any) -> OfficialRun:
         )
     elif dataset == "scienceqa":
         command.extend(["--single-pred-prompt", "--retained_tokens", str(retain_token), "--max-new-tokens", str(max_new_tokens)])
+    elif dataset == "mmbench":
+        command.extend(["--single-pred-prompt", "--lang", "en", "--retained_tokens", str(retain_token)])
     else:
         command.extend(["--num_beams", str(num_beams), "--max_new_tokens", str(max_new_tokens)])
     if args.model_base:
@@ -506,6 +517,8 @@ def build_official_run(args: Any) -> OfficialRun:
             str(answers_file),
             "--output-dir",
             str(output_dir / "eval"),
+            "--question-file",
+            str(question_file),
         ]
         if dataset == "mme" and image_folder is not None:
             eval_command.extend(["--mme-data-path", str(image_folder)])
@@ -528,6 +541,7 @@ def build_official_run(args: Any) -> OfficialRun:
             "question_file": str(question_file),
             "image_folder": str(image_folder) if image_folder else None,
             "supports_local_eval": bool(ds_defaults.get("supports_local_eval", True)),
+            "max_new_tokens": ds_defaults.get("max_new_tokens"),
             "notes": ds_defaults.get("notes"),
         },
         "official_env": env,

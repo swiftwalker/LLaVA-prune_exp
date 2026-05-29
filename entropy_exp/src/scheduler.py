@@ -33,7 +33,7 @@ DEFAULT_RUNS_DIR = LLAVA_ROOT / "entropy_exp" / "outputs" / "runs"
 DEFAULT_CONDA_SH = Path.home() / "miniconda3" / "etc" / "profile.d" / "conda.sh"
 DEFAULT_CONDA_ENV = "llava"
 
-SUPPORTED_DATASETS = {"gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench"}
+SUPPORTED_DATASETS = {"gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench", "mmvet", "ai2d"}
 SUPPORTED_STRATEGIES = {
     "baseline",
     "attn_score",

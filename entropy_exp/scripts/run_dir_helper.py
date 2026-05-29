@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset",
-        choices=["gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench"],
+        choices=["gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench", "mmvet", "ai2d"],
         help="Filter runs by dataset metadata",
     )
     parser.add_argument(

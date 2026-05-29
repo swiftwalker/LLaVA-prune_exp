@@ -78,6 +78,12 @@ def primary_metric(dataset: str, metrics: dict[str, Any]) -> tuple[str, Any]:
         return "accuracy", metrics.get("accuracy")
     if dataset == "scienceqa":
         return "accuracy", metrics.get("accuracy")
+    if dataset == "mmbench":
+        return "accuracy", metrics.get("accuracy")
+    if dataset == "ai2d":
+        return "accuracy", metrics.get("accuracy")
+    if dataset == "mmvet":
+        return "inference_only", None
     return "unknown", None
 
 
@@ -148,6 +154,8 @@ def extract_record(run_dir: Path) -> tuple[dict[str, Any] | None, dict[str, str]
         "gqa_accuracy": metrics.get("accuracy") if dataset == "gqa" else None,
         "textvqa_accuracy": metrics.get("accuracy") if dataset == "textvqa" else None,
         "scienceqa_accuracy": metrics.get("accuracy") if dataset == "scienceqa" else None,
+        "mmbench_accuracy": metrics.get("accuracy") if dataset == "mmbench" else None,
+        "ai2d_accuracy": metrics.get("accuracy") if dataset == "ai2d" else None,
         "adaptive_grid_size": adaptive_grid_size,
         "adaptive_high_ratio": adaptive_high_ratio,
         "model_config_metadata": model_config_metadata,
@@ -208,6 +216,8 @@ def build_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "gqa_accuracy": csv_value(record["gqa_accuracy"]),
                 "textvqa_accuracy": csv_value(record["textvqa_accuracy"]),
                 "scienceqa_accuracy": csv_value(record["scienceqa_accuracy"]),
+                "mmbench_accuracy": csv_value(record["mmbench_accuracy"]),
+                "ai2d_accuracy": csv_value(record["ai2d_accuracy"]),
                 "adaptive_grid_size": csv_value(record["adaptive_grid_size"]),
                 "adaptive_high_ratio": csv_value(record["adaptive_high_ratio"]),
                 "pruning_config_json": json_string(record["pruning_config"]),
@@ -250,6 +260,8 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "gqa_accuracy",
         "textvqa_accuracy",
         "scienceqa_accuracy",
+        "mmbench_accuracy",
+        "ai2d_accuracy",
         "adaptive_grid_size",
         "adaptive_high_ratio",
         "pruning_config_json",

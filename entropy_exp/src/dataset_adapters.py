@@ -16,11 +16,14 @@ SUPPORTED_DATASETS = (
     "textvqa",
     "scienceqa",
     "mmbench",
+    "mmvet",
+    "ai2d",
 )
 
 DIRECT_OPTION_ANSWER_PROMPT = "Answer with the option's letter from the given choices directly."
 SCIENCEQA_DIRECT_ANSWER_PROMPT = DIRECT_OPTION_ANSWER_PROMPT
 MMBENCH_DIRECT_ANSWER_PROMPT = DIRECT_OPTION_ANSWER_PROMPT
+AI2D_DIRECT_ANSWER_PROMPT = DIRECT_OPTION_ANSWER_PROMPT
 MMBENCH_OPTION_KEYS = ("A", "B", "C", "D")
 
 
@@ -39,6 +42,8 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
                     "image_path": payload.get("image"),
                     "image_base64": None,
                     "has_image": bool(payload.get("image")),
+                    "answer": payload.get("answer"),
+                    "metadata": payload.get("metadata", {}),
                 }
             )
     return samples
@@ -139,6 +144,8 @@ def load_dataset_samples(dataset_name: str, question_file: str | Path) -> list[d
 
     if dataset_name in {"gqa", "mme", "pope", "textvqa"}:
         return _load_jsonl(path)
+    if dataset_name in {"mmvet", "ai2d"}:
+        return _load_jsonl(path)
     if dataset_name == "scienceqa":
         return _load_scienceqa(path)
     if dataset_name == "mmbench":
@@ -148,7 +155,7 @@ def load_dataset_samples(dataset_name: str, question_file: str | Path) -> list[d
 
 def count_dataset_samples(dataset_name: str, question_file: str | Path) -> int:
     path = Path(question_file)
-    if dataset_name in {"gqa", "mme", "pope", "textvqa"}:
+    if dataset_name in {"gqa", "mme", "pope", "textvqa", "mmvet", "ai2d"}:
         with path.open("r", encoding="utf-8") as handle:
             return sum(1 for line in handle if line.strip())
     if dataset_name == "scienceqa":

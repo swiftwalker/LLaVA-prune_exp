@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import importlib.util
 import json
 import os
@@ -11,8 +12,8 @@ import subprocess
 import sys
 
 LLAVA_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-LOCAL_EVAL_DATASETS = {"gqa", "mme", "pope", "textvqa", "scienceqa"}
-INFERENCE_ONLY_DATASETS = {"mmbench"}
+LOCAL_EVAL_DATASETS = {"gqa", "mme", "pope", "textvqa", "scienceqa", "mmbench", "ai2d"}
+INFERENCE_ONLY_DATASETS = {"mmvet"}
 
 
 def ensure_dir(path: str) -> str:
@@ -194,6 +195,38 @@ def normalize_open_answer(text: str) -> str:
     return str(text).strip().lower().rstrip(".")
 
 
+def normalize_choice_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text).strip().lower().strip(" .。,:;!?()[]{}\"'"))
+
+
+def parse_choice_answer(pred_text: str, options: dict[str, str] | None = None) -> str:
+    text = str(pred_text).strip()
+    if not text:
+        return "FAILED"
+
+    direct_match = re.match(r"^\s*([A-Fa-f])(?:[\.\):：、\s]|$)", text)
+    if direct_match:
+        return direct_match.group(1).upper()
+
+    answer_match = re.search(
+        r"(?:answer|option|choice|choose|pick|select|selected)\s*(?:is|:)?\s*([A-Fa-f])(?:[\.\):：、\s]|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if answer_match:
+        return answer_match.group(1).upper()
+
+    if options:
+        normalized = normalize_choice_text(text)
+        for letter, option_text in options.items():
+            option_normalized = normalize_choice_text(option_text)
+            if normalized == option_normalized:
+                return letter
+            if option_normalized and normalized.startswith(option_normalized):
+                return letter
+    return "FAILED"
+
+
 def is_subset_answers_file(answers_file: str, full_count: int) -> bool:
     return len(load_jsonl(answers_file)) < int(full_count)
 
@@ -206,6 +239,103 @@ def load_textvqa_evaluator():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.TextVQAAccuracyEvaluator()
+
+
+def load_mmbench_rows(question_file: str) -> dict[str, dict]:
+    rows = {}
+    with open(question_file, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row in reader:
+            qid = str(row["index"])
+            rows[qid] = row
+    return rows
+
+
+def load_ai2d_rows(question_file: str) -> dict[str, dict]:
+    return {str(item["question_id"]): item for item in load_jsonl(question_file)}
+
+
+def mmbench_options(row: dict) -> dict[str, str]:
+    options = {}
+    for letter in ("A", "B", "C", "D"):
+        value = row.get(letter)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text or text.lower() in {"nan", "none"}:
+            continue
+        options[letter] = text
+    return options
+
+
+def evaluate_choice_predictions(answers_file: str, rows: dict[str, dict], output_dir: str, dataset: str) -> dict:
+    ensure_dir(output_dir)
+    answers = load_jsonl(answers_file)
+    details = []
+    correct = 0
+    failed_parse = 0
+
+    for answer in answers:
+        question_id = str(answer["question_id"])
+        row = rows.get(question_id)
+        if row is None:
+            details.append(
+                {
+                    "question_id": question_id,
+                    "prediction": answer.get("text", ""),
+                    "parsed": "MISSING_QUESTION",
+                    "answer": None,
+                    "correct": False,
+                }
+            )
+            continue
+
+        if dataset == "mmbench":
+            options = mmbench_options(row)
+            gt_answer = str(row.get("answer", "")).strip().upper()
+        else:
+            metadata = row.get("metadata", {}) or {}
+            option_values = metadata.get("options", [])
+            options = {letter: str(value) for letter, value in zip(("A", "B", "C", "D", "E", "F"), option_values)}
+            gt_answer = str(row.get("answer", "")).strip().upper()
+
+        parsed = parse_choice_answer(answer.get("text", ""), options)
+        is_correct = parsed == gt_answer
+        correct += int(is_correct)
+        failed_parse += int(parsed == "FAILED")
+        details.append(
+            {
+                "question_id": question_id,
+                "prediction": answer.get("text", ""),
+                "parsed": parsed,
+                "answer": gt_answer,
+                "correct": is_correct,
+                "category": row.get("category") or (row.get("metadata", {}) or {}).get("category"),
+            }
+        )
+
+    total = len(details)
+    accuracy = (correct / total * 100.0) if total else 0.0
+    stdout_text = (
+        f"{dataset} local multiple-choice evaluation\n"
+        f"Samples: {total}\n"
+        f"Correct: {correct}\n"
+        f"Failed parse: {failed_parse}\n"
+        f"Accuracy: {accuracy:.2f}\n"
+    )
+    print(stdout_text, end="")
+    write_text(os.path.join(output_dir, "stdout.txt"), stdout_text)
+    analysis_file = os.path.join(output_dir, "analysis.json")
+    write_json(analysis_file, {"results": details})
+    return {
+        "analysis_file": analysis_file,
+        "metrics": {
+            "accuracy": accuracy,
+            "correct": correct,
+            "count": total,
+            "failed_parse": failed_parse,
+        },
+    }
 
 
 def eval_gqa_subset(answers_file: str, output_dir: str) -> dict:
@@ -696,12 +826,89 @@ def eval_scienceqa(answers_file: str, output_dir: str, max_samples: int | None =
     }
 
 
+def eval_mmbench(answers_file: str, output_dir: str, question_file: str | None = None) -> dict:
+    question_file = question_file or os.path.join(
+        LLAVA_ROOT,
+        "entropy_exp",
+        "eval_questions",
+        "mmbench",
+        "mmbench_dev_20230712.tsv",
+    )
+    rows = load_mmbench_rows(question_file)
+    summary = evaluate_choice_predictions(answers_file, rows, output_dir, "mmbench")
+    summary["question_file"] = question_file
+    return summary
+
+
+def eval_ai2d(answers_file: str, output_dir: str, question_file: str | None = None) -> dict:
+    question_file = question_file or os.path.join(
+        LLAVA_ROOT,
+        "entropy_exp",
+        "datasets",
+        "_prepared_new_vqa",
+        "ai2d",
+        "llava_ai2d_test.jsonl",
+    )
+    rows = load_ai2d_rows(question_file)
+    summary = evaluate_choice_predictions(answers_file, rows, output_dir, "ai2d")
+    summary["question_file"] = question_file
+    return summary
+
+
+def eval_mmvet(answers_file: str, output_dir: str, question_file: str | None = None) -> dict:
+    ensure_dir(output_dir)
+    answers = load_jsonl(answers_file)
+    refs = {}
+    if question_file and os.path.isfile(question_file):
+        refs = {str(item["question_id"]): item for item in load_jsonl(question_file)}
+
+    official_predictions = {str(item["question_id"]): item.get("text", "") for item in answers}
+    official_file = os.path.join(output_dir, "mmvet_official_predictions.json")
+    details_file = os.path.join(output_dir, "mmvet_predictions_with_refs.json")
+    details = []
+    for item in answers:
+        question_id = str(item["question_id"])
+        ref = refs.get(question_id, {})
+        details.append(
+            {
+                "question_id": question_id,
+                "prediction": item.get("text", ""),
+                "answer": ref.get("answer"),
+                "question": ref.get("text") or item.get("prompt"),
+                "metadata": ref.get("metadata", {}),
+            }
+        )
+
+    write_json(official_file, official_predictions)
+    write_json(details_file, {"results": details})
+    stdout_text = (
+        "MMVet local inference-only export\n"
+        f"Samples: {len(answers)}\n"
+        f"Official predictions: {official_file}\n"
+    )
+    print(stdout_text, end="")
+    write_text(os.path.join(output_dir, "stdout.txt"), stdout_text)
+    return {
+        "question_file": question_file,
+        "official_predictions_file": official_file,
+        "details_file": details_file,
+        "inference_only": True,
+        "metrics": {
+            "inference_only": True,
+            "count": len(answers),
+        },
+    }
+
+
 EVAL_FUNCTIONS = {
     "gqa": eval_gqa,
     "mme": eval_mme,
     "pope": eval_pope,
     "textvqa": eval_textvqa,
     "scienceqa": eval_scienceqa,
+    "mmbench": eval_mmbench,
+    "ai2d": eval_ai2d,
+    "mmvet": eval_mmvet,
 }
 
 
@@ -719,6 +926,8 @@ def main():
                         help="Path to the JSONL answers file from inference")
     parser.add_argument("--output-dir", type=str,
                         help="Directory to write evaluation artifacts")
+    parser.add_argument("--question-file", type=str,
+                        help="Optional dataset question/annotation file override")
     parser.add_argument("--mme-data-path", type=str,
                         help="Optional MME benchmark root directory override")
     parser.add_argument("--run-dir", type=str,
@@ -746,8 +955,28 @@ def main():
     output_dir = ensure_dir(os.path.abspath(output_dir))
     print(f"Writing evaluation artifacts to: {output_dir}")
 
+    question_file = resolve_config_path(args.question_file)
+    if question_file is None and config_file is not None:
+        question_file = resolve_config_path(
+            infer_config_value(config_file, ("datasets", dataset, "question_file"))
+        )
+
     if dataset in INFERENCE_ONLY_DATASETS:
-        print(unsupported_local_metric_message(dataset))
+        summary = EVAL_FUNCTIONS[dataset](answers_file, output_dir, question_file=question_file)
+        summary.update(
+            {
+                "dataset": dataset,
+                "answers_file": answers_file,
+                "output_dir": output_dir,
+            }
+        )
+        if run_dir is not None:
+            summary["run_dir"] = run_dir
+        if config_file is not None:
+            summary["config_file"] = config_file
+        summary_path = os.path.join(output_dir, "summary.json")
+        write_json(summary_path, summary)
+        print(f"Saved summary: {summary_path}")
         return 0
 
     run_max_samples = infer_run_max_samples(config_file)
@@ -764,6 +993,8 @@ def main():
             parser.error("--mme-data-path can only be used with --dataset mme or an MME run directory")
         if dataset == "scienceqa":
             summary = eval_scienceqa(answers_file, output_dir, max_samples=run_max_samples)
+        elif dataset in {"mmbench", "ai2d"}:
+            summary = EVAL_FUNCTIONS[dataset](answers_file, output_dir, question_file=question_file)
         else:
             summary = EVAL_FUNCTIONS[dataset](answers_file, output_dir)
     summary.update(

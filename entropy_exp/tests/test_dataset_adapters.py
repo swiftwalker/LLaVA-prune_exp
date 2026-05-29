@@ -122,6 +122,60 @@ class DatasetAdapterTests(unittest.TestCase):
             self.assertIn(MMBENCH_DIRECT_ANSWER_PROMPT, samples[0]["text"])
             self.assertEqual(count_dataset_samples("mmbench", path), 1)
 
+    def test_mmvet_jsonl_is_loaded_as_normalized_samples_with_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "mmvet.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "question_id": "v1_0",
+                        "image": "v1_0.png",
+                        "text": "What is x?",
+                        "answer": "-1",
+                        "metadata": {"capability": "math"},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            samples = load_dataset_samples("mmvet", path)
+            self.assertEqual(len(samples), 1)
+            self.assertEqual(samples[0]["question_id"], "v1_0")
+            self.assertEqual(samples[0]["image_path"], "v1_0.png")
+            self.assertTrue(samples[0]["has_image"])
+            self.assertEqual(samples[0]["answer"], "-1")
+            self.assertEqual(samples[0]["metadata"]["capability"], "math")
+            self.assertEqual(count_dataset_samples("mmvet", path), 1)
+
+    def test_ai2d_jsonl_is_loaded_as_normalized_samples(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "ai2d.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "question_id": "ai2d_000000",
+                        "image": "ai2d_000000.png",
+                        "text": "Which option?\nA. cat\nB. dog\n" + MMBENCH_DIRECT_ANSWER_PROMPT,
+                        "answer": "A",
+                        "metadata": {"options": ["cat", "dog"]},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            samples = load_dataset_samples("ai2d", path)
+            self.assertEqual(len(samples), 1)
+            self.assertEqual(samples[0]["question_id"], "ai2d_000000")
+            self.assertEqual(samples[0]["image_path"], "ai2d_000000.png")
+            self.assertTrue(samples[0]["has_image"])
+            self.assertEqual(samples[0]["answer"], "A")
+            self.assertIn(MMBENCH_DIRECT_ANSWER_PROMPT, samples[0]["text"])
+            self.assertEqual(count_dataset_samples("ai2d", path), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

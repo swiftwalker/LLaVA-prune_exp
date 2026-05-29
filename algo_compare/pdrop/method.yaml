@@ -17,6 +17,7 @@ entrypoints:
     pope: "llava.eval.model_vqa_loader"
     textvqa: "llava.eval.model_vqa_loader"
     scienceqa: "llava.eval.model_vqa_science"
+    mmbench: "llava.eval.model_vqa_mmbench"
   official_eval_scripts:
     gqa: "scripts/v1_5/pdrop_eval/gqa.sh"
     mme: "scripts/v1_5/pdrop_eval/mme.sh"

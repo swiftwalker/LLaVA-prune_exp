@@ -29,7 +29,7 @@
 
 ## 能力边界
 
-- Inference 数据集：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`
-- Repo-native 本地评测和 summary：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`
-- `mmbench` 当前只保证 inference 输入兼容，不进入本地 official score 汇总
+- Inference 数据集：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`、`mmvet`、`ai2d`
+- Repo-native 本地评测和 summary：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`、`ai2d`
+- `mmvet` 当前只导出 inference-only 结果和 official/GPT judge 所需 JSON
 - Patch distribution 当前只覆盖 `baseline`、`random`、`sparsevlm`、`sparsevlm_adaptive_stratified`

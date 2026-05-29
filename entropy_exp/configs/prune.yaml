@@ -152,6 +152,15 @@ datasets:
   mmbench:
     question_file: "entropy_exp/eval_questions/mmbench/mmbench_dev_20230712.tsv"
     image_folder: null
+    max_new_tokens: 32
+  mmvet:
+    question_file: "entropy_exp/datasets/_prepared_new_vqa/mmvet/llava_mmvet_test.jsonl"
+    image_folder: "entropy_exp/datasets/_prepared_new_vqa/mmvet/images"
+    max_new_tokens: 1024
+  ai2d:
+    question_file: "entropy_exp/datasets/_prepared_new_vqa/ai2d/llava_ai2d_test.jsonl"
+    image_folder: "entropy_exp/datasets/_prepared_new_vqa/ai2d/images"
+    max_new_tokens: 32
 
 output:
   base_dir: "entropy_exp/outputs"

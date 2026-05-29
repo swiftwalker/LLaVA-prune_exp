@@ -30,10 +30,12 @@ def load_yaml(path: Path) -> dict[str, Any]:
 def primary_metric(dataset: str, metrics: dict[str, Any]) -> tuple[str | None, Any]:
     if dataset == "mme":
         return "overall_total_score", metrics.get("overall_total_score")
-    if dataset in {"gqa", "textvqa", "scienceqa"}:
+    if dataset in {"gqa", "textvqa", "scienceqa", "mmbench", "ai2d"}:
         return "accuracy", metrics.get("accuracy")
     if dataset == "pope":
         return "macro_f1", metrics.get("macro_f1")
+    if dataset == "mmvet":
+        return None, None
     return None, None
 
 

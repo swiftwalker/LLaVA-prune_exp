@@ -157,7 +157,7 @@ pool_size = min(total_jobs, 40)
 | 字段 | 说明 |
 | --- | --- |
 | `name` | 可读批次名 |
-| `dataset` | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` |
+| `dataset` | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` / `mmvet` / `ai2d` |
 | `strategies` | 策略列表，按顺序展开；支持范围以 `entropy_exp/src/scheduler.py::SUPPORTED_STRATEGIES` 为准 |
 | `extra_sets` | experiment 级别 `--set` 覆盖 |
 | `max_samples` | 可选；缺省继承 `defaults.max_samples` |
@@ -172,9 +172,9 @@ pool_size = min(total_jobs, 40)
 
 数据集：
 
-- Inference：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`
-- 本地 eval/summary：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`
-- `mmbench`：当前 inference-only
+- Inference：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`、`mmvet`、`ai2d`
+- 本地 eval/summary：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`、`ai2d`
+- `mmvet`：当前 inference-only，导出 official/GPT judge JSON
 
 策略：
 
