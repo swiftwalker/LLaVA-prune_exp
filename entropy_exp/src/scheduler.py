@@ -47,6 +47,7 @@ SUPPORTED_STRATEGIES = {
     "sparsevlm_boost",
     "sparsevlm_boost_hybrid",
     "sparsevlm_compensated",
+    "sparsevlm_diverse_mmr",
     "sparsevlm_entropy_alpha",
     "sparsevlm_entropy_alpha_global",
 }

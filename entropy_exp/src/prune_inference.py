@@ -270,6 +270,7 @@ def append_layer_stats_fields(
         "strategy_keep_low",
         "grid_size",
         "patch_per_row",
+        "grid_balance_weight",
         "high_ratio",
         "intra_stratum_mode",
         "adaptive_alpha",
@@ -284,6 +285,7 @@ def append_layer_stats_fields(
         "use_score_memory",
         "layer_mode",
         "layer_strategy_effective",
+        "selection_rule",
         "boost_weight",
         "boost_weight_min",
         "boost_weight_max",
@@ -292,6 +294,14 @@ def append_layer_stats_fields(
         "beta_max",
         "shuffle_seed",
         "sampling_fill_count",
+        "lambda_div",
+        "diversity_weight_max",
+        "core_keep_ratio",
+        "candidate_pool_multiplier",
+        "diversity_decay_per_step",
+        "distance_metric",
+        "mean_selected_pairwise_distance",
+        "retained_saliency_mass_ratio",
     ):
         if key in layer_info and layer_info[key] is not None:
             sample_stats[f"layer_{layer_idx}_{key}"] = _serialize_optional_sequence(layer_info[key])
@@ -308,6 +318,20 @@ def append_layer_stats_fields(
         "sampling_weights",
         "stratum_history_debt",
         "stratum_combined_debt",
+        "core_indices",
+        "candidate_pool_indices",
+        "mmr_selected_order",
+        "diversity_gain",
+        "mmr_scores",
+        "grid_saliency_topk_counts",
+        "grid_quota",
+        "grid_selected_counts",
+        "grid_candidate_counts",
+        "grid_anchor_indices",
+        "grid_fill_indices",
+        "grid_distance_selected_order",
+        "grid_candidate_indices",
+        "grid_global_fallback_indices",
     ):
         _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_{key}", layer_info.get(key))
 
