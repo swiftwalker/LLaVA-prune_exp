@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-CONFIG_ORDER = ["S-S-S", "O-S-S", "D-S-S", "D-D-S"]
+CONFIG_ORDER = ["S-S-S", "O-S-S", "D-S-S", "D-D-S", "A-S-S", "A-A-S"]
 TARGET_BY_RATIO = {
     (0.4791667, 0.3333333, 0.45): "retain192",
     (0.4739583, 0.6369637, 0.6727273): "retain128",
@@ -71,6 +71,12 @@ def config_name(row: dict[str, str], pruning: dict[str, Any]) -> str | None:
             return "D-S-S"
         if modes == ("D", "D", "S"):
             return "D-D-S"
+    if strategy == "sparsevlm_adaptive_diverse_mmr":
+        modes = mode_tuple((pruning.get("sparsevlm_adaptive_diverse_mmr") or {}).get("layer_modes"))
+        if modes == ("A", "S", "S"):
+            return "A-S-S"
+        if modes == ("A", "A", "S"):
+            return "A-A-S"
     return None
 
 
@@ -133,6 +139,8 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
     spatial_entropies: list[float] = []
     layer_jaccards: list[float] = []
     lambda_values: list[float] = []
+    diversity_ratios: list[float] = []
+    anchor_ratios: list[float] = []
     selection_rules: list[str] = []
 
     samples_read = 0
@@ -159,6 +167,10 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
                     saliency_mass.append(float(value))
                 elif field == "lambda_div" and value is not None:
                     lambda_values.append(float(value))
+                elif field == "diversity_ratio" and value is not None:
+                    diversity_ratios.append(float(value))
+                elif field == "anchor_ratio" and value is not None:
+                    anchor_ratios.append(float(value))
                 elif field == "selection_rule" and value is not None:
                     selection_rules.append(str(value))
                 elif field == "keep_patch_indices":
@@ -178,6 +190,8 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
         "avg_grid_spatial_entropy": mean(spatial_entropies),
         "avg_keep_patch_jaccard": mean(layer_jaccards),
         "avg_lambda_div": mean(lambda_values),
+        "avg_diversity_ratio": mean(diversity_ratios),
+        "avg_anchor_ratio": mean(anchor_ratios),
         "selection_rule": sorted(set(selection_rules))[0] if selection_rules else None,
         "stats_samples_read": samples_read,
     }
@@ -273,6 +287,8 @@ def delta_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "avg_grid_spatial_entropy": None if row is None else row.get("avg_grid_spatial_entropy"),
                     "avg_keep_patch_jaccard": None if row is None else row.get("avg_keep_patch_jaccard"),
                     "avg_lambda_div": None if row is None else row.get("avg_lambda_div"),
+                    "avg_diversity_ratio": None if row is None else row.get("avg_diversity_ratio"),
+                    "avg_anchor_ratio": None if row is None else row.get("avg_anchor_ratio"),
                     "selection_rule": None if row is None else row.get("selection_rule"),
                 }
             )
@@ -305,23 +321,26 @@ def fmt(value: Any) -> str:
 def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) -> str:
     complete = sum(1 for row in matrix if int(row["complete_configs"]) == len(CONFIG_ORDER))
     dss_rows = [row for row in deltas if row["config"] == "D-S-S" and row["value"] is not None]
-    wins_vs_boost = sum(1 for row in dss_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
+    ass_rows = [row for row in deltas if row["config"] == "A-S-S" and row["value"] is not None]
+    dss_wins_vs_boost = sum(1 for row in dss_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
+    ass_wins_vs_boost = sum(1 for row in ass_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
     lines = [
         "# Diverse MMR Diagnostic Report",
         "",
         "## Coverage",
         "",
         f"- Complete dataset-target cells: {complete} / {len(matrix)}",
-        f"- D-S-S beats O-S-S: {wins_vs_boost} / {len(dss_rows)}",
+        f"- D-S-S beats O-S-S: {dss_wins_vs_boost} / {len(dss_rows)}",
+        f"- A-S-S beats O-S-S: {ass_wins_vs_boost} / {len(ass_rows)}",
         "",
         "## Metric Matrix",
         "",
-        "| dataset | target | metric | S-S-S | O-S-S | D-S-S | D-D-S | best |",
-        "|---|---|---|---:|---:|---:|---:|---|",
+        "| dataset | target | metric | S-S-S | O-S-S | D-S-S | D-D-S | A-S-S | A-A-S | best |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in matrix:
         lines.append(
-            "| {dataset} | {target} | {metric_name} | {sss} | {oss} | {dss} | {dds} | {best} |".format(
+            "| {dataset} | {target} | {metric_name} | {sss} | {oss} | {dss} | {dds} | {ass} | {aas} | {best} |".format(
                 dataset=row["dataset"],
                 target=row["target"],
                 metric_name=row["metric_name"],
@@ -329,23 +348,26 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
                 oss=fmt(row.get("O-S-S")),
                 dss=fmt(row.get("D-S-S")),
                 dds=fmt(row.get("D-D-S")),
+                ass=fmt(row.get("A-S-S")),
+                aas=fmt(row.get("A-A-S")),
                 best=row.get("best_config") or "",
             )
         )
     lines.extend(
         [
             "",
-            "## D-S-S Diagnostics",
+            "## Diversity Diagnostics",
             "",
-            "| dataset | target | value | delta vs S-S-S | delta vs O-S-S | pairwise dist | saliency mass | spatial entropy | layer Jaccard | rule/lambda |",
-            "|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
+            "| config | dataset | target | value | delta vs S-S-S | delta vs O-S-S | pairwise dist | saliency mass | spatial entropy | layer Jaccard | div ratio | anchor ratio | rule/lambda |",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
     )
     for row in deltas:
-        if row["config"] != "D-S-S":
+        if row["config"] not in {"D-S-S", "A-S-S"}:
             continue
         lines.append(
-            "| {dataset} | {target} | {value} | {dsv} | {dbo} | {dist} | {mass} | {entropy} | {jaccard} | {rule} |".format(
+            "| {config} | {dataset} | {target} | {value} | {dsv} | {dbo} | {dist} | {mass} | {entropy} | {jaccard} | {dratio} | {aratio} | {rule} |".format(
+                config=row["config"],
                 dataset=row["dataset"],
                 target=row["target"],
                 value=fmt(row.get("value")),
@@ -355,6 +377,8 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
                 mass=fmt(row.get("avg_retained_saliency_mass_ratio")),
                 entropy=fmt(row.get("avg_grid_spatial_entropy")),
                 jaccard=fmt(row.get("avg_keep_patch_jaccard")),
+                dratio=fmt(row.get("avg_diversity_ratio")),
+                aratio=fmt(row.get("avg_anchor_ratio")),
                 rule=(row.get("selection_rule") or fmt(row.get("avg_lambda_div"))),
             )
         )

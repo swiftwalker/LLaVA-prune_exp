@@ -43,6 +43,7 @@ SUPPORTED_STRATEGIES = {
     "entropy",
     "random",
     "sparsevlm",
+    "sparsevlm_adaptive_diverse_mmr",
     "sparsevlm_adaptive_stratified",
     "sparsevlm_boost",
     "sparsevlm_boost_hybrid",

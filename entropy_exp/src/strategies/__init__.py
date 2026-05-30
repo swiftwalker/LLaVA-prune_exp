@@ -7,6 +7,7 @@ from .pre_attn_score import PreAttnScoreStrategy
 from .random import RandomStrategy
 from .sparsevlm import SparseVLMStrategy
 from .sparsevlm_adaptive_stratified import SparseVLMAdaptiveStratifiedStrategy
+from .sparsevlm_adaptive_diverse_mmr import SparseVLMAdaptiveDiverseMMRStrategy
 from .sparsevlm_boost import SparseVLMBoostStrategy
 from .sparsevlm_boost_hybrid import SparseVLMBoostHybridStrategy
 from .sparsevlm_compensated import SparseVLMCompensatedStrategy
@@ -22,6 +23,7 @@ STRATEGY_REGISTRY = {
     "pre_attn_score": PreAttnScoreStrategy,
     "random": RandomStrategy,
     "sparsevlm": SparseVLMStrategy,
+    "sparsevlm_adaptive_diverse_mmr": SparseVLMAdaptiveDiverseMMRStrategy,
     "sparsevlm_adaptive_stratified": SparseVLMAdaptiveStratifiedStrategy,
     "sparsevlm_boost": SparseVLMBoostStrategy,
     "sparsevlm_boost_hybrid": SparseVLMBoostHybridStrategy,
