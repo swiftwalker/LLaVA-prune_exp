@@ -31,6 +31,8 @@ KNOWN_STRATEGIES = (
     "sparsevlm_diverse_mmr",
     "sparsevlm_entropy_alpha",
     "sparsevlm_entropy_alpha_global",
+    "sparsevlm_fast_scnd",
+    "sparsevlm_scnd",
     "baseline",
 )
 

@@ -59,7 +59,7 @@ ps -ef | rg 'run_prune.sh|prune_inference.py|run_scheduler.py' || true
 
 建议确认：
 
-- 当前分支是目标实验分支；本工作区当前主线按 `cleanup/experiment-mainline` 处理
+- 当前分支是目标实验分支；本工作区当前主线是 `exp/adaptive-saliency-diversity-pruning`
 - 没有同一实验线的旧 scheduler 还在跑
 - 没有旧进程还在写同一批输出目录
 
@@ -188,6 +188,14 @@ pool_size = min(total_jobs, 40)
 - `sparsevlm`
 - `sparsevlm_adaptive_stratified`
 - `sparsevlm_entropy_alpha`
+- `sparsevlm_entropy_alpha_global`
+- `sparsevlm_boost`
+- `sparsevlm_boost_hybrid`
+- `sparsevlm_compensated`
+- `sparsevlm_diverse_mmr`
+- `sparsevlm_adaptive_diverse_mmr`
+- `sparsevlm_scnd`
+- `sparsevlm_fast_scnd`
 
 策略方法说明见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md)。
 
@@ -254,7 +262,7 @@ python entropy_exp/scripts/run_scheduler.py \
 - 策略自身测试
 - [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md)
 
-`sparsevlm_entropy_alpha` 是当前已接入 scheduler、run layout 和 run pruning 入口的参考案例。
+`sparsevlm_fast_scnd` 是当前新增策略接入 scheduler、run layout 和 run pruning 入口的参考案例。
 
 ## 9. 后续步骤
 
@@ -263,6 +271,4 @@ Scheduler 完成后，通常按这个顺序处理：
 1. 用 `progress.txt` 或 `state.json` 确认没有 pending/running/failed。
 2. 从 `attempts/*.json` 收集本轮 completed run directories。
 3. 按 [RESULTS_WORKFLOW.md](./RESULTS_WORKFLOW.md) 补评测和生成 summary。
-4. 如果需要 patch 保留分布，再按 [PATCH_DISTRIBUTION_WORKFLOW.md](./PATCH_DISTRIBUTION_WORKFLOW.md) 处理。
-
-历史 keep-position-ids canonical plan 和旧工作流见 [HISTORICAL_WORKFLOWS.md](./HISTORICAL_WORKFLOWS.md)。
+4. 如果需要策略专门诊断，使用对应 report 脚本或在 `entropy_exp/outputs/analysis/<label>/` 下落地一次性报告。

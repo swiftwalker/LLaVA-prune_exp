@@ -11,7 +11,19 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-CONFIG_ORDER = ["S-S-S", "O-S-S", "D-S-S", "D-D-S", "A-S-S", "A-A-S"]
+CONFIG_ORDER = [
+    "S-S-S",
+    "O-S-S",
+    "D-S-S",
+    "D-D-S",
+    "A-S-S",
+    "A-A-S",
+    "C-B-B",
+    "C-S-S",
+    "C-B-S",
+    "F-T-S",
+    "F-S-S",
+]
 TARGET_BY_RATIO = {
     (0.4791667, 0.3333333, 0.45): "retain192",
     (0.4739583, 0.6369637, 0.6727273): "retain128",
@@ -77,6 +89,24 @@ def config_name(row: dict[str, str], pruning: dict[str, Any]) -> str | None:
             return "A-S-S"
         if modes == ("A", "A", "S"):
             return "A-A-S"
+    if strategy == "sparsevlm_scnd":
+        modes = mode_tuple((pruning.get("sparsevlm_scnd") or {}).get("layer_modes"))
+        if modes == ("C", "B", "B"):
+            return "C-B-B"
+        if modes == ("C", "S", "S"):
+            return "C-S-S"
+        if modes == ("C", "B", "S"):
+            return "C-B-S"
+    if strategy == "sparsevlm_fast_scnd":
+        modes = mode_tuple((pruning.get("sparsevlm_fast_scnd") or {}).get("layer_modes"))
+        if modes is None:
+            prune_layers = pruning.get("prune_layers") or []
+            if isinstance(prune_layers, list) and len(prune_layers) >= 3:
+                modes = ("F", "T") + tuple("S" for _ in prune_layers[2:])
+        if modes == ("F", "T", "S"):
+            return "F-T-S"
+        if modes == ("F", "S", "S"):
+            return "F-S-S"
     return None
 
 
@@ -141,6 +171,13 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
     lambda_values: list[float] = []
     diversity_ratios: list[float] = []
     anchor_ratios: list[float] = []
+    seed_ratios: list[float] = []
+    saliency_floor_etas: list[float] = []
+    saliency_floor_gaps: list[float] = []
+    boundary_counts: list[float] = []
+    core_ratios: list[float] = []
+    greedy_steps_used: list[float] = []
+    tie_break_band_counts: list[float] = []
     selection_rules: list[str] = []
 
     samples_read = 0
@@ -171,6 +208,22 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
                     diversity_ratios.append(float(value))
                 elif field == "anchor_ratio" and value is not None:
                     anchor_ratios.append(float(value))
+                elif field == "seed_ratio" and value is not None:
+                    seed_ratios.append(float(value))
+                elif field == "saliency_floor_eta" and value is not None:
+                    saliency_floor_etas.append(float(value))
+                elif field == "saliency_mass_selected" and value is not None:
+                    floor_value = sample.get(f"layer_{layer_idx}_saliency_mass_floor")
+                    if floor_value is not None:
+                        saliency_floor_gaps.append(float(value) - float(floor_value))
+                elif field == "boundary_count" and value is not None:
+                    boundary_counts.append(float(value))
+                elif field == "core_ratio" and value is not None:
+                    core_ratios.append(float(value))
+                elif field == "greedy_steps_used" and value is not None:
+                    greedy_steps_used.append(float(value))
+                elif field == "tie_break_band_count" and value is not None:
+                    tie_break_band_counts.append(float(value))
                 elif field == "selection_rule" and value is not None:
                     selection_rules.append(str(value))
                 elif field == "keep_patch_indices":
@@ -192,6 +245,13 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
         "avg_lambda_div": mean(lambda_values),
         "avg_diversity_ratio": mean(diversity_ratios),
         "avg_anchor_ratio": mean(anchor_ratios),
+        "avg_seed_ratio": mean(seed_ratios),
+        "avg_saliency_floor_eta": mean(saliency_floor_etas),
+        "avg_saliency_floor_gap": mean(saliency_floor_gaps),
+        "avg_boundary_count": mean(boundary_counts),
+        "avg_core_ratio": mean(core_ratios),
+        "avg_greedy_steps_used": mean(greedy_steps_used),
+        "avg_tie_break_band_count": mean(tie_break_band_counts),
         "selection_rule": sorted(set(selection_rules))[0] if selection_rules else None,
         "stats_samples_read": samples_read,
     }
@@ -289,6 +349,13 @@ def delta_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "avg_lambda_div": None if row is None else row.get("avg_lambda_div"),
                     "avg_diversity_ratio": None if row is None else row.get("avg_diversity_ratio"),
                     "avg_anchor_ratio": None if row is None else row.get("avg_anchor_ratio"),
+                    "avg_seed_ratio": None if row is None else row.get("avg_seed_ratio"),
+                    "avg_saliency_floor_eta": None if row is None else row.get("avg_saliency_floor_eta"),
+                    "avg_saliency_floor_gap": None if row is None else row.get("avg_saliency_floor_gap"),
+                    "avg_boundary_count": None if row is None else row.get("avg_boundary_count"),
+                    "avg_core_ratio": None if row is None else row.get("avg_core_ratio"),
+                    "avg_greedy_steps_used": None if row is None else row.get("avg_greedy_steps_used"),
+                    "avg_tie_break_band_count": None if row is None else row.get("avg_tie_break_band_count"),
                     "selection_rule": None if row is None else row.get("selection_rule"),
                 }
             )
@@ -322,8 +389,12 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
     complete = sum(1 for row in matrix if int(row["complete_configs"]) == len(CONFIG_ORDER))
     dss_rows = [row for row in deltas if row["config"] == "D-S-S" and row["value"] is not None]
     ass_rows = [row for row in deltas if row["config"] == "A-S-S" and row["value"] is not None]
+    cbb_rows = [row for row in deltas if row["config"] == "C-B-B" and row["value"] is not None]
+    fts_rows = [row for row in deltas if row["config"] == "F-T-S" and row["value"] is not None]
     dss_wins_vs_boost = sum(1 for row in dss_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
     ass_wins_vs_boost = sum(1 for row in ass_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
+    cbb_wins_vs_boost = sum(1 for row in cbb_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
+    fts_wins_vs_boost = sum(1 for row in fts_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
     lines = [
         "# Diverse MMR Diagnostic Report",
         "",
@@ -332,15 +403,17 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
         f"- Complete dataset-target cells: {complete} / {len(matrix)}",
         f"- D-S-S beats O-S-S: {dss_wins_vs_boost} / {len(dss_rows)}",
         f"- A-S-S beats O-S-S: {ass_wins_vs_boost} / {len(ass_rows)}",
+        f"- C-B-B beats O-S-S: {cbb_wins_vs_boost} / {len(cbb_rows)}",
+        f"- F-T-S beats O-S-S: {fts_wins_vs_boost} / {len(fts_rows)}",
         "",
         "## Metric Matrix",
         "",
-        "| dataset | target | metric | S-S-S | O-S-S | D-S-S | D-D-S | A-S-S | A-A-S | best |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---|",
+        "| dataset | target | metric | S-S-S | O-S-S | D-S-S | D-D-S | A-S-S | A-A-S | C-B-B | C-S-S | C-B-S | F-T-S | F-S-S | best |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in matrix:
         lines.append(
-            "| {dataset} | {target} | {metric_name} | {sss} | {oss} | {dss} | {dds} | {ass} | {aas} | {best} |".format(
+            "| {dataset} | {target} | {metric_name} | {sss} | {oss} | {dss} | {dds} | {ass} | {aas} | {cbb} | {css} | {cbs} | {fts} | {fss} | {best} |".format(
                 dataset=row["dataset"],
                 target=row["target"],
                 metric_name=row["metric_name"],
@@ -350,6 +423,11 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
                 dds=fmt(row.get("D-D-S")),
                 ass=fmt(row.get("A-S-S")),
                 aas=fmt(row.get("A-A-S")),
+                cbb=fmt(row.get("C-B-B")),
+                css=fmt(row.get("C-S-S")),
+                cbs=fmt(row.get("C-B-S")),
+                fts=fmt(row.get("F-T-S")),
+                fss=fmt(row.get("F-S-S")),
                 best=row.get("best_config") or "",
             )
         )
@@ -358,15 +436,15 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
             "",
             "## Diversity Diagnostics",
             "",
-            "| config | dataset | target | value | delta vs S-S-S | delta vs O-S-S | pairwise dist | saliency mass | spatial entropy | layer Jaccard | div ratio | anchor ratio | rule/lambda |",
-            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+            "| config | dataset | target | value | delta vs S-S-S | delta vs O-S-S | pairwise dist | saliency mass | spatial entropy | layer Jaccard | div ratio | anchor ratio | seed ratio | core ratio | greedy steps | tie band | floor gap | boundary | rule/lambda |",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
         ]
     )
     for row in deltas:
-        if row["config"] not in {"D-S-S", "A-S-S"}:
+        if row["config"] not in {"D-S-S", "A-S-S", "C-B-B", "C-S-S", "C-B-S", "F-T-S", "F-S-S"}:
             continue
         lines.append(
-            "| {config} | {dataset} | {target} | {value} | {dsv} | {dbo} | {dist} | {mass} | {entropy} | {jaccard} | {dratio} | {aratio} | {rule} |".format(
+            "| {config} | {dataset} | {target} | {value} | {dsv} | {dbo} | {dist} | {mass} | {entropy} | {jaccard} | {dratio} | {aratio} | {seed} | {core} | {greedy} | {tie_band} | {floor_gap} | {boundary} | {rule} |".format(
                 config=row["config"],
                 dataset=row["dataset"],
                 target=row["target"],
@@ -379,6 +457,12 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
                 jaccard=fmt(row.get("avg_keep_patch_jaccard")),
                 dratio=fmt(row.get("avg_diversity_ratio")),
                 aratio=fmt(row.get("avg_anchor_ratio")),
+                seed=fmt(row.get("avg_seed_ratio")),
+                core=fmt(row.get("avg_core_ratio")),
+                greedy=fmt(row.get("avg_greedy_steps_used")),
+                tie_band=fmt(row.get("avg_tie_break_band_count")),
+                floor_gap=fmt(row.get("avg_saliency_floor_gap")),
+                boundary=fmt(row.get("avg_boundary_count")),
                 rule=(row.get("selection_rule") or fmt(row.get("avg_lambda_div"))),
             )
         )

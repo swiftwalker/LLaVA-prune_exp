@@ -1,20 +1,18 @@
 # `entropy_exp` 文档入口
 
-本文档只回答一个问题：你现在应该看哪一篇文档。
+本文档只回答一个问题：当前实验开发应该从哪里读起。根目录只保留主线开发文档；一次性分析报告、scheduler 状态、run dir 清单等生成物统一放在 `entropy_exp/outputs/` 下，不再作为开发文档维护。
 
-当前主线按本工作区事实处理为 `cleanup/experiment-mainline`。历史分支、旧矩阵和二级工作流会明确标注为 historical reference，避免和当前实验主线混用。
+当前工作分支：`exp/adaptive-saliency-diversity-pruning`。
 
 ## 快速导航
 
 | 目标 | 阅读文档 | 说明 |
 | --- | --- | --- |
 | 跑一次 pruning / baseline inference | [USAGE.md](./USAGE.md) | 单次命令、配置覆盖、输出文件 |
-| 了解当前有哪些策略分支 | [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md) | `baseline` + 9 个剪枝策略的方法总览 |
-| 理解策略如何改 transformer block | [TRANSFORMER_BLOCK_STRATEGY_PATHS.md](./TRANSFORMER_BLOCK_STRATEGY_PATHS.md) | pre/post/masking 对 hidden、KV、position、logits 的影响 |
+| 了解当前策略方法 | [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md) | `baseline` + 17 个剪枝策略的方法总览 |
+| 理解策略如何进入 transformer block | [TRANSFORMER_BLOCK_STRATEGY_PATHS.md](./TRANSFORMER_BLOCK_STRATEGY_PATHS.md) | post / pre / masking 路径，以及新策略的运行形态 |
 | 批量跑实验矩阵 | [SCHEDULER.md](./SCHEDULER.md) | scheduler plan、dry-run、tmux、resume、失败恢复 |
 | 评测和汇总结果矩阵 | [RESULTS_WORKFLOW.md](./RESULTS_WORKFLOW.md) | `run_eval.sh`、`summarize_results.py`、top-k 和趋势整理 |
-| 分析 patch 保留分布 | [PATCH_DISTRIBUTION_WORKFLOW.md](./PATCH_DISTRIBUTION_WORKFLOW.md) | 当前 patch distribution 工具的支持范围和使用方式 |
-| 查历史/次级流程 | [HISTORICAL_WORKFLOWS.md](./HISTORICAL_WORKFLOWS.md) | `keep-position-ids`、Phase 1 attention capture 等历史参考 |
 
 ## 当前事实源
 
@@ -23,13 +21,30 @@
 - scheduler 策略白名单：`entropy_exp/src/scheduler.py::SUPPORTED_STRATEGIES`
 - run 目录识别：`entropy_exp/src/run_layout.py::KNOWN_STRATEGIES`
 - 默认配置：`entropy_exp/configs/prune.yaml`
-- 7B/13B 切换入口：`model.path` 和 `model.name`；默认 7B，13B 建议通过
-  `--set model.path=entropy_exp/models/llava-v1.5-13b --set model.name=llava-v1.5-13b`
-  或 plan override 显式启用，详见 [USAGE.md](./USAGE.md)
+- report / analysis 脚本：`entropy_exp/src/*_report.py`
 
-## 能力边界
+新增策略时至少同步以上入口和本文档集合，避免出现“代码能跑但文档仍是旧策略表”的漂移。
 
-- Inference 数据集：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`、`mmvet`、`ai2d`
+## 当前策略家族
+
+| 家族 | 策略 |
+| --- | --- |
+| 基础对照 | `baseline`、`random` |
+| Attention 路径 | `attn_score`、`pre_attn_score`、`masking_attn_score`、`tail_masking_attn_score`、`entropy` |
+| SparseVLM / Ours | `sparsevlm`、`sparsevlm_adaptive_stratified`、`sparsevlm_entropy_alpha`、`sparsevlm_entropy_alpha_global` |
+| Boost / sampling | `sparsevlm_boost`、`sparsevlm_boost_hybrid`、`sparsevlm_compensated` |
+| Diversity / SCND | `sparsevlm_diverse_mmr`、`sparsevlm_adaptive_diverse_mmr`、`sparsevlm_scnd`、`sparsevlm_fast_scnd` |
+
+策略细节和参数含义见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md)。
+
+## 数据集能力边界
+
+- Inference：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`、`mmvet`、`ai2d`
 - Repo-native 本地评测和 summary：`gqa`、`mme`、`pope`、`textvqa`、`scienceqa`、`mmbench`、`ai2d`
 - `mmvet` 当前只导出 inference-only 结果和 official/GPT judge 所需 JSON
-- Patch distribution 当前只覆盖 `baseline`、`random`、`sparsevlm`、`sparsevlm_adaptive_stratified`
+
+## 文档维护原则
+
+- 根目录文档只放稳定开发说明；单次实验报告写入 `entropy_exp/outputs/analysis/<label>/report.md`。
+- 旧分支、失败案例包、远端迁移 manifest、run-dir 临时清单不再放在 root docs 中维护。
+- 结果引用以 `config.yaml`、`eval/summary.json`、`summary.csv/json` 为准，文档只记录方法口径和流程口径。

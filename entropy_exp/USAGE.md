@@ -1,12 +1,10 @@
 # 剪枝推理实验使用指南
 
-本文只覆盖 **单次 pruning / baseline inference**：怎么启动、怎么覆盖配置、输出在哪里。批量矩阵、结果汇总、策略原理和历史流程分别见：
+本文只覆盖 **单次 pruning / baseline inference**：怎么启动、怎么覆盖配置、输出在哪里。批量矩阵、结果汇总和策略原理分别见：
 
 - 批量调度：[SCHEDULER.md](./SCHEDULER.md)
 - 结果评测与汇总：[RESULTS_WORKFLOW.md](./RESULTS_WORKFLOW.md)
 - 策略方法总览：[STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md)
-- patch 分布分析：[PATCH_DISTRIBUTION_WORKFLOW.md](./PATCH_DISTRIBUTION_WORKFLOW.md)
-- 历史/次级流程：[HISTORICAL_WORKFLOWS.md](./HISTORICAL_WORKFLOWS.md)
 
 ## 1. 环境准备
 
@@ -88,6 +86,38 @@ bash entropy_exp/scripts/run_prune.sh sparsevlm_adaptive_stratified mme 10
 # SparseVLM + saliency 熵自适应 alpha 分层补偿
 bash entropy_exp/scripts/run_prune.sh sparsevlm_entropy_alpha mme 10
 
+# SparseVLM + score boosting
+bash entropy_exp/scripts/run_prune.sh sparsevlm_boost mme 10
+
+# O-S-S / O-O-S 等层级混合；S=SparseVLM，O=boost
+bash entropy_exp/scripts/run_prune.sh sparsevlm_boost_hybrid mme 10 \
+  --set 'pruning.prune_layers=[2,6,16]' \
+  --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
+  --set 'pruning.sparsevlm_boost_hybrid.layer_modes=["O","S","S"]'
+
+# Grid-local pure-distance diversity；D=diverse，S=SparseVLM
+bash entropy_exp/scripts/run_prune.sh sparsevlm_diverse_mmr pope 10 \
+  --set 'pruning.prune_layers=[2,6,16]' \
+  --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
+  --set 'pruning.sparsevlm_diverse_mmr.layer_modes=["D","S","S"]'
+
+# Adaptive saliency-diversity；A=adaptive diverse，S=SparseVLM
+bash entropy_exp/scripts/run_prune.sh sparsevlm_adaptive_diverse_mmr pope 10 \
+  --set 'pruning.prune_layers=[2,6,16]' \
+  --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
+  --set 'pruning.sparsevlm_adaptive_diverse_mmr.layer_modes=["A","S","S"]'
+
+# SCND / Fast-SCND；C/F 为首层 saliency-constrained native diversity
+bash entropy_exp/scripts/run_prune.sh sparsevlm_scnd pope 10 \
+  --set 'pruning.prune_layers=[2,6,16]' \
+  --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
+  --set 'pruning.sparsevlm_scnd.layer_modes=["C","B","B"]'
+
+bash entropy_exp/scripts/run_prune.sh sparsevlm_fast_scnd pope 10 \
+  --set 'pruning.prune_layers=[2,6,16]' \
+  --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
+  --set 'pruning.sparsevlm_fast_scnd.layer_modes=["F","T","S"]'
+
 # 无剪枝 baseline，同一套自定义 decode 路径
 bash entropy_exp/scripts/run_prune.sh baseline mme 10
 ```
@@ -117,7 +147,7 @@ bash entropy_exp/scripts/run_prune.sh <strategy|baseline> <dataset|all> [max_sam
 
 | 参数 | 可选值 | 说明 |
 | --- | --- | --- |
-| `strategy` | `baseline` 或 9 个剪枝策略 | 当前策略列表见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md) |
+| `strategy` | `baseline` 或 17 个剪枝策略 | 当前策略列表见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md) |
 | `dataset` | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` / `mmvet` / `ai2d` / `all` | `mmvet` 当前为 inference-only 导出口径 |
 | `max_samples` | 整数，可选 | 省略则使用配置中的 `pruning.max_samples`；仍为空则跑全量 |
 | `--auto-gpu` | flag | 运行前自动选择可用显存最多的 GPU |
@@ -166,6 +196,16 @@ bash entropy_exp/scripts/run_prune.sh sparsevlm_entropy_alpha textvqa \
 | `capture.save_attention=true` | 保存 text->vision attention 到 `captures.h5` |
 | `capture.save_importance_scores=true` | 保存 importance / visual scores 到 `stats.jsonl` |
 | `capture.save_keep_indices=true` | 保存 keep / pruned indices 到 `stats.jsonl` |
+
+常用层模式：
+
+| 策略 | 模式字母 | 含义 |
+| --- | --- | --- |
+| `sparsevlm_boost_hybrid` | `S` / `O` | `S` 为纯 SparseVLM，`O` 为 boost |
+| `sparsevlm_diverse_mmr` | `D` / `S` | `D` 为 grid-local pure-distance diversity，`S` 为纯 SparseVLM |
+| `sparsevlm_adaptive_diverse_mmr` | `A` / `S` | `A` 为 prune-ratio 自适应 saliency-diversity，`S` 为纯 SparseVLM |
+| `sparsevlm_scnd` | `C` / `B` / `S` | `C` 为 global SCND，`B` 为 boundary-only diversity refinement，`S` 为纯 SparseVLM |
+| `sparsevlm_fast_scnd` | `F` / `T` / `S` | `F` 为 micro-greedy Fast-SCND，`T` 为 cached diversity tie-break，`S` 为纯 SparseVLM |
 
 `prune_layers` 和 `prune_ratio` 的规则：
 

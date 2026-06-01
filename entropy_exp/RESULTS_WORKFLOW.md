@@ -215,4 +215,4 @@ PY
 - 重跑 recovery 后继续沿用旧 `selection_label`，导致轮次混在一起。
 - 只看 run_name 前缀，不看 scheduler attempt 记录。
 
-历史 keep-position-ids worked example 已移到 [HISTORICAL_WORKFLOWS.md](./HISTORICAL_WORKFLOWS.md)。
+旧分支或一次性分析报告不作为本流程的事实源；正式比较仍以本轮 scheduler attempts、run dir 的 `config.yaml`、`eval/summary.json` 和生成的 `summary.csv/json` 为准。

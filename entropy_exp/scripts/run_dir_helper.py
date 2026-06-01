@@ -66,6 +66,8 @@ def parse_args() -> argparse.Namespace:
             "sparsevlm_diverse_mmr",
             "sparsevlm_entropy_alpha",
             "sparsevlm_entropy_alpha_global",
+            "sparsevlm_fast_scnd",
+            "sparsevlm_scnd",
         ],
         help="Filter runs by strategy branch",
     )

@@ -20,6 +20,8 @@
 #   bash scripts/run_prune.sh sparsevlm_compensated mme 10
 #   bash scripts/run_prune.sh sparsevlm_diverse_mmr mme 10 --set 'pruning.sparsevlm_diverse_mmr.layer_modes=["D","S"]'
 #   bash scripts/run_prune.sh sparsevlm_adaptive_diverse_mmr mme 10 --set 'pruning.sparsevlm_adaptive_diverse_mmr.layer_modes=["A","S"]'
+#   bash scripts/run_prune.sh sparsevlm_scnd mme 10 --set 'pruning.sparsevlm_scnd.layer_modes=["C","B"]'
+#   bash scripts/run_prune.sh sparsevlm_fast_scnd mme 10 --set 'pruning.sparsevlm_fast_scnd.layer_modes=["F","T"]'
 #   bash scripts/run_prune.sh baseline mme 10
 #   bash scripts/run_prune.sh attn_score mme 10 --auto-gpu
 #   CUDA_VISIBLE_DEVICES=2,3 bash scripts/run_prune.sh attn_score mme --auto-gpu
@@ -55,6 +57,8 @@ Examples:
   bash scripts/run_prune.sh sparsevlm_compensated mme 10
   bash scripts/run_prune.sh sparsevlm_diverse_mmr mme 10 --set 'pruning.sparsevlm_diverse_mmr.layer_modes=["D","S"]'
   bash scripts/run_prune.sh sparsevlm_adaptive_diverse_mmr mme 10 --set 'pruning.sparsevlm_adaptive_diverse_mmr.layer_modes=["A","S"]'
+  bash scripts/run_prune.sh sparsevlm_scnd mme 10 --set 'pruning.sparsevlm_scnd.layer_modes=["C","B"]'
+  bash scripts/run_prune.sh sparsevlm_fast_scnd mme 10 --set 'pruning.sparsevlm_fast_scnd.layer_modes=["F","T"]'
   bash scripts/run_prune.sh baseline mme 10
   bash scripts/run_prune.sh attn_score mme 10 --auto-gpu
   CUDA_VISIBLE_DEVICES=2,3 bash scripts/run_prune.sh attn_score mme --auto-gpu
@@ -75,7 +79,7 @@ DATASET="${2:?$(usage)}"
 shift 2
 
 case "$STRATEGY" in
-    baseline|attn_score|pre_attn_score|masking_attn_score|tail_masking_attn_score|entropy|random|sparsevlm|sparsevlm_adaptive_stratified|sparsevlm_entropy_alpha|sparsevlm_entropy_alpha_global|sparsevlm_boost|sparsevlm_boost_hybrid|sparsevlm_compensated|sparsevlm_diverse_mmr|sparsevlm_adaptive_diverse_mmr)
+    baseline|attn_score|pre_attn_score|masking_attn_score|tail_masking_attn_score|entropy|random|sparsevlm|sparsevlm_adaptive_stratified|sparsevlm_entropy_alpha|sparsevlm_entropy_alpha_global|sparsevlm_boost|sparsevlm_boost_hybrid|sparsevlm_compensated|sparsevlm_diverse_mmr|sparsevlm_adaptive_diverse_mmr|sparsevlm_scnd|sparsevlm_fast_scnd)
         ;;
     compare)
         echo "Strategy 'compare' has been removed. Please run strategies explicitly." >&2
@@ -83,7 +87,7 @@ case "$STRATEGY" in
         ;;
     *)
         echo "Unknown strategy: $STRATEGY" >&2
-        echo "Supported strategies: baseline, attn_score, pre_attn_score, masking_attn_score, tail_masking_attn_score, entropy, random, sparsevlm, sparsevlm_adaptive_stratified, sparsevlm_entropy_alpha, sparsevlm_entropy_alpha_global, sparsevlm_boost, sparsevlm_boost_hybrid, sparsevlm_compensated, sparsevlm_diverse_mmr, sparsevlm_adaptive_diverse_mmr" >&2
+        echo "Supported strategies: baseline, attn_score, pre_attn_score, masking_attn_score, tail_masking_attn_score, entropy, random, sparsevlm, sparsevlm_adaptive_stratified, sparsevlm_entropy_alpha, sparsevlm_entropy_alpha_global, sparsevlm_boost, sparsevlm_boost_hybrid, sparsevlm_compensated, sparsevlm_diverse_mmr, sparsevlm_adaptive_diverse_mmr, sparsevlm_scnd, sparsevlm_fast_scnd" >&2
         exit 1
         ;;
 esac

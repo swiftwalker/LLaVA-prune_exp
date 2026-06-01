@@ -14,6 +14,8 @@ from .sparsevlm_compensated import SparseVLMCompensatedStrategy
 from .sparsevlm_diverse_mmr import SparseVLMDiverseMMRStrategy
 from .sparsevlm_entropy_alpha import SparseVLMEntropyAlphaStrategy
 from .sparsevlm_entropy_alpha_global import SparseVLMEntropyAlphaGlobalStrategy
+from .sparsevlm_fast_scnd import SparseVLMFastSCNDStrategy
+from .sparsevlm_scnd import SparseVLMSCNDStrategy
 from .tail_masking_attn_score import TailMaskingAttnScoreStrategy
 
 STRATEGY_REGISTRY = {
@@ -31,6 +33,8 @@ STRATEGY_REGISTRY = {
     "sparsevlm_diverse_mmr": SparseVLMDiverseMMRStrategy,
     "sparsevlm_entropy_alpha": SparseVLMEntropyAlphaStrategy,
     "sparsevlm_entropy_alpha_global": SparseVLMEntropyAlphaGlobalStrategy,
+    "sparsevlm_fast_scnd": SparseVLMFastSCNDStrategy,
+    "sparsevlm_scnd": SparseVLMSCNDStrategy,
     "tail_masking_attn_score": TailMaskingAttnScoreStrategy,
 }
 

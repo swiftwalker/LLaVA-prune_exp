@@ -15,7 +15,9 @@
 #   L) sparsevlm_boost_hybrid — layer-wise SparseVLM/boost switching
 #   M) sparsevlm_diverse_mmr — text-saliency candidate pool + diversity MMR selection
 #   N) sparsevlm_adaptive_diverse_mmr — pruning-ratio-adaptive saliency/diversity selection
-#   O) sparsevlm_compensated — SparseVLM scoring + entropy-adaptive fixed-seed compensated sampling
+#   O) sparsevlm_scnd — saliency-constrained native DivPrune + boundary refinement
+#   P) sparsevlm_fast_scnd — low-cost SCND with micro-greedy diversity and cached tie-break
+#   Q) sparsevlm_compensated — SparseVLM scoring + entropy-adaptive fixed-seed compensated sampling
 
 model:
   path: "entropy_exp/models/llava-v1.5-7b"
@@ -31,7 +33,7 @@ inference:
   seed: 42
 
 pruning:
-  strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | tail_masking_attn_score | entropy | random | sparsevlm | sparsevlm_adaptive_stratified | sparsevlm_entropy_alpha | sparsevlm_entropy_alpha_global | sparsevlm_boost | sparsevlm_boost_hybrid | sparsevlm_compensated | sparsevlm_diverse_mmr | sparsevlm_adaptive_diverse_mmr
+  strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | tail_masking_attn_score | entropy | random | sparsevlm | sparsevlm_adaptive_stratified | sparsevlm_entropy_alpha | sparsevlm_entropy_alpha_global | sparsevlm_boost | sparsevlm_boost_hybrid | sparsevlm_compensated | sparsevlm_diverse_mmr | sparsevlm_adaptive_diverse_mmr | sparsevlm_scnd | sparsevlm_fast_scnd
   # --- layer & ratio (paired lists of equal length) ---
   layer_selection: "fixed"          # fixed | dynamic (placeholder)
   prune_layers: [2, 3]             # 剪枝层列表 (0-indexed)
@@ -150,6 +152,43 @@ pruning:
     grid_balance_weight: 0.25
     min_candidate_multiplier: 1.2
     max_candidate_multiplier: 2.5
+    distance_metric: "cosine"
+    use_score_memory: false
+    global_current_weight: 0.5
+    global_ema_decay: 0.6
+  sparsevlm_scnd:
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
+    layer_modes: ["C", "B"]
+    seed_ratio_min: 0.15
+    seed_ratio_max: 0.55
+    seed_pool_multiplier: 2.0
+    saliency_floor_min: 0.65
+    saliency_floor_max: 0.90
+    boundary_ratio: 0.25
+    saliency_repair: true
+    distance_metric: "cosine"
+    use_score_memory: false
+    global_current_weight: 0.5
+    global_ema_decay: 0.6
+  sparsevlm_fast_scnd:
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
+    # null means auto by prune layer count: [F], [F,T], or [F,T,S...].
+    layer_modes: null
+    core_ratio_min: 0.10
+    core_ratio_max: 0.35
+    saliency_pool_multiplier: 1.5
+    reservoir_multiplier: 0.5
+    reservoir_rank_multiplier: 4.0
+    candidate_cap_multiplier: 2.0
+    projection_dim: 64
+    greedy_steps: 16
+    tie_break_band_ratio: 0.10
+    tie_break_band_max: 32
+    cached_diversity_weight: 0.05
     distance_metric: "cosine"
     use_score_memory: false
     global_current_weight: 0.5
