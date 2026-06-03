@@ -49,6 +49,7 @@ class SparseVLMSCNDTests(unittest.TestCase):
             "boundary_ratio": 0.25,
             "saliency_repair": True,
             "distance_metric": "cosine",
+            "selection_backend": "auto",
             "use_score_memory": False,
         }
         config.update(overrides)
@@ -78,6 +79,31 @@ class SparseVLMSCNDTests(unittest.TestCase):
         self.assertEqual(info["selection_rule"], "saliency_constrained_native_divprune")
         self.assertNotIn("grid_quota", info)
         self.assertEqual(info["layer_strategy_effective"], "sparsevlm_scnd")
+        self.assertEqual(info["selection_backend_requested"], "auto")
+        self.assertIn(info["selection_backend_effective"], {"python", "gpu"})
+        self.assertIn("selection_time_ms", info)
+        self.assertIn("distance_time_ms", info)
+
+    def test_selection_backend_validation_and_cpu_auto_fallback(self):
+        strategy = self._strategy(selection_backend="auto")
+        params = strategy._get_scnd_params()
+        self.assertEqual(params["selection_backend"], "auto")
+
+        invalid = self._strategy(selection_backend="bogus")
+        with self.assertRaises(ValueError):
+            invalid._get_scnd_params()
+
+        self._prepare(strategy, 4)
+        attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
+        )
+        keep, info = strategy.compute_keep_mask(attn, 1, 4, 5, 0, current_visual_embeds=torch.eye(4))
+
+        self.assertEqual(keep.numel(), info["target_keep"])
+        self.assertEqual(info["selection_backend_effective"], "python")
 
     def test_seed_pool_uses_native_diversity_not_top_saliency_anchors(self):
         strategy = self._strategy(
@@ -171,6 +197,50 @@ class SparseVLMSCNDTests(unittest.TestCase):
         self.assertEqual(info["boundary_core_indices"].tolist(), [0])
         self.assertEqual(info["boundary_fill_indices"].tolist(), [2])
         self.assertEqual(keep.tolist(), [0, 2])
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for explicit GPU backend equivalence")
+    def test_gpu_backend_matches_python_backend_for_c_and_b_layers(self):
+        cases = [
+            (
+                {"layer_modes": ["C"], "prune_ratio": 0.5, "selection_backend": "python"},
+                {"layer_modes": ["C"], "prune_ratio": 0.5, "selection_backend": "gpu"},
+                [[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
+                torch.tensor([[1.0, 0.0], [0.99, 0.0], [0.0, 1.0], [-1.0, 0.0]], device="cuda"),
+            ),
+            (
+                {"layer_modes": ["B"], "prune_ratio": 0.5, "boundary_ratio": 0.5, "selection_backend": "python"},
+                {"layer_modes": ["B"], "prune_ratio": 0.5, "boundary_ratio": 0.5, "selection_backend": "gpu"},
+                [[0.90, 0.89, 0.88, 0.87], [0.90, 0.89, 0.88, 0.87]],
+                torch.tensor([[1.0, 0.0], [0.99, 0.0], [-1.0, 0.0], [0.0, 1.0]], device="cuda"),
+            ),
+        ]
+
+        for python_overrides, gpu_overrides, values, embeds in cases:
+            keeps = []
+            infos = []
+            for overrides in (python_overrides, gpu_overrides):
+                strategy = self._strategy(**overrides)
+                strategy.prepare_sample(
+                    inputs_embeds=_inputs(4).to("cuda"),
+                    v_token_start=1,
+                    v_token_num=4,
+                    text_token_start=5,
+                    text_token_ids=torch.tensor([11, 12], device="cuda"),
+                    text_special_token_mask=torch.tensor([False, False], device="cuda"),
+                )
+                attn = _full_attention(
+                    seq_len=7,
+                    text_rows=[5, 6],
+                    visual_cols=[1, 2, 3, 4],
+                    values=values,
+                ).to("cuda")
+                keep, info = strategy.compute_keep_mask(attn, 1, 4, 5, 0, current_visual_embeds=embeds)
+                keeps.append(keep.detach().cpu().tolist())
+                infos.append(info)
+
+            self.assertEqual(keeps[0], keeps[1])
+            self.assertEqual(infos[1]["selection_backend_effective"], "gpu")
+            self.assertGreaterEqual(infos[1]["selection_time_ms"], 0.0)
 
     def test_s_layer_matches_sparsevlm_branch(self):
         strategy = SparseVLMSCNDStrategy(

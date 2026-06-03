@@ -169,6 +169,7 @@ pruning:
     boundary_ratio: 0.25
     saliency_repair: true
     distance_metric: "cosine"
+    selection_backend: "auto"
     use_score_memory: false
     global_current_weight: 0.5
     global_ema_decay: 0.6
@@ -189,6 +190,29 @@ pruning:
     tie_break_band_ratio: 0.10
     tie_break_band_max: 32
     cached_diversity_weight: 0.05
+    distance_metric: "cosine"
+    use_score_memory: false
+    global_current_weight: 0.5
+    global_ema_decay: 0.6
+  sparsevlm_budget_candidate_scnd:
+    fallback_topk: 4
+    exclude_special_tokens: true
+    min_visual_tokens_after_prune: 16
+    # budget_target=auto recognizes the three SV1-aligned retain targets.
+    budget_target: "auto"
+    layer_policy: "auto"
+    layer_modes: null
+    seed_ratio_min: 0.15
+    seed_ratio_max: 0.55
+    seed_pool_multiplier: 2.0
+    # null means use target-aware Candidate-SCND v3 profile defaults.
+    saliency_floor_min: null
+    saliency_floor_max: null
+    boundary_ratio: null
+    boundary_pool_multiplier: null
+    cached_diversity_weight: null
+    boundary_gate_min: null
+    saliency_repair: true
     distance_metric: "cosine"
     use_score_memory: false
     global_current_weight: 0.5

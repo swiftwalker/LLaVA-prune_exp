@@ -10,9 +10,11 @@ SparseVLM saliency top-k (S).
 from __future__ import annotations
 
 import math
+import time
 from typing import Dict, List, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 
 from .sparsevlm_adaptive_stratified import compute_target_keep_count
 from .sparsevlm_diverse_mmr import (
@@ -25,10 +27,28 @@ from .sparsevlm_score_memory import compute_entropy_stats, deterministic_descend
 
 
 VALID_LAYER_MODES = {"C", "B", "S"}
+VALID_SELECTION_BACKENDS = {"auto", "gpu", "python"}
 
 
 def _clamp01(value: float) -> float:
     return min(max(float(value), 0.0), 1.0)
+
+
+def _sync_if_cuda(tensor: Optional[torch.Tensor]) -> None:
+    if tensor is not None and tensor.is_cuda:
+        torch.cuda.synchronize(tensor.device)
+
+
+def _selected_mean_pairwise_distance_from_embeds(embeds: torch.Tensor, keep_indices: torch.Tensor) -> float:
+    selected_count = int(keep_indices.numel())
+    if selected_count <= 1:
+        return 0.0
+    normalized = F.normalize(embeds.to(dtype=torch.float32), dim=-1, eps=1e-6)
+    selected = normalized.index_select(0, keep_indices.to(device=normalized.device, dtype=torch.long))
+    distance = torch.clamp((1.0 - selected @ selected.transpose(0, 1)) / 2.0, min=0.0, max=1.0)
+    total = distance.sum()
+    denom = selected_count * (selected_count - 1)
+    return float((total / denom).item())
 
 
 class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
@@ -73,6 +93,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         boundary_ratio = float(self.config.get("boundary_ratio", 0.25))
         distance_metric = str(self.config.get("distance_metric", "cosine")).lower()
         saliency_repair = bool(self.config.get("saliency_repair", True))
+        selection_backend = str(self.config.get("selection_backend", "auto")).lower()
 
         if not 0.0 <= seed_ratio_min <= seed_ratio_max <= 1.0:
             raise ValueError(
@@ -90,6 +111,11 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             raise ValueError(f"boundary_ratio must be in [0, 1], got {boundary_ratio}")
         if distance_metric != "cosine":
             raise ValueError(f"Only distance_metric=cosine is supported, got {distance_metric!r}")
+        if selection_backend not in VALID_SELECTION_BACKENDS:
+            raise ValueError(
+                f"sparsevlm_scnd.selection_backend only supports {sorted(VALID_SELECTION_BACKENDS)}, "
+                f"got {selection_backend!r}"
+            )
 
         return {
             "seed_ratio_min": seed_ratio_min,
@@ -100,11 +126,73 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "boundary_ratio": boundary_ratio,
             "distance_metric": distance_metric,
             "saliency_repair": saliency_repair,
+            "selection_backend": selection_backend,
         }
 
     @staticmethod
     def _score_list(scores: torch.Tensor) -> List[float]:
         return [float(value) for value in scores.detach().cpu().tolist()]
+
+    @staticmethod
+    def _descending_indices_tensor(scores: torch.Tensor) -> torch.Tensor:
+        """Return score-descending indices with stable token-index tie breaking."""
+        return torch.argsort(scores.to(dtype=torch.float32), descending=True, stable=True)
+
+    @staticmethod
+    def _best_high_gain_saliency_low_index(
+        candidate_mask: torch.Tensor,
+        gains: torch.Tensor,
+        saliency_score: torch.Tensor,
+    ) -> torch.Tensor:
+        if not bool(candidate_mask.any().item()):
+            raise ValueError("candidate_mask must contain at least one candidate")
+        gains_f = gains.to(dtype=torch.float32)
+        saliency_f = saliency_score.to(dtype=torch.float32)
+        neg_inf = torch.tensor(float("-inf"), device=gains.device, dtype=torch.float32)
+        masked_gains = torch.where(candidate_mask, gains_f, neg_inf)
+        best_gain = masked_gains.max()
+        gain_mask = candidate_mask & (gains_f == best_gain)
+        masked_saliency = torch.where(gain_mask, saliency_f, neg_inf)
+        best_saliency = masked_saliency.max()
+        final_mask = gain_mask & (saliency_f == best_saliency)
+        indices = torch.arange(int(candidate_mask.numel()), device=candidate_mask.device, dtype=torch.float32)
+        priority = torch.where(final_mask, -indices, neg_inf)
+        return torch.argmax(priority).to(dtype=torch.long)
+
+    @staticmethod
+    def _best_high_saliency_low_index(candidate_mask: torch.Tensor, saliency_score: torch.Tensor) -> torch.Tensor:
+        if not bool(candidate_mask.any().item()):
+            raise ValueError("candidate_mask must contain at least one candidate")
+        saliency_f = saliency_score.to(dtype=torch.float32)
+        neg_inf = torch.tensor(float("-inf"), device=saliency_score.device, dtype=torch.float32)
+        masked_saliency = torch.where(candidate_mask, saliency_f, neg_inf)
+        best_saliency = masked_saliency.max()
+        final_mask = candidate_mask & (saliency_f == best_saliency)
+        indices = torch.arange(int(candidate_mask.numel()), device=candidate_mask.device, dtype=torch.float32)
+        priority = torch.where(final_mask, -indices, neg_inf)
+        return torch.argmax(priority).to(dtype=torch.long)
+
+    @staticmethod
+    def _best_low_saliency_low_contribution_high_index(
+        candidate_mask: torch.Tensor,
+        saliency_score: torch.Tensor,
+        contributions: torch.Tensor,
+    ) -> torch.Tensor:
+        if not bool(candidate_mask.any().item()):
+            raise ValueError("candidate_mask must contain at least one candidate")
+        saliency_f = saliency_score.to(dtype=torch.float32)
+        contrib_f = contributions.to(dtype=torch.float32)
+        pos_inf = torch.tensor(float("inf"), device=saliency_score.device, dtype=torch.float32)
+        neg_inf = torch.tensor(float("-inf"), device=saliency_score.device, dtype=torch.float32)
+        masked_saliency = torch.where(candidate_mask, saliency_f, pos_inf)
+        min_saliency = masked_saliency.min()
+        saliency_mask = candidate_mask & (saliency_f == min_saliency)
+        masked_contrib = torch.where(saliency_mask, contrib_f, pos_inf)
+        min_contrib = masked_contrib.min()
+        final_mask = saliency_mask & (contrib_f == min_contrib)
+        indices = torch.arange(int(candidate_mask.numel()), device=candidate_mask.device, dtype=torch.float32)
+        priority = torch.where(final_mask, indices, neg_inf)
+        return torch.argmax(priority).to(dtype=torch.long)
 
     @staticmethod
     def _ordered_by_distance_then_saliency(
@@ -146,6 +234,57 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             best_idx = int(remaining[best_position])
             selected.append(best_idx)
             gains.append(float(gain_values[best_position]))
+
+        return selected, gains
+
+    def _max_min_select_from_pool_gpu(
+        self,
+        distance: torch.Tensor,
+        saliency_score: torch.Tensor,
+        pool_indices: torch.Tensor,
+        select_count: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        pool_indices = pool_indices.to(device=distance.device, dtype=torch.long)
+        if select_count <= 0 or int(pool_indices.numel()) == 0:
+            return (
+                torch.empty(0, device=distance.device, dtype=torch.long),
+                torch.empty(0, device=distance.device, dtype=torch.float32),
+            )
+
+        num_visual = int(saliency_score.numel())
+        pool_mask = torch.zeros(num_visual, device=distance.device, dtype=torch.bool)
+        pool_mask[pool_indices] = True
+        saliency_desc = self._descending_indices_tensor(saliency_score)
+        ordered_pool = saliency_desc[pool_mask.index_select(0, saliency_desc)]
+        limit = min(int(select_count), int(ordered_pool.numel()))
+        if limit <= 0:
+            return (
+                torch.empty(0, device=distance.device, dtype=torch.long),
+                torch.empty(0, device=distance.device, dtype=torch.float32),
+            )
+
+        selected = torch.empty(limit, device=distance.device, dtype=torch.long)
+        gains = torch.empty(limit, device=distance.device, dtype=torch.float32)
+        selected_mask = torch.zeros(num_visual, device=distance.device, dtype=torch.bool)
+
+        first = ordered_pool[0]
+        selected[0] = first
+        gains[0] = 0.0
+        selected_mask[first] = True
+        min_distance = distance.index_select(1, first.view(1)).flatten().to(dtype=torch.float32)
+        selected_count = 1
+
+        while selected_count < limit:
+            candidate_mask = pool_mask & ~selected_mask
+            best_idx = self._best_high_gain_saliency_low_index(candidate_mask, min_distance, saliency_score)
+            selected[selected_count] = best_idx
+            gains[selected_count] = min_distance[best_idx]
+            selected_mask[best_idx] = True
+            min_distance = torch.minimum(
+                min_distance,
+                distance.index_select(1, best_idx.view(1)).flatten().to(dtype=torch.float32),
+            )
+            selected_count += 1
 
         return selected, gains
 
@@ -227,6 +366,61 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             )
 
         return sorted(selected_set), repair_replacements
+
+    def _repair_saliency_mass_gpu(
+        self,
+        selected_mask: torch.Tensor,
+        seed_mask: torch.Tensor,
+        saliency_score: torch.Tensor,
+        distance: torch.Tensor,
+        saliency_mass_floor: torch.Tensor,
+    ) -> Tuple[torch.Tensor, List[Dict[str, float | int]]]:
+        positive_saliency = saliency_score.to(dtype=torch.float32).clamp_min(0.0)
+        selected_mask = selected_mask.clone()
+        seed_mask = seed_mask.to(device=selected_mask.device, dtype=torch.bool)
+        repair_replacements: List[Dict[str, float | int]] = []
+
+        selected_mass = positive_saliency[selected_mask].sum()
+        while float((selected_mass + 1e-8 < saliency_mass_floor).item()):
+            unselected_mask = ~selected_mask
+            if not bool(unselected_mask.any().item()):
+                break
+            incoming = self._best_high_saliency_low_index(unselected_mask, positive_saliency)
+
+            selected_indices = torch.nonzero(selected_mask, as_tuple=False).flatten()
+            contributions = torch.zeros_like(positive_saliency)
+            if int(selected_indices.numel()) > 1:
+                selected_distance = distance.index_select(0, selected_indices).index_select(1, selected_indices)
+                eye = torch.eye(int(selected_indices.numel()), device=distance.device, dtype=torch.bool)
+                selected_distance = selected_distance.masked_fill(eye, float("inf"))
+                contributions.index_copy_(0, selected_indices, selected_distance.min(dim=1).values)
+
+            replaceable_mask = selected_mask & ~seed_mask
+            if not bool(replaceable_mask.any().item()):
+                replaceable_mask = selected_mask
+            outgoing = self._best_low_saliency_low_contribution_high_index(
+                replaceable_mask,
+                positive_saliency,
+                contributions,
+            )
+
+            incoming_saliency = positive_saliency[incoming]
+            outgoing_saliency = positive_saliency[outgoing]
+            if not bool((incoming_saliency > outgoing_saliency + 1e-8).item()):
+                break
+
+            selected_mask[outgoing] = False
+            selected_mask[incoming] = True
+            selected_mass = selected_mass + incoming_saliency - outgoing_saliency
+            repair_replacements.append(
+                {
+                    "out": int(outgoing.item()),
+                    "in": int(incoming.item()),
+                    "mass_gain": float((incoming_saliency - outgoing_saliency).item()),
+                }
+            )
+
+        return selected_mask, repair_replacements
 
     def _saliency_constrained_native_divprune_select(
         self,
@@ -357,6 +551,167 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "repair_replacements": repair_replacements,
         }
 
+    def _saliency_constrained_native_divprune_select_gpu(
+        self,
+        saliency_score: torch.Tensor,
+        distance: torch.Tensor,
+        target_keep: int,
+        entropy_norm: float,
+        *,
+        seed_ratio_min: float,
+        seed_ratio_max: float,
+        seed_pool_multiplier: float,
+        saliency_floor_min: float,
+        saliency_floor_max: float,
+        saliency_repair: bool,
+    ) -> Dict[str, object]:
+        num_visual = int(saliency_score.numel())
+        device = saliency_score.device
+        if target_keep <= 0:
+            empty_long = torch.empty(0, device=device, dtype=torch.long)
+            return {
+                "keep_indices": empty_long,
+                "seed_ratio": 0.0,
+                "seed_count": 0,
+                "seed_pool_indices": empty_long,
+                "seed_indices": empty_long,
+                "mmr_selected_order": empty_long,
+                "diversity_gain": torch.empty(0, device=device, dtype=torch.float32),
+                "saliency_floor_eta": 0.0,
+                "saliency_mass_floor": 0.0,
+                "saliency_mass_selected": 0.0,
+                "saliency_mass_topk": 0.0,
+                "feasible_candidate_count": 0,
+                "repair_replacements": [],
+            }
+
+        keep_count = min(int(target_keep), num_visual)
+        entropy_norm = _clamp01(entropy_norm)
+        positive_saliency = saliency_score.to(dtype=torch.float32).clamp_min(0.0)
+        saliency_desc = self._descending_indices_tensor(saliency_score)
+        topk_indices = saliency_desc[:keep_count]
+        saliency_mass_topk = positive_saliency.index_select(0, topk_indices).sum()
+
+        seed_ratio = seed_ratio_min + (seed_ratio_max - seed_ratio_min) * (1.0 - entropy_norm)
+        seed_count = min(keep_count, int(math.ceil(float(keep_count) * seed_ratio)))
+        if keep_count > 0 and seed_ratio > 0.0:
+            seed_count = max(1, seed_count)
+        seed_pool_count = min(num_visual, max(seed_count, int(math.ceil(float(seed_count) * seed_pool_multiplier))))
+        seed_pool_indices = saliency_desc[:seed_pool_count]
+        seed_indices, seed_gains = self._max_min_select_from_pool_gpu(
+            distance=distance,
+            saliency_score=saliency_score,
+            pool_indices=seed_pool_indices,
+            select_count=seed_count,
+        )
+
+        eta = saliency_floor_min + (saliency_floor_max - saliency_floor_min) * (1.0 - entropy_norm)
+        saliency_mass_floor = saliency_mass_topk * float(eta)
+        selected_mask = torch.zeros(num_visual, device=device, dtype=torch.bool)
+        seed_mask = torch.zeros(num_visual, device=device, dtype=torch.bool)
+        selected_order = torch.empty(keep_count, device=device, dtype=torch.long)
+        diversity_gains = torch.zeros(keep_count, device=device, dtype=torch.float32)
+
+        selected_count = int(seed_indices.numel())
+        if selected_count > 0:
+            selected_mask[seed_indices] = True
+            seed_mask[seed_indices] = True
+            selected_order[:selected_count] = seed_indices
+            diversity_gains[:selected_count] = seed_gains
+            min_distance = distance.index_select(1, seed_indices).min(dim=1).values.to(dtype=torch.float32)
+        else:
+            min_distance = torch.zeros(num_visual, device=device, dtype=torch.float32)
+        selected_mass = positive_saliency[selected_mask].sum()
+        feasible_candidate_count = 0
+
+        while selected_count < keep_count:
+            remaining_mask = ~selected_mask
+            if not bool(remaining_mask.any().item()):
+                break
+
+            slots_after_candidate = keep_count - selected_count - 1
+            if slots_after_candidate <= 0:
+                possible_remaining = torch.zeros(num_visual, device=device, dtype=torch.float32)
+            else:
+                remaining_order = saliency_desc[remaining_mask.index_select(0, saliency_desc)]
+                remaining_saliency = positive_saliency.index_select(0, remaining_order)
+                if int(remaining_order.numel()) == 0:
+                    possible_remaining = torch.zeros(num_visual, device=device, dtype=torch.float32)
+                else:
+                    rank_by_index = torch.full(
+                        (num_visual,),
+                        fill_value=num_visual + 1,
+                        device=device,
+                        dtype=torch.long,
+                    )
+                    rank_by_index.index_copy_(
+                        0,
+                        remaining_order,
+                        torch.arange(int(remaining_order.numel()), device=device, dtype=torch.long),
+                    )
+                    top_s_count = min(slots_after_candidate, int(remaining_order.numel()))
+                    top_s_sum = remaining_saliency[:top_s_count].sum()
+                    top_s_plus_count = min(slots_after_candidate + 1, int(remaining_order.numel()))
+                    top_s_plus_sum = remaining_saliency[:top_s_plus_count].sum()
+                    candidate_in_top_s = rank_by_index < slots_after_candidate
+                    possible_remaining = torch.where(
+                        candidate_in_top_s,
+                        top_s_plus_sum - positive_saliency,
+                        top_s_sum,
+                    )
+
+            possible_mass = selected_mass + positive_saliency + possible_remaining
+            feasible_mask = remaining_mask & (possible_mass + 1e-8 >= saliency_mass_floor)
+            feasible_count = int(feasible_mask.sum().item())
+            feasible_candidate_count += feasible_count
+            candidate_mask = feasible_mask if feasible_count > 0 else remaining_mask
+
+            gains = min_distance if selected_count > 0 else torch.zeros_like(min_distance)
+            best_idx = self._best_high_gain_saliency_low_index(candidate_mask, gains, saliency_score)
+            selected_order[selected_count] = best_idx
+            diversity_gains[selected_count] = gains[best_idx]
+            selected_mask[best_idx] = True
+            selected_mass = selected_mass + positive_saliency[best_idx]
+            if selected_count == 0:
+                min_distance = distance.index_select(1, best_idx.view(1)).flatten().to(dtype=torch.float32)
+            else:
+                min_distance = torch.minimum(
+                    min_distance,
+                    distance.index_select(1, best_idx.view(1)).flatten().to(dtype=torch.float32),
+                )
+            selected_count += 1
+
+        selected_order = selected_order[:selected_count]
+        diversity_gains = diversity_gains[:selected_count]
+
+        repair_replacements: List[Dict[str, float | int]] = []
+        if saliency_repair and selected_count > 0:
+            selected_mask, repair_replacements = self._repair_saliency_mass_gpu(
+                selected_mask=selected_mask,
+                seed_mask=seed_mask,
+                saliency_score=saliency_score,
+                distance=distance,
+                saliency_mass_floor=saliency_mass_floor,
+            )
+            selected_mass = positive_saliency[selected_mask].sum()
+
+        keep_indices = torch.nonzero(selected_mask, as_tuple=False).flatten()
+        return {
+            "keep_indices": keep_indices,
+            "seed_ratio": float(seed_ratio),
+            "seed_count": int(seed_count),
+            "seed_pool_indices": seed_pool_indices.to(device=device, dtype=torch.long),
+            "seed_indices": torch.sort(seed_indices).values,
+            "mmr_selected_order": selected_order,
+            "diversity_gain": diversity_gains,
+            "saliency_floor_eta": float(eta),
+            "saliency_mass_floor": float(saliency_mass_floor.item()),
+            "saliency_mass_selected": float(selected_mass.item()),
+            "saliency_mass_topk": float(saliency_mass_topk.item()),
+            "feasible_candidate_count": int(feasible_candidate_count),
+            "repair_replacements": repair_replacements,
+        }
+
     def _margin_confidence(self, saliency_score: torch.Tensor, target_keep: int) -> float:
         num_visual = int(saliency_score.numel())
         if target_keep <= 0 or target_keep >= num_visual:
@@ -460,6 +815,127 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "diversity_gain": torch.tensor([0.0] * len(core) + fill_gains, device=saliency_score.device, dtype=torch.float32),
         }
 
+    def _boundary_refinement_select_gpu(
+        self,
+        saliency_score: torch.Tensor,
+        margin_score: torch.Tensor,
+        current_visual_embeds: torch.Tensor,
+        target_keep: int,
+        entropy_norm: float,
+        boundary_ratio: float,
+    ) -> Dict[str, object]:
+        num_visual = int(saliency_score.numel())
+        device = saliency_score.device
+        keep_count = min(max(int(target_keep), 0), num_visual)
+        if keep_count <= 0:
+            empty = torch.empty(0, device=device, dtype=torch.long)
+            return {
+                "keep_indices": empty,
+                "boundary_count": 0,
+                "boundary_core_indices": empty,
+                "boundary_pool_indices": empty,
+                "boundary_fill_indices": empty,
+                "margin_confidence": 1.0,
+                "mmr_selected_order": empty,
+                "diversity_gain": torch.empty(0, device=device, dtype=torch.float32),
+                "distance_cost_proxy": 0,
+            }
+
+        order = self._descending_indices_tensor(saliency_score)
+        margin_confidence = self._margin_confidence(margin_score, keep_count)
+        raw_boundary = float(boundary_ratio) * float(keep_count) * _clamp01(entropy_norm) * (1.0 - margin_confidence)
+        boundary_count = min(keep_count, int(math.ceil(raw_boundary)))
+
+        if boundary_count <= 0:
+            keep = torch.sort(order[:keep_count]).values
+            return {
+                "keep_indices": keep,
+                "boundary_count": 0,
+                "boundary_core_indices": keep,
+                "boundary_pool_indices": torch.empty(0, device=device, dtype=torch.long),
+                "boundary_fill_indices": torch.empty(0, device=device, dtype=torch.long),
+                "margin_confidence": float(margin_confidence),
+                "mmr_selected_order": keep,
+                "diversity_gain": torch.zeros(int(keep.numel()), device=device, dtype=torch.float32),
+                "distance_cost_proxy": 0,
+            }
+
+        core_count = keep_count - boundary_count
+        core = order[:core_count]
+        pool_count = min(num_visual - core_count, max(boundary_count, boundary_count * 2))
+        boundary_pool = order[core_count:core_count + pool_count]
+        normalized = F.normalize(current_visual_embeds.to(dtype=torch.float32), dim=-1, eps=1e-6)
+
+        selected_mask = torch.zeros(num_visual, device=device, dtype=torch.bool)
+        if int(core.numel()) > 0:
+            selected_mask[core] = True
+        active_pool_mask = torch.ones(int(boundary_pool.numel()), device=device, dtype=torch.bool)
+        selected_order = torch.empty(keep_count, device=device, dtype=torch.long)
+        diversity_gain = torch.zeros(keep_count, device=device, dtype=torch.float32)
+        selected_count = int(core.numel())
+        if selected_count > 0:
+            selected_order[:selected_count] = core
+            core_embeds = normalized.index_select(0, core)
+            pool_embeds = normalized.index_select(0, boundary_pool)
+            min_distance = torch.clamp((1.0 - pool_embeds @ core_embeds.transpose(0, 1)) / 2.0, min=0.0, max=1.0).min(dim=1).values
+        else:
+            min_distance = torch.zeros(int(boundary_pool.numel()), device=device, dtype=torch.float32)
+
+        fills = torch.empty(boundary_count, device=device, dtype=torch.long)
+        fill_gains = torch.zeros(boundary_count, device=device, dtype=torch.float32)
+        fill_count = 0
+        distance_cost_proxy = int(boundary_pool.numel()) * max(selected_count, 1)
+
+        while fill_count < boundary_count and bool(active_pool_mask.any().item()):
+            candidate_mask = torch.zeros(num_visual, device=device, dtype=torch.bool)
+            candidate_indices = boundary_pool[active_pool_mask]
+            candidate_mask[candidate_indices] = True
+            gain_full = torch.zeros(num_visual, device=device, dtype=torch.float32)
+            gain_full.index_copy_(0, boundary_pool, min_distance)
+            best_idx = self._best_high_gain_saliency_low_index(candidate_mask, gain_full, saliency_score)
+            best_gain = gain_full[best_idx]
+            previous_selected_count = selected_count
+
+            fills[fill_count] = best_idx
+            fill_gains[fill_count] = best_gain
+            selected_order[selected_count] = best_idx
+            diversity_gain[selected_count] = best_gain
+            selected_mask[best_idx] = True
+            selected_count += 1
+            fill_count += 1
+
+            active_pool_mask = active_pool_mask & (boundary_pool != best_idx)
+            if bool(active_pool_mask.any().item()):
+                pool_embeds = normalized.index_select(0, boundary_pool)
+                best_embed = normalized.index_select(0, best_idx.view(1)).transpose(0, 1)
+                dist_to_best = torch.clamp((1.0 - (pool_embeds @ best_embed).flatten()) / 2.0, min=0.0, max=1.0)
+                min_distance = dist_to_best if previous_selected_count == 0 else torch.minimum(min_distance, dist_to_best)
+                distance_cost_proxy += int(boundary_pool.numel())
+
+        if selected_count < keep_count:
+            for idx_tensor in order:
+                idx = int(idx_tensor.item())
+                if bool(selected_mask[idx].item()):
+                    continue
+                selected_order[selected_count] = idx_tensor
+                selected_mask[idx_tensor] = True
+                selected_count += 1
+                if selected_count == keep_count:
+                    break
+
+        keep = torch.nonzero(selected_mask, as_tuple=False).flatten()
+        return {
+            "keep_indices": keep,
+            "boundary_count": int(boundary_count),
+            "boundary_core_indices": torch.sort(core).values,
+            "boundary_pool_indices": boundary_pool,
+            "boundary_fill_indices": torch.sort(fills[:fill_count]).values,
+            "margin_confidence": float(margin_confidence),
+            "mmr_selected_order": selected_order[:selected_count],
+            "diversity_gain": diversity_gain[:selected_count],
+            "distance_cost_proxy": int(distance_cost_proxy),
+        }
+
     def compute_keep_mask(
         self,
         attn_weights: Optional[torch.Tensor],
@@ -513,6 +989,16 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             )
 
         params = self._get_scnd_params()
+        requested_backend = str(params["selection_backend"])
+        if requested_backend == "python":
+            selection_backend_effective = "python"
+        elif requested_backend == "gpu" and current_visual_embeds.is_cuda:
+            selection_backend_effective = "gpu"
+        elif requested_backend == "auto" and current_visual_embeds.is_cuda:
+            selection_backend_effective = "gpu"
+        else:
+            selection_backend_effective = "python"
+
         memory = self._score_memory_inputs(
             attn_weights=attn_weights,
             v_token_start=v_token_start,
@@ -532,31 +1018,79 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             prune_ratio=prune_ratio,
             min_visual_tokens_after_prune=min_visual_tokens_after_prune,
         )
-        distance = _cosine_distance_matrix(current_visual_embeds).to(device=mixed_score.device)
+        distance: Optional[torch.Tensor] = None
+        distance_time_ms = 0.0
+        selection_start = 0.0
+        selection_time_ms = 0.0
+        distance_cost_proxy = 0
+
+        needs_full_distance = selection_backend_effective == "python" or mode == "C"
+        if needs_full_distance:
+            _sync_if_cuda(current_visual_embeds)
+            distance_start = time.perf_counter()
+            distance = _cosine_distance_matrix(current_visual_embeds).to(device=mixed_score.device)
+            _sync_if_cuda(distance)
+            distance_time_ms = (time.perf_counter() - distance_start) * 1000.0
+            distance_cost_proxy = int(v_token_num) * int(v_token_num)
 
         if mode == "C":
-            selection = self._saliency_constrained_native_divprune_select(
-                saliency_score=mixed_score,
-                distance=distance,
-                target_keep=target_keep,
-                entropy_norm=entropy_norm,
-                seed_ratio_min=float(params["seed_ratio_min"]),
-                seed_ratio_max=float(params["seed_ratio_max"]),
-                seed_pool_multiplier=float(params["seed_pool_multiplier"]),
-                saliency_floor_min=float(params["saliency_floor_min"]),
-                saliency_floor_max=float(params["saliency_floor_max"]),
-                saliency_repair=bool(params["saliency_repair"]),
-            )
+            assert distance is not None
+            _sync_if_cuda(distance)
+            selection_start = time.perf_counter()
+            if selection_backend_effective == "gpu":
+                selection = self._saliency_constrained_native_divprune_select_gpu(
+                    saliency_score=mixed_score,
+                    distance=distance,
+                    target_keep=target_keep,
+                    entropy_norm=entropy_norm,
+                    seed_ratio_min=float(params["seed_ratio_min"]),
+                    seed_ratio_max=float(params["seed_ratio_max"]),
+                    seed_pool_multiplier=float(params["seed_pool_multiplier"]),
+                    saliency_floor_min=float(params["saliency_floor_min"]),
+                    saliency_floor_max=float(params["saliency_floor_max"]),
+                    saliency_repair=bool(params["saliency_repair"]),
+                )
+            else:
+                selection = self._saliency_constrained_native_divprune_select(
+                    saliency_score=mixed_score,
+                    distance=distance,
+                    target_keep=target_keep,
+                    entropy_norm=entropy_norm,
+                    seed_ratio_min=float(params["seed_ratio_min"]),
+                    seed_ratio_max=float(params["seed_ratio_max"]),
+                    seed_pool_multiplier=float(params["seed_pool_multiplier"]),
+                    saliency_floor_min=float(params["saliency_floor_min"]),
+                    saliency_floor_max=float(params["saliency_floor_max"]),
+                    saliency_repair=bool(params["saliency_repair"]),
+                )
+            _sync_if_cuda(distance)
+            selection_time_ms = (time.perf_counter() - selection_start) * 1000.0
             selection_rule = "saliency_constrained_native_divprune"
         elif mode == "B":
-            selection = self._boundary_refinement_select(
-                saliency_score=mixed_score,
-                margin_score=visual_scores,
-                distance=distance,
-                target_keep=target_keep,
-                entropy_norm=entropy_norm,
-                boundary_ratio=float(params["boundary_ratio"]),
-            )
+            _sync_if_cuda(current_visual_embeds)
+            selection_start = time.perf_counter()
+            if selection_backend_effective == "gpu":
+                selection = self._boundary_refinement_select_gpu(
+                    saliency_score=mixed_score,
+                    margin_score=visual_scores,
+                    current_visual_embeds=current_visual_embeds,
+                    target_keep=target_keep,
+                    entropy_norm=entropy_norm,
+                    boundary_ratio=float(params["boundary_ratio"]),
+                )
+                distance_cost_proxy = int(selection.get("distance_cost_proxy", 0))
+            else:
+                assert distance is not None
+                selection = self._boundary_refinement_select(
+                    saliency_score=mixed_score,
+                    margin_score=visual_scores,
+                    distance=distance,
+                    target_keep=target_keep,
+                    entropy_norm=entropy_norm,
+                    boundary_ratio=float(params["boundary_ratio"]),
+                )
+            _sync_if_cuda(current_visual_embeds)
+            selection_time_ms = (time.perf_counter() - selection_start) * 1000.0
             selection_rule = "boundary_only_diversity_refinement"
         else:  # defensive; mode validation happens in _layer_mode.
             raise ValueError(f"Unsupported sparsevlm_scnd layer mode: {mode}")
@@ -606,7 +1140,16 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "saliency_floor_max": params["saliency_floor_max"],
             "boundary_ratio": params["boundary_ratio"],
             "saliency_repair": params["saliency_repair"],
-            "mean_selected_pairwise_distance": _selected_mean_pairwise_distance(distance, keep_indices),
+            "selection_backend_requested": requested_backend,
+            "selection_backend_effective": selection_backend_effective,
+            "distance_time_ms": float(distance_time_ms),
+            "selection_time_ms": float(selection_time_ms),
+            "distance_cost_proxy": int(distance_cost_proxy),
+            "mean_selected_pairwise_distance": (
+                _selected_mean_pairwise_distance(distance, keep_indices)
+                if distance is not None
+                else _selected_mean_pairwise_distance_from_embeds(current_visual_embeds, keep_indices)
+            ),
             "retained_saliency_mass_ratio": _saliency_mass_ratio(visual_scores, keep_indices),
             "global_prune_step": memory["global_prune_step"],
             "global_current_weight": memory["global_current_weight"],

@@ -47,6 +47,7 @@ SUPPORTED_STRATEGIES = {
     "sparsevlm_adaptive_stratified",
     "sparsevlm_boost",
     "sparsevlm_boost_hybrid",
+    "sparsevlm_budget_candidate_scnd",
     "sparsevlm_compensated",
     "sparsevlm_diverse_mmr",
     "sparsevlm_entropy_alpha",

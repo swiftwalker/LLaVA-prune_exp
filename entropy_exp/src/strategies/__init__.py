@@ -10,6 +10,7 @@ from .sparsevlm_adaptive_stratified import SparseVLMAdaptiveStratifiedStrategy
 from .sparsevlm_adaptive_diverse_mmr import SparseVLMAdaptiveDiverseMMRStrategy
 from .sparsevlm_boost import SparseVLMBoostStrategy
 from .sparsevlm_boost_hybrid import SparseVLMBoostHybridStrategy
+from .sparsevlm_budget_candidate_scnd import SparseVLMBudgetCandidateSCNDStrategy
 from .sparsevlm_compensated import SparseVLMCompensatedStrategy
 from .sparsevlm_diverse_mmr import SparseVLMDiverseMMRStrategy
 from .sparsevlm_entropy_alpha import SparseVLMEntropyAlphaStrategy
@@ -29,6 +30,7 @@ STRATEGY_REGISTRY = {
     "sparsevlm_adaptive_stratified": SparseVLMAdaptiveStratifiedStrategy,
     "sparsevlm_boost": SparseVLMBoostStrategy,
     "sparsevlm_boost_hybrid": SparseVLMBoostHybridStrategy,
+    "sparsevlm_budget_candidate_scnd": SparseVLMBudgetCandidateSCNDStrategy,
     "sparsevlm_compensated": SparseVLMCompensatedStrategy,
     "sparsevlm_diverse_mmr": SparseVLMDiverseMMRStrategy,
     "sparsevlm_entropy_alpha": SparseVLMEntropyAlphaStrategy,

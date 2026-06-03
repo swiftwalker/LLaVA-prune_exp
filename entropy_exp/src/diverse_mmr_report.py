@@ -23,6 +23,10 @@ CONFIG_ORDER = [
     "C-B-S",
     "F-T-S",
     "F-S-S",
+    "BC-C-S-S",
+    "BC-C-B-S",
+    "BC-C-B-B",
+    "BC-AUTO",
 ]
 TARGET_BY_RATIO = {
     (0.4791667, 0.3333333, 0.45): "retain192",
@@ -30,6 +34,11 @@ TARGET_BY_RATIO = {
     (0.8854167, 0.5454545, 0.4333333): "retain64",
 }
 TARGET_ORDER = ["retain192", "retain128", "retain64"]
+BC_AUTO_BY_TARGET = {
+    "retain192": "BC-C-S-S",
+    "retain128": "BC-C-B-S",
+    "retain64": "BC-C-B-B",
+}
 
 
 def ensure_dir(path: Path) -> Path:
@@ -107,6 +116,21 @@ def config_name(row: dict[str, str], pruning: dict[str, Any]) -> str | None:
             return "F-T-S"
         if modes == ("F", "S", "S"):
             return "F-S-S"
+    if strategy == "sparsevlm_budget_candidate_scnd":
+        modes = mode_tuple((pruning.get("sparsevlm_budget_candidate_scnd") or {}).get("layer_modes"))
+        if modes is None:
+            target = TARGET_BY_RATIO.get(ratio_key(pruning.get("prune_ratio")))
+            modes = {
+                "retain192": ("C", "S", "S"),
+                "retain128": ("C", "B", "S"),
+                "retain64": ("C", "B", "B"),
+            }.get(target)
+        if modes == ("C", "S", "S"):
+            return "BC-C-S-S"
+        if modes == ("C", "B", "S"):
+            return "BC-C-B-S"
+        if modes == ("C", "B", "B"):
+            return "BC-C-B-B"
     return None
 
 
@@ -177,8 +201,18 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
     boundary_counts: list[float] = []
     core_ratios: list[float] = []
     greedy_steps_used: list[float] = []
+    diversity_steps_budget: list[float] = []
+    diversity_steps_used: list[float] = []
     tie_break_band_counts: list[float] = []
+    candidate_pool_sizes: list[float] = []
+    reservoir_sizes: list[float] = []
+    global_reservoir_sizes: list[float] = []
+    saliency_core_counts: list[float] = []
+    native_boundary_flags: list[float] = []
+    selection_times_ms: list[float] = []
+    distance_cost_proxies: list[float] = []
     selection_rules: list[str] = []
+    profile_versions: list[str] = []
 
     samples_read = 0
     with stats_path.open("r", encoding="utf-8") as handle:
@@ -222,10 +256,30 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
                     core_ratios.append(float(value))
                 elif field == "greedy_steps_used" and value is not None:
                     greedy_steps_used.append(float(value))
+                elif field == "diversity_steps_budget" and value is not None:
+                    diversity_steps_budget.append(float(value))
+                elif field == "diversity_steps_used" and value is not None:
+                    diversity_steps_used.append(float(value))
                 elif field == "tie_break_band_count" and value is not None:
                     tie_break_band_counts.append(float(value))
+                elif field == "candidate_pool_size" and value is not None:
+                    candidate_pool_sizes.append(float(value))
+                elif field == "reservoir_size" and value is not None:
+                    reservoir_sizes.append(float(value))
+                elif field == "global_reservoir_size" and value is not None:
+                    global_reservoir_sizes.append(float(value))
+                elif field == "saliency_core_count" and value is not None:
+                    saliency_core_counts.append(float(value))
+                elif field == "native_boundary_used" and value is not None:
+                    native_boundary_flags.append(1.0 if bool(value) else 0.0)
+                elif field == "selection_time_ms" and value is not None:
+                    selection_times_ms.append(float(value))
+                elif field == "distance_cost_proxy" and value is not None:
+                    distance_cost_proxies.append(float(value))
                 elif field == "selection_rule" and value is not None:
                     selection_rules.append(str(value))
+                elif field == "profile_version" and value is not None:
+                    profile_versions.append(str(value))
                 elif field == "keep_patch_indices":
                     keep_by_layer[layer_idx] = value
                     entropy = spatial_entropy_norm(value)
@@ -251,8 +305,18 @@ def stats_summary(run_dir: str, max_samples: int = 200) -> dict[str, Any]:
         "avg_boundary_count": mean(boundary_counts),
         "avg_core_ratio": mean(core_ratios),
         "avg_greedy_steps_used": mean(greedy_steps_used),
+        "avg_diversity_steps_budget": mean(diversity_steps_budget),
+        "avg_diversity_steps_used": mean(diversity_steps_used),
         "avg_tie_break_band_count": mean(tie_break_band_counts),
+        "avg_candidate_pool_size": mean(candidate_pool_sizes),
+        "avg_reservoir_size": mean(reservoir_sizes),
+        "avg_global_reservoir_size": mean(global_reservoir_sizes),
+        "avg_saliency_core_count": mean(saliency_core_counts),
+        "native_boundary_rate": mean(native_boundary_flags),
+        "avg_selection_time_ms": mean(selection_times_ms),
+        "avg_distance_cost_proxy": mean(distance_cost_proxies),
         "selection_rule": sorted(set(selection_rules))[0] if selection_rules else None,
+        "profile_version": sorted(set(profile_versions))[0] if profile_versions else None,
         "stats_samples_read": samples_read,
     }
 
@@ -293,18 +357,32 @@ def latest_unique(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(by_key.values())
 
 
+def lookup_config_row(
+    by_key: dict[tuple[str, str, str], dict[str, Any]],
+    dataset: str,
+    target: str,
+    config: str,
+) -> dict[str, Any] | None:
+    if config == "BC-AUTO":
+        config = BC_AUTO_BY_TARGET.get(target, config)
+    return by_key.get((dataset, target, config))
+
+
 def matrix_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     datasets = sorted({row["dataset"] for row in rows})
     by_key = {(row["dataset"], row["target"], row["config"]): row for row in rows}
     output: list[dict[str, Any]] = []
     for dataset in datasets:
         for target in TARGET_ORDER:
-            values = {config: by_key.get((dataset, target, config), {}).get("metric_value") for config in CONFIG_ORDER}
+            values = {
+                config: (lookup_config_row(by_key, dataset, target, config) or {}).get("metric_value")
+                for config in CONFIG_ORDER
+            }
             available = {key: value for key, value in values.items() if value is not None}
             best_config = max(available, key=available.get) if available else ""
             metric_name = ""
             for config in CONFIG_ORDER:
-                row = by_key.get((dataset, target, config))
+                row = lookup_config_row(by_key, dataset, target, config)
                 if row:
                     metric_name = row["metric_name"]
                     break
@@ -331,7 +409,7 @@ def delta_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         sv_value = sv["metric_value"] if sv else None
         boost_value = boost["metric_value"] if boost else None
         for config in CONFIG_ORDER:
-            row = by_key.get((dataset, target, config))
+            row = lookup_config_row(by_key, dataset, target, config)
             value = row["metric_value"] if row else None
             output.append(
                 {
@@ -355,8 +433,18 @@ def delta_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "avg_boundary_count": None if row is None else row.get("avg_boundary_count"),
                     "avg_core_ratio": None if row is None else row.get("avg_core_ratio"),
                     "avg_greedy_steps_used": None if row is None else row.get("avg_greedy_steps_used"),
+                    "avg_diversity_steps_budget": None if row is None else row.get("avg_diversity_steps_budget"),
+                    "avg_diversity_steps_used": None if row is None else row.get("avg_diversity_steps_used"),
                     "avg_tie_break_band_count": None if row is None else row.get("avg_tie_break_band_count"),
+                    "avg_candidate_pool_size": None if row is None else row.get("avg_candidate_pool_size"),
+                    "avg_reservoir_size": None if row is None else row.get("avg_reservoir_size"),
+                    "avg_global_reservoir_size": None if row is None else row.get("avg_global_reservoir_size"),
+                    "avg_saliency_core_count": None if row is None else row.get("avg_saliency_core_count"),
+                    "native_boundary_rate": None if row is None else row.get("native_boundary_rate"),
+                    "avg_selection_time_ms": None if row is None else row.get("avg_selection_time_ms"),
+                    "avg_distance_cost_proxy": None if row is None else row.get("avg_distance_cost_proxy"),
                     "selection_rule": None if row is None else row.get("selection_rule"),
+                    "profile_version": None if row is None else row.get("profile_version"),
                 }
             )
     return output
@@ -391,10 +479,14 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
     ass_rows = [row for row in deltas if row["config"] == "A-S-S" and row["value"] is not None]
     cbb_rows = [row for row in deltas if row["config"] == "C-B-B" and row["value"] is not None]
     fts_rows = [row for row in deltas if row["config"] == "F-T-S" and row["value"] is not None]
+    bc_auto_rows = [row for row in deltas if row["config"] == "BC-AUTO" and row["value"] is not None]
     dss_wins_vs_boost = sum(1 for row in dss_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
     ass_wins_vs_boost = sum(1 for row in ass_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
     cbb_wins_vs_boost = sum(1 for row in cbb_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
     fts_wins_vs_boost = sum(1 for row in fts_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0)
+    bc_auto_wins_vs_boost = sum(
+        1 for row in bc_auto_rows if row["delta_vs_O-S-S"] is not None and row["delta_vs_O-S-S"] > 0
+    )
     lines = [
         "# Diverse MMR Diagnostic Report",
         "",
@@ -405,46 +497,45 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
         f"- A-S-S beats O-S-S: {ass_wins_vs_boost} / {len(ass_rows)}",
         f"- C-B-B beats O-S-S: {cbb_wins_vs_boost} / {len(cbb_rows)}",
         f"- F-T-S beats O-S-S: {fts_wins_vs_boost} / {len(fts_rows)}",
+        f"- BC-AUTO beats O-S-S: {bc_auto_wins_vs_boost} / {len(bc_auto_rows)}",
         "",
         "## Metric Matrix",
         "",
-        "| dataset | target | metric | S-S-S | O-S-S | D-S-S | D-D-S | A-S-S | A-A-S | C-B-B | C-S-S | C-B-S | F-T-S | F-S-S | best |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
+    lines.append("| dataset | target | metric | " + " | ".join(CONFIG_ORDER) + " | best |")
+    lines.append("|---|---|---|" + "|".join(["---:" for _ in CONFIG_ORDER]) + "|---|")
     for row in matrix:
+        config_values = " | ".join(fmt(row.get(config)) for config in CONFIG_ORDER)
         lines.append(
-            "| {dataset} | {target} | {metric_name} | {sss} | {oss} | {dss} | {dds} | {ass} | {aas} | {cbb} | {css} | {cbs} | {fts} | {fss} | {best} |".format(
-                dataset=row["dataset"],
-                target=row["target"],
-                metric_name=row["metric_name"],
-                sss=fmt(row.get("S-S-S")),
-                oss=fmt(row.get("O-S-S")),
-                dss=fmt(row.get("D-S-S")),
-                dds=fmt(row.get("D-D-S")),
-                ass=fmt(row.get("A-S-S")),
-                aas=fmt(row.get("A-A-S")),
-                cbb=fmt(row.get("C-B-B")),
-                css=fmt(row.get("C-S-S")),
-                cbs=fmt(row.get("C-B-S")),
-                fts=fmt(row.get("F-T-S")),
-                fss=fmt(row.get("F-S-S")),
-                best=row.get("best_config") or "",
-            )
+            f"| {row['dataset']} | {row['target']} | {row['metric_name']} | "
+            f"{config_values} | {row.get('best_config') or ''} |"
         )
     lines.extend(
         [
             "",
             "## Diversity Diagnostics",
             "",
-            "| config | dataset | target | value | delta vs S-S-S | delta vs O-S-S | pairwise dist | saliency mass | spatial entropy | layer Jaccard | div ratio | anchor ratio | seed ratio | core ratio | greedy steps | tie band | floor gap | boundary | rule/lambda |",
-            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+            "| config | dataset | target | value | delta vs S-S-S | delta vs O-S-S | pairwise dist | saliency mass | spatial entropy | layer Jaccard | div ratio | anchor ratio | seed ratio | core ratio | saliency core | greedy steps | div budget | div used | cand pool | reservoir | global reservoir | native B rate | select ms | cost proxy | tie band | floor gap | boundary | profile | rule/lambda |",
+            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
         ]
     )
     for row in deltas:
-        if row["config"] not in {"D-S-S", "A-S-S", "C-B-B", "C-S-S", "C-B-S", "F-T-S", "F-S-S"}:
+        if row["config"] not in {
+            "D-S-S",
+            "A-S-S",
+            "C-B-B",
+            "C-S-S",
+            "C-B-S",
+            "F-T-S",
+            "F-S-S",
+            "BC-C-S-S",
+            "BC-C-B-S",
+            "BC-C-B-B",
+            "BC-AUTO",
+        }:
             continue
         lines.append(
-            "| {config} | {dataset} | {target} | {value} | {dsv} | {dbo} | {dist} | {mass} | {entropy} | {jaccard} | {dratio} | {aratio} | {seed} | {core} | {greedy} | {tie_band} | {floor_gap} | {boundary} | {rule} |".format(
+            "| {config} | {dataset} | {target} | {value} | {dsv} | {dbo} | {dist} | {mass} | {entropy} | {jaccard} | {dratio} | {aratio} | {seed} | {core} | {saliency_core} | {greedy} | {div_budget} | {div_used} | {cand_pool} | {reservoir} | {global_reservoir} | {native_b} | {select_ms} | {cost} | {tie_band} | {floor_gap} | {boundary} | {profile} | {rule} |".format(
                 config=row["config"],
                 dataset=row["dataset"],
                 target=row["target"],
@@ -459,10 +550,20 @@ def markdown_report(matrix: list[dict[str, Any]], deltas: list[dict[str, Any]]) 
                 aratio=fmt(row.get("avg_anchor_ratio")),
                 seed=fmt(row.get("avg_seed_ratio")),
                 core=fmt(row.get("avg_core_ratio")),
+                saliency_core=fmt(row.get("avg_saliency_core_count")),
                 greedy=fmt(row.get("avg_greedy_steps_used")),
+                div_budget=fmt(row.get("avg_diversity_steps_budget")),
+                div_used=fmt(row.get("avg_diversity_steps_used")),
+                cand_pool=fmt(row.get("avg_candidate_pool_size")),
+                reservoir=fmt(row.get("avg_reservoir_size")),
+                global_reservoir=fmt(row.get("avg_global_reservoir_size")),
+                native_b=fmt(row.get("native_boundary_rate")),
+                select_ms=fmt(row.get("avg_selection_time_ms")),
+                cost=fmt(row.get("avg_distance_cost_proxy")),
                 tie_band=fmt(row.get("avg_tie_break_band_count")),
                 floor_gap=fmt(row.get("avg_saliency_floor_gap")),
                 boundary=fmt(row.get("avg_boundary_count")),
+                profile=fmt(row.get("profile_version")),
                 rule=(row.get("selection_rule") or fmt(row.get("avg_lambda_div"))),
             )
         )
