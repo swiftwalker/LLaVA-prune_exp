@@ -105,6 +105,11 @@ def _required_rotary_seq_len(
     return max(minimum_seq_len, int(position_ids.max().item()) + 1)
 
 
+def _sync_if_profile(enabled: bool, device: torch.device) -> None:
+    if enabled and device.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+
+
 def enable_sparse_position_ids_compat(model) -> bool:
     """Patch Llama attention to support sparse, non-reindexed position_ids."""
     try:
@@ -337,9 +342,11 @@ class VisualTokenPruner:
             (generated_ids [1, N], prune_info dict)
         """
         device = inputs_embeds.device
+        profile_timing = bool(self.config.get("profile_timing", False))
 
         # --- Pruned prefill ---
-        t0 = time.time()
+        _sync_if_profile(profile_timing, device)
+        t0 = time.perf_counter()
         try:
             hidden_states, past_kv, prune_info = self._pruned_prefill(
                 inputs_embeds,
@@ -354,7 +361,8 @@ class VisualTokenPruner:
             )
         finally:
             self.strategy.clear_sample()
-        t_prefill = time.time() - t0
+        _sync_if_profile(profile_timing, device)
+        t_prefill = time.perf_counter() - t0
 
         # --- First token ---
         logits = self.model.lm_head(hidden_states[:, -1:])  # [1, 1, V]
@@ -363,7 +371,8 @@ class VisualTokenPruner:
         generated = [next_token]
 
         # --- Autoregressive decode ---
-        t1 = time.time()
+        _sync_if_profile(profile_timing, device)
+        t1 = time.perf_counter()
         cache_len = past_kv.get_seq_length()  # after prefill
         next_position_id = int(prune_info["final_position_ids"][-1]) + 1
 
@@ -392,12 +401,16 @@ class VisualTokenPruner:
             next_token = logits.argmax(dim=-1)
             generated.append(next_token)
 
-        t_decode = time.time() - t1
+        _sync_if_profile(profile_timing, device)
+        t_decode = time.perf_counter() - t1
         generated_ids = torch.cat(generated, dim=1)  # [1, N]
 
         prune_info["prefill_time"] = t_prefill
         prune_info["decode_time"] = t_decode
         prune_info["total_time"] = t_prefill + t_decode
+        prune_info["prefill_time_ms"] = t_prefill * 1000.0
+        prune_info["decode_time_ms"] = t_decode * 1000.0
+        prune_info["total_time_ms"] = (t_prefill + t_decode) * 1000.0
         prune_info["num_generated_tokens"] = generated_ids.shape[1]
 
         return generated_ids, prune_info

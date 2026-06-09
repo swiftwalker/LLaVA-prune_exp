@@ -8,6 +8,7 @@ SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, SRC_DIR)
 
 from strategies.sparsevlm import (
+    SparseVLMStrategy,
     compute_visual_scores_from_attention,
     prune_visual_tokens,
     select_text_raters,
@@ -117,6 +118,36 @@ class SparseVLMHelperTests(unittest.TestCase):
                 prune_ratio=1.5,
                 min_visual_tokens_after_prune=1,
             )
+
+    def test_strategy_records_topk_selection_timing(self):
+        strategy = SparseVLMStrategy(
+            {
+                "prune_layers": [0],
+                "prune_ratio": 0.5,
+                "fallback_topk": 2,
+                "exclude_special_tokens": True,
+                "min_visual_tokens_after_prune": 1,
+            }
+        )
+        strategy.prepare_sample(
+            inputs_embeds=torch.zeros((1, 1 + 4 + 2, 4), dtype=torch.float32),
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12]),
+            text_special_token_mask=torch.tensor([False, False]),
+        )
+        attn = torch.zeros((1, 1, 7, 7), dtype=torch.float32)
+        attn[0, 0, 5, 1:5] = torch.tensor([0.9, 0.8, 0.2, 0.1])
+        attn[0, 0, 6, 1:5] = torch.tensor([0.9, 0.8, 0.2, 0.1])
+
+        keep, info = strategy.compute_keep_mask(attn, 1, 4, 5, 0, current_visual_embeds=torch.eye(4))
+
+        self.assertEqual(keep.tolist(), [0, 1])
+        self.assertEqual(info["selection_rule"], "saliency_topk")
+        self.assertEqual(info["layer_strategy_effective"], "sparsevlm")
+        self.assertEqual(info["distance_time_ms"], 0.0)
+        self.assertGreaterEqual(info["selection_time_ms"], 0.0)
 
 
 if __name__ == "__main__":

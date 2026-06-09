@@ -205,64 +205,62 @@ def append_layer_stats_fields(
             layer_info.get("text_relevance_scores"),
         )
 
-    if not save_indices:
-        return
+    if save_indices:
+        keep_indices = layer_info.get("keep_indices")
+        pruned_indices = layer_info.get("pruned_indices")
+        keep_patch_indices = layer_info.get("keep_patch_indices", keep_indices)
+        pruned_patch_indices = layer_info.get("pruned_patch_indices", pruned_indices)
 
-    keep_indices = layer_info.get("keep_indices")
-    pruned_indices = layer_info.get("pruned_indices")
-    keep_patch_indices = layer_info.get("keep_patch_indices", keep_indices)
-    pruned_patch_indices = layer_info.get("pruned_patch_indices", pruned_indices)
-
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_keep_indices", keep_indices)
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_pruned_indices", pruned_indices)
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_keep_patch_indices", keep_patch_indices)
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_pruned_patch_indices", pruned_patch_indices)
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_rater_indices", layer_info.get("rater_indices"))
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_current_patch_indices",
-        layer_info.get("current_patch_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_high_keep_indices",
-        layer_info.get("high_keep_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_low_keep_indices",
-        layer_info.get("low_keep_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_high_keep_patch_indices",
-        layer_info.get("high_keep_patch_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_low_keep_patch_indices",
-        layer_info.get("low_keep_patch_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_stratum_selected_counts",
-        layer_info.get("stratum_selected_counts"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_stratum_candidate_counts",
-        layer_info.get("stratum_candidate_counts"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_stratum_deficits",
-        layer_info.get("stratum_deficits"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_stratum_quotas",
-        layer_info.get("stratum_quotas"),
-    )
+        _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_keep_indices", keep_indices)
+        _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_pruned_indices", pruned_indices)
+        _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_keep_patch_indices", keep_patch_indices)
+        _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_pruned_patch_indices", pruned_patch_indices)
+        _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_rater_indices", layer_info.get("rater_indices"))
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_current_patch_indices",
+            layer_info.get("current_patch_indices"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_high_keep_indices",
+            layer_info.get("high_keep_indices"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_low_keep_indices",
+            layer_info.get("low_keep_indices"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_high_keep_patch_indices",
+            layer_info.get("high_keep_patch_indices"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_low_keep_patch_indices",
+            layer_info.get("low_keep_patch_indices"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_stratum_selected_counts",
+            layer_info.get("stratum_selected_counts"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_stratum_candidate_counts",
+            layer_info.get("stratum_candidate_counts"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_stratum_deficits",
+            layer_info.get("stratum_deficits"),
+        )
+        _set_optional_layer_field(
+            sample_stats,
+            f"layer_{layer_idx}_stratum_quotas",
+            layer_info.get("stratum_quotas"),
+        )
 
     for key in (
         "target_keep",
@@ -383,50 +381,51 @@ def append_layer_stats_fields(
         if key in layer_info and layer_info[key] is not None:
             sample_stats[f"layer_{layer_idx}_{key}"] = _serialize_optional_sequence(layer_info[key])
 
-    for key in (
-        "global_selection_score",
-        "global_saliency_ema",
-        "current_saliency_norm",
-        "current_rank_score",
-        "mixed_score",
-        "token_boost",
-        "adjusted_scores",
-        "stratum_deficit",
-        "sampling_weights",
-        "stratum_history_debt",
-        "stratum_combined_debt",
-        "core_indices",
-        "candidate_pool_indices",
-        "mmr_selected_order",
-        "diversity_gain",
-        "mmr_scores",
-        "grid_saliency_topk_counts",
-        "grid_quota",
-        "grid_selected_counts",
-        "grid_candidate_counts",
-        "grid_anchor_indices",
-        "grid_fill_indices",
-        "grid_diverse_fill_indices",
-        "grid_distance_selected_order",
-        "grid_candidate_indices",
-        "grid_global_fallback_indices",
-        "seed_pool_indices",
-        "seed_indices",
-        "saliency_pool_indices",
-        "reservoir_source_indices",
-        "reservoir_indices",
-        "reservoir_reserved_indices",
-        "global_reservoir_indices",
-        "global_reservoir_reserved_indices",
-        "saliency_core_indices",
-        "cached_diversity_gain",
-        "tie_break_scores",
-        "repair_replacements",
-        "boundary_core_indices",
-        "boundary_pool_indices",
-        "boundary_fill_indices",
-    ):
-        _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_{key}", layer_info.get(key))
+    if save_indices:
+        for key in (
+            "global_selection_score",
+            "global_saliency_ema",
+            "current_saliency_norm",
+            "current_rank_score",
+            "mixed_score",
+            "token_boost",
+            "adjusted_scores",
+            "stratum_deficit",
+            "sampling_weights",
+            "stratum_history_debt",
+            "stratum_combined_debt",
+            "core_indices",
+            "candidate_pool_indices",
+            "mmr_selected_order",
+            "diversity_gain",
+            "mmr_scores",
+            "grid_saliency_topk_counts",
+            "grid_quota",
+            "grid_selected_counts",
+            "grid_candidate_counts",
+            "grid_anchor_indices",
+            "grid_fill_indices",
+            "grid_diverse_fill_indices",
+            "grid_distance_selected_order",
+            "grid_candidate_indices",
+            "grid_global_fallback_indices",
+            "seed_pool_indices",
+            "seed_indices",
+            "saliency_pool_indices",
+            "reservoir_source_indices",
+            "reservoir_indices",
+            "reservoir_reserved_indices",
+            "global_reservoir_indices",
+            "global_reservoir_reserved_indices",
+            "saliency_core_indices",
+            "cached_diversity_gain",
+            "tie_break_scores",
+            "repair_replacements",
+            "boundary_core_indices",
+            "boundary_pool_indices",
+            "boundary_fill_indices",
+        ):
+            _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_{key}", layer_info.get(key))
 
 
 def load_config(config_path: str) -> dict:
@@ -703,6 +702,55 @@ def validate_loaded_model_runtime(
     return runtime_metadata
 
 
+def _benchmark_cfg(config: dict) -> dict[str, Any]:
+    value = config.get("benchmark", {})
+    return value if isinstance(value, dict) else {}
+
+
+def _cuda_device_from_target(target_device: str) -> Optional[torch.device]:
+    if not torch.cuda.is_available() or not str(target_device).startswith("cuda"):
+        return None
+    return torch.device(target_device)
+
+
+def _sync_cuda_for_benchmark(target_device: str) -> None:
+    cuda_device = _cuda_device_from_target(target_device)
+    if cuda_device is not None:
+        torch.cuda.synchronize(cuda_device)
+
+
+def _reset_peak_memory_for_benchmark(target_device: str) -> None:
+    cuda_device = _cuda_device_from_target(target_device)
+    if cuda_device is not None:
+        torch.cuda.reset_peak_memory_stats(cuda_device)
+
+
+def _peak_memory_gb_for_benchmark(target_device: str) -> Optional[float]:
+    cuda_device = _cuda_device_from_target(target_device)
+    if cuda_device is None:
+        return None
+    return float(torch.cuda.max_memory_allocated(cuda_device) / (1024**3))
+
+
+def _allocated_memory_gb_for_benchmark(target_device: str) -> Optional[float]:
+    cuda_device = _cuda_device_from_target(target_device)
+    if cuda_device is None:
+        return None
+    return float(torch.cuda.memory_allocated(cuda_device) / (1024**3))
+
+
+def _seconds_to_ms(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    return float(value) * 1000.0
+
+
+def _decode_tokens_per_second(num_generated_tokens: int, decode_time: Optional[float]) -> Optional[float]:
+    if decode_time is None or float(decode_time) <= 0.0:
+        return None
+    return float(num_generated_tokens) / float(decode_time)
+
+
 # ---------------------------------------------------------------------------
 # Main inference loop with pruning
 # ---------------------------------------------------------------------------
@@ -729,7 +777,7 @@ def run_prune_inference(
     ds_cfg = config["datasets"][dataset_name]
     output_cfg = config["output"]
 
-    if run_mode not in {"prune", "baseline"}:
+    if run_mode not in {"prune", "baseline", "benchmark_full"}:
         raise ValueError(f"Unknown run_mode: {run_mode}")
 
     model_path = resolve(model_cfg["path"])
@@ -740,12 +788,22 @@ def run_prune_inference(
     max_new_tokens = int(ds_cfg.get("max_new_tokens", infer_cfg["max_new_tokens"]))
     strategy_name = prune_cfg["strategy"]
     v_token_num = int(prune_cfg.get("v_token_num", 576))
+    benchmark_cfg = _benchmark_cfg(config)
+    benchmark_enabled = bool(benchmark_cfg.get("enabled", False))
+    benchmark_profile_timing = bool(benchmark_cfg.get("profile_timing", benchmark_enabled))
+    benchmark_full_no_prune = bool(benchmark_cfg.get("full_no_prune", False))
+    benchmark_warmup_samples = max(0, int(benchmark_cfg.get("warmup_samples", 0)))
     configured_prune_layers = _normalize_configured_prune_layers(prune_cfg["prune_layers"])
     effective_prune_cfg, effective_prune_layers, tail_start_layer = derive_effective_prune_config(
         prune_cfg,
         model_path,
         model_config_metadata=model_config_metadata,
     )
+    if run_mode == "benchmark_full" or (run_mode == "baseline" and benchmark_full_no_prune):
+        effective_prune_cfg = {**effective_prune_cfg, "prune_layers": [], "prune_ratio": []}
+        effective_prune_layers = []
+    if benchmark_profile_timing:
+        effective_prune_cfg = {**effective_prune_cfg, "profile_timing": True}
     strategy_extra = effective_prune_cfg.get(strategy_name, {})
     strategy_config = {**effective_prune_cfg, "seed": infer_cfg.get("seed", 42), **strategy_extra}
     strategy = get_strategy(strategy_name, strategy_config)
@@ -754,7 +812,7 @@ def run_prune_inference(
     # Use readable settings in the run name and keep a microsecond timestamp
     # suffix so concurrent launches remain unique.
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    run_tag = "baseline" if run_mode == "baseline" else strategy_name
+    run_tag = "baseline" if run_mode in {"baseline", "benchmark_full"} else strategy_name
     run_tag_suffix = sanitize_run_tag_suffix(output_cfg.get("run_tag_suffix"))
     if run_tag_suffix:
         run_tag = f"{run_tag}_{run_tag_suffix}"
@@ -768,7 +826,7 @@ def run_prune_inference(
         timestamp=timestamp,
     )
     run_name = base_run_name
-    strategy_branch = "baseline" if run_mode == "baseline" else strategy_name
+    strategy_branch = "baseline" if run_mode in {"baseline", "benchmark_full"} else strategy_name
     run_dir = os.fspath(build_run_dir(base_dir, strategy_branch, dataset_name, run_name))
     suffix = 1
     while True:
@@ -814,6 +872,12 @@ def run_prune_inference(
             "dataset": dataset_name,
             "strategy": strategy_branch,
             "max_samples": max_samples,
+            "benchmark": {
+                "enabled": benchmark_enabled,
+                "profile_timing": benchmark_profile_timing,
+                "full_no_prune": run_mode == "benchmark_full" or benchmark_full_no_prune,
+                "warmup_samples": benchmark_warmup_samples,
+            },
             "timestamp": timestamp,
             "run_name": run_name,
             "run_rel_dir": build_run_rel_dir(base_dir, strategy_branch, dataset_name, run_name),
@@ -907,8 +971,16 @@ def run_prune_inference(
             inputs_embeds = None
             generated_ids = None
             output_ids = None
+            sample_is_warmup = benchmark_profile_timing and sample_idx < benchmark_warmup_samples
+            sample_wall_time = None
+            peak_memory_gb = None
+            allocated_memory_gb = None
 
             try:
+                if benchmark_profile_timing:
+                    _sync_cuda_for_benchmark(target_device)
+                    _reset_peak_memory_for_benchmark(target_device)
+
                 input_ids_cuda = input_ids.to(device=target_device, non_blocking=True)
                 if has_image:
                     v_token_start, _, text_token_start = locate_image_tokens(
@@ -940,7 +1012,11 @@ def run_prune_inference(
                         )
 
                     # --- generate with pruning ---
-                    t0 = time.time()
+                    if benchmark_profile_timing:
+                        _sync_cuda_for_benchmark(target_device)
+                        t0 = time.perf_counter()
+                    else:
+                        t0 = time.time()
                     generated_ids, prune_info = pruner.pruned_generate(
                         inputs_embeds=inputs_embeds,
                         attention_mask=attention_mask,
@@ -955,12 +1031,22 @@ def run_prune_inference(
                         save_tv_attn=save_attention,
                         capture_layers=capture_layers_set,
                     )
-                    t1 = time.time()
-                    total_time += (t1 - t0)
+                    if benchmark_profile_timing:
+                        _sync_cuda_for_benchmark(target_device)
+                        t1 = time.perf_counter()
+                    else:
+                        t1 = time.time()
+                    sample_wall_time = t1 - t0
+                    if not sample_is_warmup:
+                        total_time += sample_wall_time
 
                     answer_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
                 else:
-                    t0 = time.time()
+                    if benchmark_profile_timing:
+                        _sync_cuda_for_benchmark(target_device)
+                        t0 = time.perf_counter()
+                    else:
+                        t0 = time.time()
                     output_ids = model.generate(
                         inputs=input_ids_cuda,
                         do_sample=True if infer_cfg["temperature"] > 0 else False,
@@ -970,8 +1056,14 @@ def run_prune_inference(
                         max_new_tokens=max_new_tokens,
                         use_cache=True,
                     )
-                    t1 = time.time()
-                    total_time += (t1 - t0)
+                    if benchmark_profile_timing:
+                        _sync_cuda_for_benchmark(target_device)
+                        t1 = time.perf_counter()
+                    else:
+                        t1 = time.time()
+                    sample_wall_time = t1 - t0
+                    if not sample_is_warmup:
+                        total_time += sample_wall_time
 
                     prompt_length = int(input_ids_cuda.shape[1])
                     generated_ids, stripped_prompt_prefix = strip_prompt_prefix_if_present(output_ids, input_ids_cuda)
@@ -988,6 +1080,10 @@ def run_prune_inference(
                         "prune_stage": "text_only_no_prune",
                         "layers": {},
                     }
+                if benchmark_profile_timing:
+                    _sync_cuda_for_benchmark(target_device)
+                    peak_memory_gb = _peak_memory_gb_for_benchmark(target_device)
+                    allocated_memory_gb = _allocated_memory_gb_for_benchmark(target_device)
                 break
             except torch.cuda.OutOfMemoryError:
                 retry_count += 1
@@ -1045,6 +1141,21 @@ def run_prune_inference(
             "prefill_time": prune_info["prefill_time"],
             "decode_time": prune_info["decode_time"],
             "total_time": prune_info["total_time"],
+            "prefill_time_ms": prune_info.get("prefill_time_ms", _seconds_to_ms(prune_info["prefill_time"])),
+            "decode_time_ms": prune_info.get("decode_time_ms", _seconds_to_ms(prune_info["decode_time"])),
+            "total_time_ms": prune_info.get("total_time_ms", _seconds_to_ms(prune_info["total_time"])),
+            "end_to_end_time": sample_wall_time,
+            "end_to_end_time_ms": _seconds_to_ms(sample_wall_time),
+            "decode_tokens_per_second": _decode_tokens_per_second(
+                int(prune_info["num_generated_tokens"]),
+                prune_info["decode_time"],
+            ),
+            "benchmark_enabled": benchmark_enabled,
+            "benchmark_profile_timing": benchmark_profile_timing,
+            "benchmark_is_warmup": sample_is_warmup,
+            "benchmark_warmup_samples": benchmark_warmup_samples,
+            "peak_memory_gb": peak_memory_gb,
+            "allocated_memory_gb": allocated_memory_gb,
         }
 
         # Per-layer pruning details
@@ -1107,7 +1218,8 @@ def run_prune_inference(
         for s in all_stats:
             f.write(json.dumps(s) + "\n")
 
-    avg_time = total_time / len(questions) if questions else 0
+    timed_count = len([s for s in all_stats if not s.get("benchmark_is_warmup", False)])
+    avg_time = total_time / timed_count if timed_count else 0
 
     # --- summary ---
     prune_layer = pruner.prune_layers[0] if pruner.prune_layers else -1
@@ -1120,6 +1232,8 @@ def run_prune_inference(
     print(f"\nDone! {len(questions)} samples processed.")
     print(f"  Run mode:          {run_mode}")
     print(f"  Strategy:          {strategy_name}")
+    if benchmark_enabled:
+        print(f"  Benchmark timed:   {timed_count} samples (warmup={benchmark_warmup_samples})")
     print(f"  Prune stage:       {prune_info.get('prune_stage', strategy.prune_stage()) if questions else strategy.prune_stage()}")
     print(f"  Prune layer(s):    {pruner.prune_layers}")
     print(f"  Avg tokens pruned: {avg_pruned:.1f} / {v_token_num}")
@@ -1143,7 +1257,8 @@ def run_baseline_inference(config: dict, dataset_name: str, max_samples: int = N
     """
     # temporarily disable pruning
     config = {**config, "pruning": {**config["pruning"], "prune_ratio": 0.0}}
-    return run_prune_inference(config, dataset_name, max_samples, run_mode="baseline")
+    run_mode = "benchmark_full" if bool(_benchmark_cfg(config).get("full_no_prune", False)) else "baseline"
+    return run_prune_inference(config, dataset_name, max_samples, run_mode=run_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -1156,6 +1271,10 @@ def main():
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--baseline", action="store_true",
                         help="Run baseline (no pruning) for comparison")
+    parser.add_argument("--benchmark-profile", action="store_true",
+                        help="Enable CUDA-synchronized benchmark timing fields")
+    parser.add_argument("--benchmark-full-no-prune", action="store_true",
+                        help="With --baseline, use an empty-prune-layer Full path for efficiency benchmarking")
     parser.add_argument("--set", dest="overrides", action="append", default=[],
                         metavar="KEY=VALUE",
                         help="Override config values, e.g. --set pruning.strategy=entropy "
@@ -1171,6 +1290,14 @@ def main():
     if args.overrides:
         config = apply_overrides(config, args.overrides)
         print(f"Config overrides applied: {args.overrides}")
+
+    if args.benchmark_profile or args.benchmark_full_no_prune:
+        config = {**config, "benchmark": {**_benchmark_cfg(config)}}
+        config["benchmark"]["enabled"] = True
+        if args.benchmark_profile:
+            config["benchmark"]["profile_timing"] = True
+        if args.benchmark_full_no_prune:
+            config["benchmark"]["full_no_prune"] = True
 
     if args.baseline:
         run_baseline_inference(config, args.dataset, args.max_samples)

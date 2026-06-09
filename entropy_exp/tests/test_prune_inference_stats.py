@@ -78,6 +78,32 @@ class PruneInferenceStatsTests(unittest.TestCase):
         self.assertEqual(sample_stats["layer_2_high_ratio"], 0.7)
         self.assertEqual(sample_stats["layer_2_stratum_quotas"], [1] * 36)
 
+    def test_append_layer_stats_fields_records_efficiency_timing_fields(self):
+        sample_stats = {}
+        append_layer_stats_fields(
+            sample_stats,
+            2,
+            {
+                "prune_ratio": 0.5,
+                "num_visual_before": 576,
+                "num_visual_after": 128,
+                "num_pruned": 448,
+                "selection_rule": "saliency_topk",
+                "layer_strategy_effective": "sparsevlm",
+                "selection_time_ms": 0.12,
+                "distance_time_ms": 0.0,
+                "distance_cost_proxy": 0,
+            },
+            save_importance=False,
+            save_indices=False,
+        )
+
+        self.assertEqual(sample_stats["layer_2_selection_rule"], "saliency_topk")
+        self.assertEqual(sample_stats["layer_2_layer_strategy_effective"], "sparsevlm")
+        self.assertEqual(sample_stats["layer_2_selection_time_ms"], 0.12)
+        self.assertEqual(sample_stats["layer_2_distance_time_ms"], 0.0)
+        self.assertEqual(sample_stats["layer_2_distance_cost_proxy"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

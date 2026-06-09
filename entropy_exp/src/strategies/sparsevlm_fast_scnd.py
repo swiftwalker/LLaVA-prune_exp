@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -22,6 +23,11 @@ VALID_LAYER_MODES = {"F", "T", "S"}
 
 def _clamp01(value: float) -> float:
     return min(max(float(value), 0.0), 1.0)
+
+
+def _sync_if_cuda(tensor: Optional[torch.Tensor]) -> None:
+    if tensor is not None and tensor.is_cuda:
+        torch.cuda.synchronize(tensor.device)
 
 
 def _as_float_list(values: torch.Tensor) -> List[float]:
@@ -609,6 +615,8 @@ class SparseVLMFastSCNDStrategy(SparseVLMScoreMemoryStrategy):
             prune_ratio=prune_ratio,
             min_visual_tokens_after_prune=min_visual_tokens_after_prune,
         )
+        _sync_if_cuda(current_visual_embeds)
+        selection_start = time.perf_counter()
         projected = self._project_visual_embeds(current_visual_embeds, int(params["projection_dim"]))
 
         if mode == "F":
@@ -632,6 +640,8 @@ class SparseVLMFastSCNDStrategy(SparseVLMScoreMemoryStrategy):
             selection_rule = "fast_scnd_cached_tie_break"
         else:
             raise ValueError(f"Unsupported sparsevlm_fast_scnd layer mode: {mode}")
+        _sync_if_cuda(projected)
+        selection_time_ms = (time.perf_counter() - selection_start) * 1000.0
 
         keep_indices = selection["keep_indices"]
         if int(keep_indices.numel()) != int(target_keep):
@@ -669,6 +679,9 @@ class SparseVLMFastSCNDStrategy(SparseVLMScoreMemoryStrategy):
             "layer_strategy_effective": "sparsevlm_fast_scnd",
             "selection_rule": selection_rule,
             "distance_metric": "cosine",
+            "distance_time_ms": 0.0,
+            "selection_time_ms": float(selection_time_ms),
+            "distance_cost_proxy": 0,
             "saliency_entropy": entropy_raw,
             "saliency_entropy_norm": entropy_norm,
             "core_ratio_min": params["core_ratio_min"],

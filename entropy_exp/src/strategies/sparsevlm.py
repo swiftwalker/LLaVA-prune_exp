@@ -7,11 +7,17 @@ those raters to score visual tokens at each prune layer.
 """
 
 import math
+import time
 from typing import Any, Dict, Optional, Tuple
 
 import torch
 
 from .base import PruneStrategy
+
+
+def _sync_if_cuda(tensor: Optional[torch.Tensor]) -> None:
+    if tensor is not None and tensor.is_cuda:
+        torch.cuda.synchronize(tensor.device)
 
 
 def select_text_raters(
@@ -284,12 +290,16 @@ class SparseVLMStrategy(PruneStrategy):
             device=device,
         )
         prune_ratio = self.get_prune_ratio(layer_idx, visual_scores)
+        _sync_if_cuda(visual_scores)
+        selection_start = time.perf_counter()
         _, keep_indices, pruned_indices = prune_visual_tokens(
             current_visual_embeds=current_visual_embeds,
             visual_scores=visual_scores,
             prune_ratio=prune_ratio,
             min_visual_tokens_after_prune=int(self.config.get("min_visual_tokens_after_prune", 16)),
         )
+        _sync_if_cuda(keep_indices)
+        selection_time_ms = (time.perf_counter() - selection_start) * 1000.0
 
         info = {
             "prune_ratio": prune_ratio,
@@ -302,5 +312,10 @@ class SparseVLMStrategy(PruneStrategy):
             "pruned_indices": pruned_indices.detach().cpu().numpy(),
             "rater_indices": context["rater_indices"].detach().cpu().numpy(),
             "text_relevance_scores": context["text_relevance_scores"].detach().cpu().numpy(),
+            "layer_strategy_effective": "sparsevlm",
+            "selection_rule": "saliency_topk",
+            "distance_time_ms": 0.0,
+            "selection_time_ms": float(selection_time_ms),
+            "distance_cost_proxy": 0,
         }
         return keep_indices, info

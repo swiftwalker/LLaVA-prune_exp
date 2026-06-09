@@ -80,6 +80,8 @@ class SparseVLMFastSCNDTests(unittest.TestCase):
         self.assertEqual(int(keep.numel()), info["target_keep"])
         self.assertEqual(info["selection_rule"], "fast_scnd_micro_greedy")
         self.assertEqual(info["layer_strategy_effective"], "sparsevlm_fast_scnd")
+        self.assertEqual(info["distance_time_ms"], 0.0)
+        self.assertGreaterEqual(info["selection_time_ms"], 0.0)
         self.assertNotIn("grid_quota", info)
         self.assertNotIn("saliency_mass_floor", info)
         self.assertNotIn("repair_replacements", info)
