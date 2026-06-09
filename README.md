@@ -18,6 +18,7 @@ for traceability under `archive/upstream_llava/`.
 
 ## Start Here
 
+- Final pruning method: [`entropy_exp/SCND_GPU_FINAL_METHOD.md`](./entropy_exp/SCND_GPU_FINAL_METHOD.md)
 - Pruning experiment usage: [`entropy_exp/USAGE.md`](./entropy_exp/USAGE.md)
 - Scheduler and large-matrix orchestration: [`entropy_exp/SCHEDULER.md`](./entropy_exp/SCHEDULER.md)
 - Result collection and matrix summarization: [`entropy_exp/RESULTS_WORKFLOW.md`](./entropy_exp/RESULTS_WORKFLOW.md)

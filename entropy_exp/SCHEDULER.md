@@ -23,6 +23,14 @@ Scheduler 不负责：
 - plan YAML 内置 GPU allowlist / denylist；需要时用启动环境 `LLAVA_SCHEDULER_VISIBLE_GPUS` 限制可见 GPU
 - 每卡固定并发额度
 
+当前最终方法 SCND-GPU 仍通过普通 scheduler plan 启动，策略名是 `sparsevlm_scnd`，并在 `extra_sets` 中显式设置：
+
+```text
+pruning.sparsevlm_scnd.selection_backend=gpu
+```
+
+完整方法口径见 [SCND_GPU_FINAL_METHOD.md](./SCND_GPU_FINAL_METHOD.md)。
+
 ## 2. 快速命令
 
 ```bash
@@ -196,6 +204,7 @@ pool_size = min(total_jobs, 40)
 - `sparsevlm_adaptive_diverse_mmr`
 - `sparsevlm_scnd`
 - `sparsevlm_fast_scnd`
+- `sparsevlm_budget_candidate_scnd`
 
 策略方法说明见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md)。
 

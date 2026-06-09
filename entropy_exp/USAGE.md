@@ -5,6 +5,7 @@
 - 批量调度：[SCHEDULER.md](./SCHEDULER.md)
 - 结果评测与汇总：[RESULTS_WORKFLOW.md](./RESULTS_WORKFLOW.md)
 - 策略方法总览：[STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md)
+- 最终定稿方法：[SCND_GPU_FINAL_METHOD.md](./SCND_GPU_FINAL_METHOD.md)
 
 ## 1. 环境准备
 
@@ -107,16 +108,24 @@ bash entropy_exp/scripts/run_prune.sh sparsevlm_adaptive_diverse_mmr pope 10 \
   --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
   --set 'pruning.sparsevlm_adaptive_diverse_mmr.layer_modes=["A","S","S"]'
 
-# SCND / Fast-SCND；C/F 为首层 saliency-constrained native diversity
+# SCND-GPU 最终方法；C=global SCND，B=boundary refinement，S=SparseVLM
 bash entropy_exp/scripts/run_prune.sh sparsevlm_scnd pope 10 \
   --set 'pruning.prune_layers=[2,6,16]' \
   --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
-  --set 'pruning.sparsevlm_scnd.layer_modes=["C","B","B"]'
+  --set 'pruning.sparsevlm_scnd.layer_modes=["C","B","B"]' \
+  --set pruning.sparsevlm_scnd.selection_backend=gpu
 
+# Fast-SCND 低复杂度消融；F=micro-greedy，T=cached tie-break，S=SparseVLM
 bash entropy_exp/scripts/run_prune.sh sparsevlm_fast_scnd pope 10 \
   --set 'pruning.prune_layers=[2,6,16]' \
   --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
   --set 'pruning.sparsevlm_fast_scnd.layer_modes=["F","T","S"]'
+
+# Candidate-SCND 过程消融；C=candidate SCND，B=B-lite，S=SparseVLM
+bash entropy_exp/scripts/run_prune.sh sparsevlm_budget_candidate_scnd pope 10 \
+  --set 'pruning.prune_layers=[2,6,16]' \
+  --set 'pruning.prune_ratio=[0.4791667,0.3333333,0.45]' \
+  --set 'pruning.sparsevlm_budget_candidate_scnd.layer_modes=["C","B","S"]'
 
 # 无剪枝 baseline，同一套自定义 decode 路径
 bash entropy_exp/scripts/run_prune.sh baseline mme 10
@@ -147,7 +156,7 @@ bash entropy_exp/scripts/run_prune.sh <strategy|baseline> <dataset|all> [max_sam
 
 | 参数 | 可选值 | 说明 |
 | --- | --- | --- |
-| `strategy` | `baseline` 或 17 个剪枝策略 | 当前策略列表见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md) |
+| `strategy` | `baseline` 或 18 个剪枝策略 | 当前策略列表见 [STRATEGY_BRANCH_SUMMARY.md](./STRATEGY_BRANCH_SUMMARY.md) |
 | `dataset` | `gqa` / `mme` / `pope` / `textvqa` / `scienceqa` / `mmbench` / `mmvet` / `ai2d` / `all` | `mmvet` 当前为 inference-only 导出口径 |
 | `max_samples` | 整数，可选 | 省略则使用配置中的 `pruning.max_samples`；仍为空则跑全量 |
 | `--auto-gpu` | flag | 运行前自动选择可用显存最多的 GPU |
@@ -206,6 +215,13 @@ bash entropy_exp/scripts/run_prune.sh sparsevlm_entropy_alpha textvqa \
 | `sparsevlm_adaptive_diverse_mmr` | `A` / `S` | `A` 为 prune-ratio 自适应 saliency-diversity，`S` 为纯 SparseVLM |
 | `sparsevlm_scnd` | `C` / `B` / `S` | `C` 为 global SCND，`B` 为 boundary-only diversity refinement，`S` 为纯 SparseVLM |
 | `sparsevlm_fast_scnd` | `F` / `T` / `S` | `F` 为 micro-greedy Fast-SCND，`T` 为 cached diversity tie-break，`S` 为纯 SparseVLM |
+| `sparsevlm_budget_candidate_scnd` | `C` / `B` / `S` | `C` 为 candidate-pool SCND，`B` 为 B-lite，`S` 为纯 SparseVLM |
+
+SCND-GPU 正式口径还应显式覆盖：
+
+```bash
+--set pruning.sparsevlm_scnd.selection_backend=gpu
+```
 
 `prune_layers` 和 `prune_ratio` 的规则：
 

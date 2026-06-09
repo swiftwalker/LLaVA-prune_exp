@@ -64,6 +64,7 @@ target layer full forward
 - `sparsevlm_adaptive_diverse_mmr`
 - `sparsevlm_scnd`
 - `sparsevlm_fast_scnd`
+- `sparsevlm_budget_candidate_scnd`
 
 ### pre-layer physical pruning
 
@@ -132,6 +133,7 @@ _compute_pre_prune_scores(...)
 | `sparsevlm_adaptive_diverse_mmr` | target layer 后 | 是 | 是 | 否 | 是 |
 | `sparsevlm_scnd` | target layer 后 | 是 | 是 | 否 | 是 |
 | `sparsevlm_fast_scnd` | target layer 后 | 是 | 是 | 否 | 是 |
+| `sparsevlm_budget_candidate_scnd` | target layer 后 | 是 | 是 | 否 | 是 |
 
 ## 4. 打分和选择差异摘要
 
@@ -152,8 +154,11 @@ _compute_pre_prune_scores(...)
 | `sparsevlm_compensated` | saliency 幂次平滑后固定 seed 顺序采样 |
 | `sparsevlm_diverse_mmr` | grid quota / anchors 由 saliency 决定，补选只看 grid 内 max-min distance |
 | `sparsevlm_adaptive_diverse_mmr` | 用当前 prune ratio 自动调节 saliency anchors 与 distance fills |
-| `sparsevlm_scnd` | 首层全局 saliency-constrained native diversity，后层可做 boundary refinement |
+| `sparsevlm_scnd` | 首层全局 saliency-constrained native diversity，后层可做 boundary refinement；最终口径使用 `selection_backend=gpu` |
 | `sparsevlm_fast_scnd` | 首层低成本 micro-greedy diversity，后层 cached diversity tie-break |
+| `sparsevlm_budget_candidate_scnd` | target-aware candidate pool 内近似 SCND，后层 B-lite / SparseVLM |
+
+`sparsevlm_scnd.selection_backend` 只改变 C/B 层选择循环的执行后端，不改变 post-layer physical pruning 路径。`gpu` 后端将 feasibility、repair 和 boundary selection 尽量保持在 GPU tensor mask 上完成；`python` 后端保留用于复现和排查。
 
 ## 5. 新策略接入检查表
 

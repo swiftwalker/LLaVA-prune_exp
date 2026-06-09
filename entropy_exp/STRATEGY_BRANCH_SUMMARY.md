@@ -3,10 +3,10 @@
 本文档总结 `entropy_exp` 当前可运行的策略分支及其大致方法。这里的“策略分支”指运行输出目录中的
 `outputs/runs/{strategy}/{dataset}/...` 分支，以及 `run_prune.sh` / scheduler 可直接调度的策略名。
 
-当前共有 **18 个运行分支**：
+当前共有 **19 个运行分支**：
 
 - **1 个无剪枝对照分支**：`baseline`
-- **17 个剪枝策略分支**：见下表
+- **18 个剪枝策略分支**：见下表
 
 剪枝策略注册在 `entropy_exp/src/strategies/__init__.py` 的 `STRATEGY_REGISTRY` 中；`baseline`
 通过 `prune_inference.py --baseline` 进入同一套自定义 decode 路径，但不执行剪枝。
@@ -31,8 +31,9 @@
 | `sparsevlm_compensated` | Sampling | saliency 分布幂次平滑后固定 seed 顺序采样 | post-layer 物理剪枝 | 无 grid 的概率补偿对照 |
 | `sparsevlm_diverse_mmr` | Diversity | grid 内 saliency anchors + candidate pool，补选只看 max-min 距离 | post-layer 物理剪枝 | grid-local pure-distance diversity |
 | `sparsevlm_adaptive_diverse_mmr` | Diversity | 随当前层 prune ratio 自动调节 saliency anchors 与 diversity fills | post-layer 物理剪枝 | 低剪枝靠 saliency，高剪枝靠 diversity |
-| `sparsevlm_scnd` | SCND | saliency-constrained native DivPrune + 后层 boundary refinement | post-layer 物理剪枝 | 全局 native diversity under saliency constraints |
-| `sparsevlm_fast_scnd` | SCND | saliency core + 小候选池 + 最多 16 步 micro-greedy，后层 cached tie-break | post-layer 物理剪枝 | 低复杂度 SCND |
+| `sparsevlm_scnd` | SCND | saliency-constrained native DivPrune + GPU selection backend + 后层 boundary refinement | post-layer 物理剪枝 | 最终定稿方法 SCND-GPU |
+| `sparsevlm_fast_scnd` | SCND ablation | saliency core + 小候选池 + 最多 16 步 micro-greedy，后层 cached tie-break | post-layer 物理剪枝 | 低复杂度过程方法 |
+| `sparsevlm_budget_candidate_scnd` | SCND ablation | target-aware candidate pool 内近似 native SCND，后层 B-lite | post-layer 物理剪枝 | Candidate-SCND 过程消融 |
 
 ## 2. 公共控制参数
 
@@ -150,6 +151,16 @@ anchor_ratio = 1 - diversity_ratio
 | `C-B-S` | 首层 SCND，中层 boundary，末层 SparseVLM |
 | `C-S-S` | 只在首层引入 SCND |
 
+当前定稿口径是 **SCND-GPU**：
+
+```text
+strategy = sparsevlm_scnd
+pruning.sparsevlm_scnd.selection_backend = gpu
+prune_layers = [2,6,16]
+```
+
+`selection_backend` 支持 `auto`、`gpu`、`python`。正式实验建议显式使用 `gpu`；`python` 仅作为旧后端复现和排查路径。
+
 `sparsevlm_fast_scnd` 是低复杂度版本：
 
 - `F` 层：saliency core + 小候选池 + fixed low-dim projection，最多执行 `greedy_steps=16` 步 max-min micro-greedy，剩余 budget 用 saliency 补齐。
@@ -157,6 +168,14 @@ anchor_ratio = 1 - diversity_ratio
 - `S` 层：pure `sparsevlm`。
 
 默认层模式会根据剪枝层数自动展开：单层 `[F]`，两层 `[F,T]`，三层及以上 `[F,T,S,...]`。正式对比中常用 `F-T-S` 和 `F-S-S`。
+
+`sparsevlm_budget_candidate_scnd` 是 Candidate-SCND 过程消融：
+
+- `C` 层只在 target-aware saliency candidate pool 内执行近似 native SCND，降低 full `N x N` 全局选择成本。
+- `B` 层是 B-lite / boundary refinement，默认优先复用 cached diversity signal 或小边界集合。
+- `S` 层仍为 pure `sparsevlm`。
+
+它保留在代码中用于复现实验演进和成本/效果消融，但最终主方法不采用该策略名。
 
 ## 4. 代码位置
 
@@ -180,6 +199,7 @@ anchor_ratio = 1 - diversity_ratio
 | `sparsevlm_adaptive_diverse_mmr` | `entropy_exp/src/strategies/sparsevlm_adaptive_diverse_mmr.py` |
 | `sparsevlm_scnd` | `entropy_exp/src/strategies/sparsevlm_scnd.py` |
 | `sparsevlm_fast_scnd` | `entropy_exp/src/strategies/sparsevlm_fast_scnd.py` |
+| `sparsevlm_budget_candidate_scnd` | `entropy_exp/src/strategies/sparsevlm_budget_candidate_scnd.py` |
 
 更细的 transformer block 修改路径见 [TRANSFORMER_BLOCK_STRATEGY_PATHS.md](./TRANSFORMER_BLOCK_STRATEGY_PATHS.md)。
 
@@ -205,6 +225,7 @@ PruneStrategy
         │   ├── SparseVLMAdaptiveDiverseMMRStrategy
         │   └── SparseVLMSCNDStrategy
         └── SparseVLMFastSCNDStrategy
+            └── SparseVLMBudgetCandidateSCNDStrategy
 ```
 
 `baseline` 不继承 `PruneStrategy`，因为它不是剪枝策略；它是同推理路径下的无剪枝运行模式。

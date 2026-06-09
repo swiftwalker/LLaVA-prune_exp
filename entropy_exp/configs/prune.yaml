@@ -18,6 +18,7 @@
 #   O) sparsevlm_scnd — saliency-constrained native DivPrune + boundary refinement
 #   P) sparsevlm_fast_scnd — low-cost SCND with micro-greedy diversity and cached tie-break
 #   Q) sparsevlm_compensated — SparseVLM scoring + entropy-adaptive fixed-seed compensated sampling
+#   R) sparsevlm_budget_candidate_scnd — target-aware Candidate-SCND ablation
 
 model:
   path: "entropy_exp/models/llava-v1.5-7b"
@@ -33,7 +34,7 @@ inference:
   seed: 42
 
 pruning:
-  strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | tail_masking_attn_score | entropy | random | sparsevlm | sparsevlm_adaptive_stratified | sparsevlm_entropy_alpha | sparsevlm_entropy_alpha_global | sparsevlm_boost | sparsevlm_boost_hybrid | sparsevlm_compensated | sparsevlm_diverse_mmr | sparsevlm_adaptive_diverse_mmr | sparsevlm_scnd | sparsevlm_fast_scnd
+  strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | tail_masking_attn_score | entropy | random | sparsevlm | sparsevlm_adaptive_stratified | sparsevlm_entropy_alpha | sparsevlm_entropy_alpha_global | sparsevlm_boost | sparsevlm_boost_hybrid | sparsevlm_compensated | sparsevlm_diverse_mmr | sparsevlm_adaptive_diverse_mmr | sparsevlm_scnd | sparsevlm_fast_scnd | sparsevlm_budget_candidate_scnd
   # --- layer & ratio (paired lists of equal length) ---
   layer_selection: "fixed"          # fixed | dynamic (placeholder)
   prune_layers: [2, 3]             # 剪枝层列表 (0-indexed)
@@ -168,8 +169,10 @@ pruning:
     saliency_floor_max: 0.90
     boundary_ratio: 0.25
     saliency_repair: true
-    distance_metric: "cosine"
+    distance_metric: "cosine"      # cosine | euclidean | dot
     selection_backend: "auto"
+    c_selection_rule: "native"
+    seed: 42
     use_score_memory: false
     global_current_weight: 0.5
     global_ema_decay: 0.6

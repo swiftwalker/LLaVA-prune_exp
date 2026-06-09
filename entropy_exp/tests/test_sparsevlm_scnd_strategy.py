@@ -8,7 +8,7 @@ SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, SRC_DIR)
 
 from strategies import get_strategy
-from strategies.sparsevlm_scnd import SparseVLMSCNDStrategy
+from strategies.sparsevlm_scnd import SparseVLMSCNDStrategy, _scnd_distance_matrix
 
 
 def _full_attention(seq_len, text_rows, visual_cols, values):
@@ -50,6 +50,8 @@ class SparseVLMSCNDTests(unittest.TestCase):
             "saliency_repair": True,
             "distance_metric": "cosine",
             "selection_backend": "auto",
+            "c_selection_rule": "native",
+            "seed": 42,
             "use_score_memory": False,
         }
         config.update(overrides)
@@ -81,6 +83,7 @@ class SparseVLMSCNDTests(unittest.TestCase):
         self.assertEqual(info["layer_strategy_effective"], "sparsevlm_scnd")
         self.assertEqual(info["selection_backend_requested"], "auto")
         self.assertIn(info["selection_backend_effective"], {"python", "gpu"})
+        self.assertEqual(info["distance_metric"], "cosine")
         self.assertIn("selection_time_ms", info)
         self.assertIn("distance_time_ms", info)
 
@@ -93,6 +96,24 @@ class SparseVLMSCNDTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             invalid._get_scnd_params()
 
+        for metric in ("cosine", "euclidean", "dot"):
+            self.assertEqual(self._strategy(distance_metric=metric)._get_scnd_params()["distance_metric"], metric)
+
+        invalid_metric = self._strategy(distance_metric="manhattan")
+        with self.assertRaises(ValueError):
+            invalid_metric._get_scnd_params()
+
+        b_non_cosine = self._strategy(layer_modes=["B"], distance_metric="euclidean")
+        with self.assertRaises(ValueError):
+            b_non_cosine._get_scnd_params()
+
+        random_rule = self._strategy(c_selection_rule="random_feasible")
+        self.assertEqual(random_rule._get_scnd_params()["c_selection_rule"], "random_feasible")
+
+        invalid_rule = self._strategy(c_selection_rule="bogus")
+        with self.assertRaises(ValueError):
+            invalid_rule._get_scnd_params()
+
         self._prepare(strategy, 4)
         attn = _full_attention(
             seq_len=7,
@@ -104,6 +125,18 @@ class SparseVLMSCNDTests(unittest.TestCase):
 
         self.assertEqual(keep.numel(), info["target_keep"])
         self.assertEqual(info["selection_backend_effective"], "python")
+
+    def test_distance_metric_matrices_are_larger_is_more_diverse(self):
+        embeds = torch.tensor([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+
+        for metric in ("cosine", "euclidean", "dot"):
+            distance = _scnd_distance_matrix(embeds, metric)
+            self.assertEqual(tuple(distance.shape), (3, 3))
+            self.assertEqual(distance.device, embeds.device)
+            self.assertEqual(distance.dtype, torch.float32)
+            self.assertTrue(torch.isfinite(distance).all())
+            self.assertTrue(torch.equal(torch.diag(distance), torch.zeros(3)))
+            self.assertGreater(float(distance[0, 1].item()), float(distance[0, 2].item()))
 
     def test_seed_pool_uses_native_diversity_not_top_saliency_anchors(self):
         strategy = self._strategy(
@@ -127,6 +160,79 @@ class SparseVLMSCNDTests(unittest.TestCase):
         self.assertEqual(keep.tolist(), [0, 3])
         self.assertEqual(info["seed_indices"].tolist(), [0, 3])
         self.assertNotEqual(info["seed_indices"].tolist(), [0, 1])
+
+    def test_non_cosine_metrics_keep_larger_is_more_diverse_selection(self):
+        for metric in ("euclidean", "dot"):
+            strategy = self._strategy(
+                prune_ratio=0.5,
+                distance_metric=metric,
+                seed_ratio_min=1.0,
+                seed_ratio_max=1.0,
+                seed_pool_multiplier=2.0,
+                saliency_floor_min=0.65,
+                saliency_floor_max=0.65,
+            )
+            self._prepare(strategy, 4)
+            attn = _full_attention(
+                seq_len=7,
+                text_rows=[5, 6],
+                visual_cols=[1, 2, 3, 4],
+                values=[[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
+            )
+            embeds = torch.tensor([[1.0, 0.0], [0.99, 0.0], [-1.0, 0.0], [0.0, 1.0]])
+            keep, info = strategy.compute_keep_mask(attn, 1, 4, 5, 0, current_visual_embeds=embeds)
+
+            self.assertEqual(keep.tolist(), [0, 2])
+            self.assertEqual(info["seed_indices"].tolist(), [0, 2])
+            self.assertEqual(info["distance_metric"], metric)
+            self.assertGreaterEqual(info["saliency_mass_selected"] + 1e-8, info["saliency_mass_floor"])
+
+    def test_random_feasible_rule_is_reproducible_and_respects_saliency_floor(self):
+        keeps = []
+        orders = []
+        infos = []
+        for _ in range(2):
+            strategy = self._strategy(
+                prune_ratio=0.5,
+                c_selection_rule="random_feasible",
+                selection_backend="python",
+                seed=7,
+                seed_ratio_min=0.34,
+                seed_ratio_max=0.34,
+                seed_pool_multiplier=2.0,
+                saliency_floor_min=0.8,
+                saliency_floor_max=0.8,
+                saliency_repair=True,
+            )
+            self._prepare(strategy, 6)
+            attn = _full_attention(
+                seq_len=9,
+                text_rows=[7, 8],
+                visual_cols=[1, 2, 3, 4, 5, 6],
+                values=[[1.0, 0.9, 0.8, 0.2, 0.1, 0.05], [1.0, 0.9, 0.8, 0.2, 0.1, 0.05]],
+            )
+            embeds = torch.tensor(
+                [
+                    [1.0, 0.0],
+                    [0.9, 0.0],
+                    [0.0, 1.0],
+                    [-1.0, 0.0],
+                    [0.0, -1.0],
+                    [0.5, 0.5],
+                ],
+                dtype=torch.float32,
+            )
+            keep, info = strategy.compute_keep_mask(attn, 1, 6, 7, 0, current_visual_embeds=embeds)
+            keeps.append(keep.tolist())
+            orders.append(info["mmr_selected_order"].tolist())
+            infos.append(info)
+
+        self.assertEqual(keeps[0], keeps[1])
+        self.assertEqual(orders[0], orders[1])
+        self.assertEqual(infos[0]["selection_rule"], "saliency_constrained_random_feasible")
+        self.assertEqual(infos[0]["c_selection_rule"], "random_feasible")
+        self.assertEqual(len(keeps[0]), infos[0]["target_keep"])
+        self.assertGreaterEqual(infos[0]["saliency_mass_selected"] + 1e-8, infos[0]["saliency_mass_floor"])
 
     def test_saliency_mass_feasibility_blocks_low_saliency_outlier(self):
         strategy = self._strategy(
@@ -208,6 +314,56 @@ class SparseVLMSCNDTests(unittest.TestCase):
                 torch.tensor([[1.0, 0.0], [0.99, 0.0], [0.0, 1.0], [-1.0, 0.0]], device="cuda"),
             ),
             (
+                {
+                    "layer_modes": ["C"],
+                    "prune_ratio": 0.5,
+                    "selection_backend": "python",
+                    "distance_metric": "euclidean",
+                },
+                {
+                    "layer_modes": ["C"],
+                    "prune_ratio": 0.5,
+                    "selection_backend": "gpu",
+                    "distance_metric": "euclidean",
+                },
+                [[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
+                torch.tensor([[1.0, 0.0], [0.99, 0.0], [0.0, 1.0], [-1.0, 0.0]], device="cuda"),
+            ),
+            (
+                {
+                    "layer_modes": ["C"],
+                    "prune_ratio": 0.5,
+                    "selection_backend": "python",
+                    "distance_metric": "dot",
+                },
+                {
+                    "layer_modes": ["C"],
+                    "prune_ratio": 0.5,
+                    "selection_backend": "gpu",
+                    "distance_metric": "dot",
+                },
+                [[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
+                torch.tensor([[1.0, 0.0], [0.99, 0.0], [0.0, 1.0], [-1.0, 0.0]], device="cuda"),
+            ),
+            (
+                {
+                    "layer_modes": ["C"],
+                    "prune_ratio": 0.5,
+                    "selection_backend": "python",
+                    "c_selection_rule": "random_feasible",
+                    "seed": 13,
+                },
+                {
+                    "layer_modes": ["C"],
+                    "prune_ratio": 0.5,
+                    "selection_backend": "gpu",
+                    "c_selection_rule": "random_feasible",
+                    "seed": 13,
+                },
+                [[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
+                torch.tensor([[1.0, 0.0], [0.99, 0.0], [0.0, 1.0], [-1.0, 0.0]], device="cuda"),
+            ),
+            (
                 {"layer_modes": ["B"], "prune_ratio": 0.5, "boundary_ratio": 0.5, "selection_backend": "python"},
                 {"layer_modes": ["B"], "prune_ratio": 0.5, "boundary_ratio": 0.5, "selection_backend": "gpu"},
                 [[0.90, 0.89, 0.88, 0.87], [0.90, 0.89, 0.88, 0.87]],
@@ -241,6 +397,9 @@ class SparseVLMSCNDTests(unittest.TestCase):
             self.assertEqual(keeps[0], keeps[1])
             self.assertEqual(infos[1]["selection_backend_effective"], "gpu")
             self.assertGreaterEqual(infos[1]["selection_time_ms"], 0.0)
+            self.assertEqual(infos[0]["distance_metric"], infos[1]["distance_metric"])
+            if infos[1]["layer_mode"] == "C":
+                self.assertGreaterEqual(infos[1]["saliency_mass_selected"] + 1e-8, infos[1]["saliency_mass_floor"])
 
     def test_s_layer_matches_sparsevlm_branch(self):
         strategy = SparseVLMSCNDStrategy(

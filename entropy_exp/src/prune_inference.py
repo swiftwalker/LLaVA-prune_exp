@@ -747,7 +747,7 @@ def run_prune_inference(
         model_config_metadata=model_config_metadata,
     )
     strategy_extra = effective_prune_cfg.get(strategy_name, {})
-    strategy_config = {**effective_prune_cfg, **strategy_extra}
+    strategy_config = {**effective_prune_cfg, "seed": infer_cfg.get("seed", 42), **strategy_extra}
     strategy = get_strategy(strategy_name, strategy_config)
 
     # --- output paths: per-run directory ---
