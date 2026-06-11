@@ -24,10 +24,11 @@ from .sparsevlm_diverse_mmr import (
     _selected_mean_pairwise_distance,
 )
 from .sparsevlm_score_memory import compute_entropy_stats, deterministic_descending_indices, rank_normalize_scores
+from .scnd_triton_kernels import is_scnd_triton_available, scnd_native_c_select_triton
 
 
 VALID_LAYER_MODES = {"C", "B", "S"}
-VALID_SELECTION_BACKENDS = {"auto", "gpu", "python"}
+VALID_SELECTION_BACKENDS = {"auto", "gpu", "python", "triton"}
 VALID_C_SELECTION_RULES = {"native", "random_feasible"}
 VALID_DISTANCE_METRICS = {"cosine", "euclidean", "dot"}
 
@@ -774,6 +775,96 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "repair_replacements": repair_replacements,
         }
 
+    def _saliency_constrained_native_divprune_select_triton(
+        self,
+        saliency_score: torch.Tensor,
+        distance: torch.Tensor,
+        target_keep: int,
+        entropy_norm: float,
+        *,
+        seed_ratio_min: float,
+        seed_ratio_max: float,
+        seed_pool_multiplier: float,
+        saliency_floor_min: float,
+        saliency_floor_max: float,
+        saliency_repair: bool,
+    ) -> Dict[str, object]:
+        num_visual = int(saliency_score.numel())
+        device = saliency_score.device
+        if target_keep <= 0:
+            empty_long = torch.empty(0, device=device, dtype=torch.long)
+            return {
+                "keep_indices": empty_long,
+                "seed_ratio": 0.0,
+                "seed_count": 0,
+                "seed_pool_indices": empty_long,
+                "seed_indices": empty_long,
+                "mmr_selected_order": empty_long,
+                "diversity_gain": torch.empty(0, device=device, dtype=torch.float32),
+                "saliency_floor_eta": 0.0,
+                "saliency_mass_floor": 0.0,
+                "saliency_mass_selected": 0.0,
+                "saliency_mass_topk": 0.0,
+                "feasible_candidate_count": 0,
+                "repair_replacements": [],
+            }
+
+        keep_count = min(int(target_keep), num_visual)
+        entropy_norm = _clamp01(entropy_norm)
+        positive_saliency = saliency_score.to(dtype=torch.float32).clamp_min(0.0)
+        saliency_desc = self._descending_indices_tensor(saliency_score)
+        topk_indices = saliency_desc[:keep_count]
+        saliency_mass_topk = positive_saliency.index_select(0, topk_indices).sum()
+
+        seed_ratio = seed_ratio_min + (seed_ratio_max - seed_ratio_min) * (1.0 - entropy_norm)
+        seed_count = min(keep_count, int(math.ceil(float(keep_count) * seed_ratio)))
+        if keep_count > 0 and seed_ratio > 0.0:
+            seed_count = max(1, seed_count)
+        seed_pool_count = min(num_visual, max(seed_count, int(math.ceil(float(seed_count) * seed_pool_multiplier))))
+        seed_pool_indices = saliency_desc[:seed_pool_count]
+
+        eta = saliency_floor_min + (saliency_floor_max - saliency_floor_min) * (1.0 - entropy_norm)
+        saliency_mass_floor = saliency_mass_topk * float(eta)
+        selected_mask, seed_mask, selected_order, diversity_gains, feasible_candidate_count = scnd_native_c_select_triton(
+            distance=distance,
+            saliency_score=saliency_score,
+            saliency_desc=saliency_desc,
+            keep_count=keep_count,
+            seed_count=seed_count,
+            seed_pool_count=seed_pool_count,
+            saliency_mass_floor=saliency_mass_floor,
+        )
+        selected_mass = positive_saliency[selected_mask].sum()
+
+        repair_replacements: List[Dict[str, float | int]] = []
+        if saliency_repair and bool(selected_mask.any().item()):
+            selected_mask, repair_replacements = self._repair_saliency_mass_gpu(
+                selected_mask=selected_mask,
+                seed_mask=seed_mask,
+                saliency_score=saliency_score,
+                distance=distance,
+                saliency_mass_floor=saliency_mass_floor,
+            )
+            selected_mass = positive_saliency[selected_mask].sum()
+
+        seed_indices = torch.nonzero(seed_mask, as_tuple=False).flatten()
+        keep_indices = torch.nonzero(selected_mask, as_tuple=False).flatten()
+        return {
+            "keep_indices": keep_indices,
+            "seed_ratio": float(seed_ratio),
+            "seed_count": int(seed_count),
+            "seed_pool_indices": seed_pool_indices.to(device=device, dtype=torch.long),
+            "seed_indices": torch.sort(seed_indices).values,
+            "mmr_selected_order": selected_order,
+            "diversity_gain": diversity_gains,
+            "saliency_floor_eta": float(eta),
+            "saliency_mass_floor": float(saliency_mass_floor.item()),
+            "saliency_mass_selected": float(selected_mass.item()),
+            "saliency_mass_topk": float(saliency_mass_topk.item()),
+            "feasible_candidate_count": int(feasible_candidate_count),
+            "repair_replacements": repair_replacements,
+        }
+
     def _saliency_constrained_random_feasible_select(
         self,
         saliency_score: torch.Tensor,
@@ -1367,7 +1458,19 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
 
         params = self._get_scnd_params()
         requested_backend = str(params["selection_backend"])
-        if requested_backend == "python":
+        c_selection_rule = str(params["c_selection_rule"])
+        if requested_backend == "triton":
+            if not current_visual_embeds.is_cuda:
+                raise RuntimeError("sparsevlm_scnd.selection_backend='triton' requires CUDA tensors")
+            if not is_scnd_triton_available():
+                raise RuntimeError("sparsevlm_scnd.selection_backend='triton' requires a working Triton CUDA install")
+            if mode == "C" and c_selection_rule != "native":
+                raise ValueError(
+                    "sparsevlm_scnd.selection_backend='triton' currently supports only "
+                    "c_selection_rule='native'"
+                )
+            selection_backend_effective = "triton" if mode == "C" else "gpu"
+        elif requested_backend == "python":
             selection_backend_effective = "python"
         elif requested_backend == "gpu" and current_visual_embeds.is_cuda:
             selection_backend_effective = "gpu"
@@ -1418,7 +1521,6 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             assert distance is not None
             _sync_if_cuda(distance)
             selection_start = time.perf_counter()
-            c_selection_rule = str(params["c_selection_rule"])
             if c_selection_rule == "random_feasible" and selection_backend_effective == "gpu":
                 selection = self._saliency_constrained_random_feasible_select_gpu(
                     saliency_score=mixed_score,
@@ -1446,6 +1548,19 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     saliency_floor_max=float(params["saliency_floor_max"]),
                     saliency_repair=bool(params["saliency_repair"]),
                     random_seed=random_seed,
+                )
+            elif selection_backend_effective == "triton":
+                selection = self._saliency_constrained_native_divprune_select_triton(
+                    saliency_score=mixed_score,
+                    distance=distance,
+                    target_keep=target_keep,
+                    entropy_norm=entropy_norm,
+                    seed_ratio_min=float(params["seed_ratio_min"]),
+                    seed_ratio_max=float(params["seed_ratio_max"]),
+                    seed_pool_multiplier=float(params["seed_pool_multiplier"]),
+                    saliency_floor_min=float(params["saliency_floor_min"]),
+                    saliency_floor_max=float(params["saliency_floor_max"]),
+                    saliency_repair=bool(params["saliency_repair"]),
                 )
             elif selection_backend_effective == "gpu":
                 selection = self._saliency_constrained_native_divprune_select_gpu(

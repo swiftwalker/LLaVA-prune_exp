@@ -15,7 +15,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 
 LLAVA_ROOT = Path(__file__).resolve().parents[2]
@@ -94,8 +94,17 @@ def _fast_scnd_sets() -> tuple[str, ...]:
     )
 
 
-def build_cases(group: str, output_root: str, warmup_samples: int) -> list[BenchmarkCase]:
+def _scnd_e2e_suffix(retain: str, scnd_backend: str) -> str:
+    return f"eff_scnd_{retain}" if scnd_backend == "gpu" else f"eff_scnd_{scnd_backend}_{retain}"
+
+
+def _scnd_overhead_suffix(scnd_backend: str) -> str:
+    return f"eff_overhead_scnd_{scnd_backend}_retain128"
+
+
+def build_cases(group: str, output_root: str, warmup_samples: int, scnd_backend: str) -> list[BenchmarkCase]:
     common = _common_sets(output_root, warmup_samples)
+    scnd_backend = str(scnd_backend).lower()
     cases: list[BenchmarkCase] = []
     include_e2e = group in {"all", "e2e"}
     include_overhead = group in {"all", "overhead"}
@@ -121,13 +130,13 @@ def build_cases(group: str, output_root: str, warmup_samples: int) -> list[Bench
                     name=f"e2e_scnd_{retain}",
                     strategy="sparsevlm_scnd",
                     retain=retain,
-                    suffix=f"eff_scnd_{retain}",
+                    suffix=_scnd_e2e_suffix(retain, scnd_backend),
                     extra_sets=common
                     + _scnd_default_sets()
                     + (
-                        "pruning.sparsevlm_scnd.selection_backend=gpu",
+                        f"pruning.sparsevlm_scnd.selection_backend={scnd_backend}",
                         f"pruning.prune_ratio={RETAIN_RATIOS[retain]}",
-                        f"output.run_tag_suffix=eff_scnd_{retain}",
+                        f"output.run_tag_suffix={_scnd_e2e_suffix(retain, scnd_backend)}",
                     ),
                 )
             )
@@ -139,13 +148,13 @@ def build_cases(group: str, output_root: str, warmup_samples: int) -> list[Bench
                     name="overhead_scnd_gpu_retain128",
                     strategy="sparsevlm_scnd",
                     retain="retain128",
-                    suffix="eff_overhead_scnd_gpu_retain128",
+                    suffix=_scnd_overhead_suffix(scnd_backend),
                     extra_sets=common
                     + _scnd_default_sets()
                     + (
-                        "pruning.sparsevlm_scnd.selection_backend=gpu",
+                        f"pruning.sparsevlm_scnd.selection_backend={scnd_backend}",
                         f"pruning.prune_ratio={RETAIN_RATIOS['retain128']}",
-                        "output.run_tag_suffix=eff_overhead_scnd_gpu_retain128",
+                        f"output.run_tag_suffix={_scnd_overhead_suffix(scnd_backend)}",
                     ),
                 )
             )
@@ -196,15 +205,16 @@ def build_cases(group: str, output_root: str, warmup_samples: int) -> list[Bench
     return cases
 
 
-def build_command(case: BenchmarkCase, dataset: str, total_samples: int) -> list[str]:
+def build_command(case: BenchmarkCase, dataset: str, total_samples: Optional[int]) -> list[str]:
     command = [
         "bash",
         "entropy_exp/scripts/run_prune.sh",
         case.strategy,
         dataset,
-        str(int(total_samples)),
-        "--no-auto-gpu",
     ]
+    if total_samples is not None:
+        command.append(str(int(total_samples)))
+    command.append("--no-auto-gpu")
     for extra_set in case.extra_sets:
         command.extend(["--set", extra_set])
     return command
@@ -226,18 +236,29 @@ def main() -> None:
         help="Run only the named case; may be repeated. Names are printed by --dry-run.",
     )
     parser.add_argument("--gpu", default=None, help="Physical GPU id to expose through CUDA_VISIBLE_DEVICES")
+    parser.add_argument(
+        "--scnd-backend",
+        choices=["gpu", "triton"],
+        default="gpu",
+        help="SCND selection backend for e2e SCND cases; default preserves the original benchmark.",
+    )
     parser.add_argument("--timed-samples", type=int, default=10)
     parser.add_argument("--warmup-samples", type=int, default=2)
+    parser.add_argument(
+        "--full-dataset",
+        action="store_true",
+        help="Do not pass --max-samples to run_prune.sh; process the entire dataset.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    if args.timed_samples <= 0:
+    if not args.full_dataset and args.timed_samples <= 0:
         raise SystemExit("--timed-samples must be positive")
     if args.warmup_samples < 0:
         raise SystemExit("--warmup-samples must be non-negative")
 
-    total_samples = int(args.timed_samples) + int(args.warmup_samples)
-    cases = build_cases(args.group, args.output_root, args.warmup_samples)
+    total_samples = None if args.full_dataset else int(args.timed_samples) + int(args.warmup_samples)
+    cases = build_cases(args.group, args.output_root, args.warmup_samples, args.scnd_backend)
     if args.case:
         wanted = set(args.case)
         known = {case.name for case in cases}
@@ -256,9 +277,10 @@ def main() -> None:
         "dataset": args.dataset,
         "output_root": args.output_root,
         "group": args.group,
-        "timed_samples": args.timed_samples,
+        "timed_samples": "full" if args.full_dataset else args.timed_samples,
         "warmup_samples": args.warmup_samples,
-        "total_samples": total_samples,
+        "total_samples": "full" if total_samples is None else total_samples,
+        "full_dataset": bool(args.full_dataset),
         "gpu": args.gpu,
         "cases": [],
     }

@@ -8,6 +8,7 @@ SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, SRC_DIR)
 
 from strategies import get_strategy
+from strategies.scnd_triton_kernels import is_scnd_triton_available
 from strategies.sparsevlm_scnd import SparseVLMSCNDStrategy, _scnd_distance_matrix
 
 
@@ -91,6 +92,7 @@ class SparseVLMSCNDTests(unittest.TestCase):
         strategy = self._strategy(selection_backend="auto")
         params = strategy._get_scnd_params()
         self.assertEqual(params["selection_backend"], "auto")
+        self.assertEqual(self._strategy(selection_backend="triton")._get_scnd_params()["selection_backend"], "triton")
 
         invalid = self._strategy(selection_backend="bogus")
         with self.assertRaises(ValueError):
@@ -125,6 +127,149 @@ class SparseVLMSCNDTests(unittest.TestCase):
 
         self.assertEqual(keep.numel(), info["target_keep"])
         self.assertEqual(info["selection_backend_effective"], "python")
+
+        triton_cpu = self._strategy(selection_backend="triton")
+        self._prepare(triton_cpu, 4)
+        with self.assertRaises(RuntimeError):
+            triton_cpu.compute_keep_mask(attn, 1, 4, 5, 0, current_visual_embeds=torch.eye(4))
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and is_scnd_triton_available(),
+        "CUDA and Triton are required for explicit Triton backend tests",
+    )
+    def test_triton_backend_matches_gpu_backend_for_native_c_layer(self):
+        cases = [
+            {
+                "prune_ratio": 0.5,
+                "seed_ratio_min": 0.5,
+                "seed_ratio_max": 0.5,
+                "saliency_floor_min": 0.65,
+                "saliency_floor_max": 0.65,
+                "saliency_repair": True,
+                "distance_metric": "cosine",
+            },
+            {
+                "prune_ratio": 0.4,
+                "seed_ratio_min": 0.34,
+                "seed_ratio_max": 0.34,
+                "seed_pool_multiplier": 1.0,
+                "saliency_floor_min": 1.0,
+                "saliency_floor_max": 1.0,
+                "saliency_repair": False,
+                "distance_metric": "cosine",
+            },
+            {
+                "prune_ratio": 0.5,
+                "seed_ratio_min": 0.5,
+                "seed_ratio_max": 0.5,
+                "saliency_floor_min": 0.65,
+                "saliency_floor_max": 0.65,
+                "saliency_repair": True,
+                "distance_metric": "euclidean",
+            },
+            {
+                "prune_ratio": 0.5,
+                "seed_ratio_min": 0.5,
+                "seed_ratio_max": 0.5,
+                "saliency_floor_min": 0.65,
+                "saliency_floor_max": 0.65,
+                "saliency_repair": True,
+                "distance_metric": "dot",
+            },
+        ]
+        values = [[0.9, 0.8, 0.7, 0.2, 0.1], [0.9, 0.8, 0.7, 0.2, 0.1]]
+        embeds = torch.tensor(
+            [[1.0, 0.0], [0.99, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.3, 0.7]],
+            dtype=torch.float32,
+            device="cuda",
+        )
+
+        for base_overrides in cases:
+            infos = []
+            keeps = []
+            for backend in ("gpu", "triton"):
+                strategy = self._strategy(**base_overrides, selection_backend=backend)
+                strategy.prepare_sample(
+                    inputs_embeds=_inputs(5).to("cuda"),
+                    v_token_start=1,
+                    v_token_num=5,
+                    text_token_start=6,
+                    text_token_ids=torch.tensor([11, 12], device="cuda"),
+                    text_special_token_mask=torch.tensor([False, False], device="cuda"),
+                )
+                attn = _full_attention(
+                    seq_len=8,
+                    text_rows=[6, 7],
+                    visual_cols=[1, 2, 3, 4, 5],
+                    values=values,
+                ).to("cuda")
+                keep, info = strategy.compute_keep_mask(attn, 1, 5, 6, 0, current_visual_embeds=embeds)
+                keeps.append(keep.detach().cpu().tolist())
+                infos.append(info)
+
+            self.assertEqual(keeps[0], keeps[1])
+            self.assertEqual(infos[1]["selection_backend_effective"], "triton")
+            self.assertEqual(infos[0]["seed_indices"].tolist(), infos[1]["seed_indices"].tolist())
+            self.assertEqual(infos[0]["mmr_selected_order"].tolist(), infos[1]["mmr_selected_order"].tolist())
+            self.assertTrue(
+                torch.equal(
+                    torch.as_tensor(infos[0]["diversity_gain"]),
+                    torch.as_tensor(infos[1]["diversity_gain"]),
+                )
+            )
+            self.assertEqual(infos[0]["feasible_candidate_count"], infos[1]["feasible_candidate_count"])
+            self.assertAlmostEqual(infos[0]["saliency_mass_floor"], infos[1]["saliency_mass_floor"], places=6)
+            self.assertGreaterEqual(infos[1]["saliency_mass_selected"] + 1e-8, infos[1]["saliency_mass_floor"])
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and is_scnd_triton_available(),
+        "CUDA and Triton are required for explicit Triton backend tests",
+    )
+    def test_triton_backend_rejects_random_feasible_c_rule(self):
+        strategy = self._strategy(selection_backend="triton", c_selection_rule="random_feasible")
+        strategy.prepare_sample(
+            inputs_embeds=_inputs(4).to("cuda"),
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12], device="cuda"),
+            text_special_token_mask=torch.tensor([False, False], device="cuda"),
+        )
+        attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
+        ).to("cuda")
+        with self.assertRaises(ValueError):
+            strategy.compute_keep_mask(attn, 1, 4, 5, 0, current_visual_embeds=torch.eye(4, device="cuda"))
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and is_scnd_triton_available(),
+        "CUDA and Triton are required for explicit Triton backend tests",
+    )
+    def test_triton_request_uses_gpu_backend_for_b_layer(self):
+        strategy = self._strategy(layer_modes=["B"], selection_backend="triton", prune_ratio=0.5, boundary_ratio=0.5)
+        strategy.prepare_sample(
+            inputs_embeds=_inputs(4).to("cuda"),
+            v_token_start=1,
+            v_token_num=4,
+            text_token_start=5,
+            text_token_ids=torch.tensor([11, 12], device="cuda"),
+            text_special_token_mask=torch.tensor([False, False], device="cuda"),
+        )
+        attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.90, 0.89, 0.88, 0.87], [0.90, 0.89, 0.88, 0.87]],
+        ).to("cuda")
+        embeds = torch.tensor([[1.0, 0.0], [0.99, 0.0], [-1.0, 0.0], [0.0, 1.0]], device="cuda")
+        keep, info = strategy.compute_keep_mask(attn, 1, 4, 5, 0, current_visual_embeds=embeds)
+
+        self.assertEqual(keep.tolist(), [0, 2])
+        self.assertEqual(info["selection_backend_requested"], "triton")
+        self.assertEqual(info["selection_backend_effective"], "gpu")
 
     def test_distance_metric_matrices_are_larger_is_more_diverse(self):
         embeds = torch.tensor([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
