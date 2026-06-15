@@ -35,6 +35,11 @@ from algo_compare.vqa_compat import (  # noqa: E402
     normalize_item as normalize_compat_item,
     open_image as open_compat_image,
 )
+from algo_compare.benchmark import (  # noqa: E402
+    BenchmarkRecorder,
+    add_benchmark_args,
+    continuation_sequences,
+)
 from llava.constants import (  # noqa: E402
     DEFAULT_IMAGE_TOKEN,
     DEFAULT_IM_END_TOKEN,
@@ -111,11 +116,14 @@ def eval_model(args: argparse.Namespace) -> None:
 
     questions = load_questions(args.dataset, Path(args.question_file))
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
+    if args.max_samples is not None:
+        questions = questions[: args.max_samples]
     answers_file = Path(os.path.expanduser(args.answers_file))
     answers_file.parent.mkdir(parents=True, exist_ok=True)
+    benchmark = BenchmarkRecorder.from_args(args, answers_file=answers_file, method="visionzip", dataset=args.dataset)
 
     with answers_file.open("w", encoding="utf-8") as ans_file:
-        for raw_item in tqdm(questions):
+        for sample_idx, raw_item in enumerate(tqdm(questions)):
             item = normalize_item(args.dataset, raw_item)
             qs, cur_prompt, image_tensor, image_sizes = build_prompt_and_image(
                 item,
@@ -141,17 +149,24 @@ def eval_model(args: argparse.Namespace) -> None:
             }
             if args.top_p is None:
                 generate_args.pop("top_p")
+            bench_token = benchmark.start_sample()
             with torch.inference_mode():
                 output_ids = model.generate(input_ids, **generate_args)
-
-            if hasattr(output_ids, "sequences"):
-                sequences = output_ids.sequences
-            elif isinstance(output_ids, dict):
-                sequences = output_ids["sequences"]
-            else:
-                sequences = output_ids
-            if sequences.shape[1] > input_ids.shape[1]:
-                sequences = sequences[:, input_ids.shape[1] :]
+            sequences = continuation_sequences(output_ids, input_ids)
+            benchmark.finish_sample(
+                bench_token,
+                sample_idx=sample_idx,
+                question_id=item["question_id"],
+                input_token_count=int(input_ids.shape[1]),
+                has_image=image_tensor is not None,
+                num_generated_tokens=int(sequences.shape[1]),
+                metadata={
+                    "visionzip_dominant": args.visionzip_dominant,
+                    "visionzip_contextual": args.visionzip_contextual,
+                    "visionzip_retained_visual_tokens": args.visionzip_dominant + args.visionzip_contextual,
+                    "visionzip_enabled": image_tensor is not None,
+                },
+            )
             outputs = tokenizer.batch_decode(sequences, skip_special_tokens=True)[0].strip()
             ans_file.write(
                 json.dumps(
@@ -191,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max_new_tokens", type=int, default=128)
     parser.add_argument("--visionzip-dominant", type=int, default=54)
     parser.add_argument("--visionzip-contextual", type=int, default=10)
+    add_benchmark_args(parser)
     return parser
 
 

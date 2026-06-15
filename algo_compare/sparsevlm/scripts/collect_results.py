@@ -61,6 +61,25 @@ def csv_value(value: Any) -> Any:
     return value
 
 
+def benchmark_counts(path: Path) -> tuple[int, int]:
+    if not path.is_file():
+        return 0, 0
+    total = 0
+    timed = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            total += 1
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not record.get("benchmark_is_warmup", False):
+                timed += 1
+    return total, timed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", required=True)
@@ -107,6 +126,8 @@ def main() -> int:
     command = run_config.get("command_shell") or (
         command_file.read_text(encoding="utf-8").strip() if command_file.is_file() else None
     )
+    benchmark_stats = run_dir / "benchmark_stats.jsonl"
+    benchmark_sample_count, benchmark_timed_sample_count = benchmark_counts(benchmark_stats)
 
     record = {
         "label": run_dir.name,
@@ -121,6 +142,9 @@ def main() -> int:
         "run_dir": str(run_dir),
         "answers_file": str(answers_file) if answers_file.exists() else None,
         "eval_summary": str(eval_summary) if eval_summary.exists() else None,
+        "benchmark_stats": str(benchmark_stats) if benchmark_stats.exists() else None,
+        "benchmark_sample_count": benchmark_sample_count,
+        "benchmark_timed_sample_count": benchmark_timed_sample_count,
         "official_repo_commit": git_commit(official_repo),
         "official_repo": str(official_repo),
         "command": command,

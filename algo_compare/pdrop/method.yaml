@@ -10,14 +10,7 @@ official:
   target_commit: "6444f304aee4b7edcb022839fb9e8cd07859704a"
   local_checkout: "algo_compare/pdrop/third_party/PyramidDrop"
 entrypoints:
-  inference_module: "llava.eval.model_vqa_loader"
-  dataset_inference_modules:
-    gqa: "llava.eval.model_vqa_loader"
-    mme: "llava.eval.model_vqa_loader"
-    pope: "llava.eval.model_vqa_loader"
-    textvqa: "llava.eval.model_vqa_loader"
-    scienceqa: "llava.eval.model_vqa_science"
-    mmbench: "llava.eval.model_vqa_mmbench"
+  inference_script: "algo_compare/pdrop/scripts/pdrop_vqa_runner.py"
   official_eval_scripts:
     gqa: "scripts/v1_5/pdrop_eval/gqa.sh"
     mme: "scripts/v1_5/pdrop_eval/mme.sh"

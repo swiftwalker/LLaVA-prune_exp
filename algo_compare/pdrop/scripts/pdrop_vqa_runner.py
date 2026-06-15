@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run official DivPrune LLaVA code on local VQA-style datasets."""
+"""Run official PyramidDrop on local VQA-style datasets with benchmark stats."""
 
 from __future__ import annotations
 
@@ -13,31 +13,29 @@ from typing import Any
 
 import shortuuid
 import torch
-from PIL import Image
 from tqdm import tqdm
 
 
-def _add_divprune_paths() -> None:
-    official_repo = Path(os.environ.get("DIVPRUNE_OFFICIAL_REPO") or os.getcwd()).resolve()
-    llava_root = Path(os.environ.get("DIVPRUNE_LLAVA_ROOT") or official_repo / "LLaVA").resolve()
+def _add_runtime_paths() -> None:
+    official_repo = Path(os.environ.get("PDROP_OFFICIAL_REPO") or os.getcwd()).resolve()
     algo_src = Path(__file__).resolve().parents[2] / "src"
-    for path in (algo_src, llava_root, official_repo):
+    for path in (algo_src, official_repo):
         if path.exists():
             sys.path.insert(0, str(path))
 
 
-_add_divprune_paths()
+_add_runtime_paths()
 
+from algo_compare.benchmark import (  # noqa: E402
+    BenchmarkRecorder,
+    add_benchmark_args,
+    continuation_sequences,
+)
 from algo_compare.vqa_compat import (  # noqa: E402
     SUPPORTED_DATASETS as VQA_DATASETS,
     load_questions as load_compat_questions,
     normalize_item as normalize_compat_item,
     open_image as open_compat_image,
-)
-from algo_compare.benchmark import (  # noqa: E402
-    BenchmarkRecorder,
-    add_benchmark_args,
-    continuation_sequences,
 )
 from llava.constants import (  # noqa: E402
     DEFAULT_IMAGE_TOKEN,
@@ -60,11 +58,6 @@ def get_chunk(items: list[dict[str, Any]], n: int, k: int) -> list[dict[str, Any
     return split_list(items, n)[k]
 
 
-def load_jsonl(path: Path) -> list[dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
-
-
 def load_questions(dataset: str, path: Path) -> list[dict[str, Any]]:
     return load_compat_questions(dataset, path)
 
@@ -73,11 +66,12 @@ def normalize_item(dataset: str, item: dict[str, Any]) -> dict[str, Any]:
     return normalize_compat_item(dataset, item)
 
 
-def configure_divprune_env(args: argparse.Namespace) -> None:
-    os.environ["BASELINE"] = args.divprune_baseline
-    os.environ["LAYER_INDEX"] = str(args.divprune_layer_index)
-    os.environ["SUBSET_RATIO"] = str(args.divprune_subset_ratio)
-    os.environ["DIVPRUNE_VISUAL_TOKEN_COUNT"] = str(args.divprune_visual_token_count)
+def configure_pdrop_model(model: Any, args: argparse.Namespace) -> None:
+    if type(model).__name__ != "LlavaLlamaForCausalLM_PDrop":
+        return
+    model.model.layer_list = list(eval(args.layer_list))
+    model.model.image_token_ratio_list = list(eval(args.image_token_ratio_list))
+    model.model.image_token_ratio_list.insert(0, 1.0)
 
 
 def build_prompt_and_image(
@@ -110,11 +104,17 @@ def build_prompt_and_image(
 
 
 def eval_model(args: argparse.Namespace) -> None:
-    configure_divprune_env(args)
     disable_torch_init()
     model_path = os.path.expanduser(args.model_path)
     model_name = get_model_name_from_path(model_path)
-    tokenizer, model, image_processor, _ = load_pretrained_model(model_path, args.model_base, model_name)
+    pdrop_infer = bool(args.pdrop_infer or args.layer_list)
+    tokenizer, model, image_processor, _ = load_pretrained_model(
+        model_path,
+        args.model_base,
+        model_name,
+        pdrop_infer,
+    )
+    configure_pdrop_model(model, args)
 
     questions = load_questions(args.dataset, Path(args.question_file))
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
@@ -122,9 +122,8 @@ def eval_model(args: argparse.Namespace) -> None:
         questions = questions[: args.max_samples]
     answers_file = Path(os.path.expanduser(args.answers_file))
     answers_file.parent.mkdir(parents=True, exist_ok=True)
-    benchmark = BenchmarkRecorder.from_args(args, answers_file=answers_file, method="divprune", dataset=args.dataset)
+    benchmark = BenchmarkRecorder.from_args(args, answers_file=answers_file, method="pdrop", dataset=args.dataset)
 
-    retained_visual_tokens = int(round(args.divprune_subset_ratio * args.divprune_visual_token_count))
     with answers_file.open("w", encoding="utf-8") as ans_file:
         for sample_idx, raw_item in enumerate(tqdm(questions)):
             item = normalize_item(args.dataset, raw_item)
@@ -164,12 +163,10 @@ def eval_model(args: argparse.Namespace) -> None:
                 has_image=image_tensor is not None,
                 num_generated_tokens=int(sequences.shape[1]),
                 metadata={
-                    "divprune_baseline": args.divprune_baseline,
-                    "divprune_layer_index": args.divprune_layer_index,
-                    "divprune_subset_ratio": args.divprune_subset_ratio,
-                    "divprune_visual_token_count": args.divprune_visual_token_count,
-                    "divprune_retained_visual_tokens": retained_visual_tokens,
-                    "divprune_enabled": image_tensor is not None,
+                    "pdrop_layer_list": args.layer_list,
+                    "pdrop_image_token_ratio_list": args.image_token_ratio_list,
+                    "pdrop_infer": pdrop_infer,
+                    "pdrop_enabled": image_tensor is not None,
                 },
             )
             outputs = tokenizer.batch_decode(sequences, skip_special_tokens=True)[0].strip()
@@ -182,12 +179,10 @@ def eval_model(args: argparse.Namespace) -> None:
                         "answer_id": shortuuid.uuid(),
                         "model_id": model_name,
                         "metadata": {
-                            "divprune_baseline": args.divprune_baseline,
-                            "divprune_layer_index": args.divprune_layer_index,
-                            "divprune_subset_ratio": args.divprune_subset_ratio,
-                            "divprune_visual_token_count": args.divprune_visual_token_count,
-                            "divprune_retained_visual_tokens": retained_visual_tokens,
-                            "divprune_enabled": image_tensor is not None,
+                            "pdrop_layer_list": args.layer_list,
+                            "pdrop_image_token_ratio_list": args.image_token_ratio_list,
+                            "pdrop_infer": pdrop_infer,
+                            "pdrop_enabled": image_tensor is not None,
                         },
                     }
                 )
@@ -210,11 +205,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top_p", type=float, default=None)
     parser.add_argument("--num_beams", type=int, default=1)
-    parser.add_argument("--max_new_tokens", type=int, default=128)
-    parser.add_argument("--divprune-baseline", type=str, default="OURS")
-    parser.add_argument("--divprune-layer-index", type=int, default=0)
-    parser.add_argument("--divprune-subset-ratio", type=float, default=0.098)
-    parser.add_argument("--divprune-visual-token-count", type=int, default=576)
+    parser.add_argument("--max_new_tokens", "--max-new-tokens", dest="max_new_tokens", type=int, default=128)
+    parser.add_argument("--layer_list", type=str, default="[8,16,24]")
+    parser.add_argument("--image_token_ratio_list", type=str, default="[0.5,0.25,0.125]")
+    parser.add_argument("--pdrop_infer", action="store_true")
+    parser.add_argument("--single-pred-prompt", action="store_true")
+    parser.add_argument("--lang", default="en")
     add_benchmark_args(parser)
     return parser
 

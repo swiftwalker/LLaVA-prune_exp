@@ -8,11 +8,7 @@ official:
   target_commit: "87fe4319430e079a778c25d4ddf4588a3c4038ca"
   local_checkout: "algo_compare/sparsevlm/third_party/SparseVLMs"
 entrypoints:
-  inference_module: "llava.eval.model_vqa_loader"
-  dataset_inference_modules:
-    mmbench: "llava.eval.model_vqa_mmbench"
-  dataset_inference_scripts:
-    scienceqa: "algo_compare/sparsevlm/scripts/model_vqa_science_compat.py"
+  inference_script: "algo_compare/sparsevlm/scripts/sparsevlm_vqa_runner.py"
   official_eval_scripts:
     mme: "scripts/v1_5/eval/mme.sh"
     gqa: "scripts/v1_5/eval/gqa.sh"

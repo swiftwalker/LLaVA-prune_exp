@@ -379,18 +379,23 @@ def build_official_run(args: Any) -> OfficialRun:
     elif method == "pdrop":
         command.extend(
             [
+                "--dataset",
+                dataset,
+                "--num_beams",
+                str(num_beams),
+                "--max_new_tokens",
+                str(max_new_tokens),
                 "--layer_list",
                 str(method_params["layer_list"]),
                 "--image_token_ratio_list",
                 str(method_params["image_token_ratio_list"]),
+                "--pdrop_infer",
             ]
         )
         if dataset == "scienceqa":
             command.extend(["--single-pred-prompt"])
         elif dataset == "mmbench":
-            command.extend(["--single-pred-prompt", "--lang", "en", "--pdrop_infer"])
-        else:
-            command.extend(["--num_beams", str(num_beams), "--max_new_tokens", str(max_new_tokens), "--pdrop_infer"])
+            command.extend(["--single-pred-prompt", "--lang", "en"])
     elif method == "visionzip":
         command.extend(
             [
@@ -425,6 +430,23 @@ def build_official_run(args: Any) -> OfficialRun:
                 str(method_params["visual_token_count"]),
             ]
         )
+    elif method == "sparsevlm":
+        command.extend(
+            [
+                "--dataset",
+                dataset,
+                "--num_beams",
+                str(num_beams),
+                "--max_new_tokens",
+                str(max_new_tokens),
+                "--retained_tokens",
+                str(retain_token),
+            ]
+        )
+        if dataset in {"scienceqa", "mmbench"}:
+            command.extend(["--single-pred-prompt"])
+        if dataset == "mmbench":
+            command.extend(["--lang", "en"])
     elif dataset == "scienceqa":
         command.extend(["--single-pred-prompt", "--retained_tokens", str(retain_token), "--max-new-tokens", str(max_new_tokens)])
     elif dataset == "mmbench":
@@ -435,8 +457,22 @@ def build_official_run(args: Any) -> OfficialRun:
         command.extend(["--model-base", str(resolve_path(args.model_base) or args.model_base)])
     if top_p is not None and dataset != "scienceqa":
         command.extend(["--top_p", str(top_p)])
+    if getattr(args, "max_samples", None) is not None:
+        command.extend(["--max-samples", str(args.max_samples)])
+    if bool(getattr(args, "benchmark", False)):
+        command.append("--benchmark")
+        command.extend(["--benchmark-warmup-samples", str(getattr(args, "benchmark_warmup_samples", 0) or 0)])
+        if getattr(args, "benchmark_stats_file", None):
+            command.extend(["--benchmark-stats-file", str(resolve_path(args.benchmark_stats_file) or args.benchmark_stats_file)])
+        if getattr(args, "benchmark_run_label", None):
+            command.extend(["--benchmark-run-label", str(args.benchmark_run_label)])
 
-    env = {"RETAIN_TOKN": str(retain_token)}
+    env = {
+        "RETAIN_TOKN": str(retain_token),
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_DATASETS_OFFLINE": "1",
+    }
     if args.use_version or use_version:
         env["USE_VERSION"] = str(args.use_version or use_version)
     if method == "fastv":
@@ -504,6 +540,10 @@ def build_official_run(args: Any) -> OfficialRun:
         env["PYTHONPATH"] = os.pathsep.join(
             [str(llava_root), str(official_repo)] + ([existing_pythonpath] if existing_pythonpath else [])
         )
+    elif method == "sparsevlm":
+        env.update({"SPARSEVLM_OFFICIAL_REPO": str(official_repo)})
+        existing_pythonpath = os.environ.get("PYTHONPATH")
+        env["PYTHONPATH"] = os.pathsep.join([str(official_repo)] + ([existing_pythonpath] if existing_pythonpath else []))
 
     eval_command = None
     if args.eval:
@@ -561,6 +601,16 @@ def build_official_run(args: Any) -> OfficialRun:
             "output_dir": str(output_dir),
             "answers_file": str(answers_file),
             "eval_summary": str(output_dir / "eval" / "summary.json") if args.eval else None,
+            "benchmark_stats": str(output_dir / "benchmark_stats.jsonl") if getattr(args, "benchmark", False) else None,
+        },
+        "benchmark": {
+            "enabled": bool(getattr(args, "benchmark", False)),
+            "warmup_samples": int(getattr(args, "benchmark_warmup_samples", 0) or 0),
+            "max_samples": getattr(args, "max_samples", None),
+            "stats_file": str(resolve_path(args.benchmark_stats_file) or args.benchmark_stats_file)
+            if getattr(args, "benchmark_stats_file", None)
+            else str(output_dir / "benchmark_stats.jsonl"),
+            "run_label": getattr(args, "benchmark_run_label", None),
         },
         "command": command,
         "command_shell": shell_join(command),

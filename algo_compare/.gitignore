@@ -12,3 +12,6 @@ __pycache__/
 *.pyc
 *.tmp
 *.log
+
+# Generated full/smoke timing outputs for official-method efficiency runs.
+analysis/official_efficiency_core5_sv1budget*/
