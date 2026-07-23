@@ -317,6 +317,7 @@ class VisualTokenPruner:
         eos_token_id: int = 2,
         save_tv_attn: bool = False,
         capture_layers: Optional[set] = None,
+        capture_visual_hidden_layers: Optional[set[int]] = None,
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
         Generate with visual token pruning.
@@ -332,6 +333,8 @@ class VisualTokenPruner:
             eos_token_id:   id of the EOS token for stopping
             save_tv_attn:   if True, capture text→vision attention sub-matrices
             capture_layers: set of layer indices to capture (None = all layers)
+            capture_visual_hidden_layers: set of layer indices whose pre-prune
+                visual hidden states should be exported in prune_info
 
         Returns:
             (generated_ids [1, N], prune_info dict)
@@ -351,6 +354,7 @@ class VisualTokenPruner:
                 text_special_token_mask=text_special_token_mask,
                 save_tv_attn=save_tv_attn,
                 capture_layers=capture_layers,
+                capture_visual_hidden_layers=capture_visual_hidden_layers,
             )
         finally:
             self.strategy.clear_sample()
@@ -416,6 +420,7 @@ class VisualTokenPruner:
         text_special_token_mask: Optional[torch.Tensor] = None,
         save_tv_attn: bool = False,
         capture_layers: Optional[set] = None,
+        capture_visual_hidden_layers: Optional[set[int]] = None,
     ) -> Tuple[torch.Tensor, DynamicCache, Dict[str, Any]]:
         device = inputs_embeds.device
         dtype = inputs_embeds.dtype
@@ -449,6 +454,11 @@ class VisualTokenPruner:
         for layer_idx, layer in enumerate(self.model.model.layers):
             need_prune = layer_idx in self.prune_layers
             need_capture = save_tv_attn and (capture_layers is None or layer_idx in capture_layers)
+            need_visual_hidden_capture = (
+                capture_visual_hidden_layers is not None
+                and layer_idx in capture_visual_hidden_layers
+                and cur_v_num > 0
+            )
             if prune_stage == "pre" and need_prune and cur_v_num > 0:
                 hidden_states, position_ids, causal_mask, cur_v_num, cur_text_start, layer_info = self._run_pre_prune_layer(
                     layer=layer,
@@ -499,16 +509,24 @@ class VisualTokenPruner:
 
             hidden_states = out[0]
 
-            # Capture tv_attn for non-prune layers
-            if need_capture and not need_prune and cur_v_num > 0:
+            visual_hidden_info = None
+            if need_visual_hidden_capture:
+                visual_hidden_info = self._capture_visual_hidden(
+                    hidden_states=hidden_states,
+                    v_token_start=cur_v_start,
+                    v_token_num=cur_v_num,
+                )
+
+            # Capture diagnostics for non-prune layers
+            if (need_capture or visual_hidden_info is not None) and not need_prune and cur_v_num > 0:
+                layer_capture_info = prune_info["layers"].setdefault(layer_idx, {"layer_idx": layer_idx})
+                if visual_hidden_info is not None:
+                    layer_capture_info.update(visual_hidden_info)
                 attn_weights = out[1]
-                if attn_weights is not None:
+                if need_capture and attn_weights is not None:
                     v_end = cur_v_start + cur_v_num
                     tv_attn = attn_weights[0, :, cur_text_start:, cur_v_start:v_end].cpu()
-                    prune_info["layers"][layer_idx] = {
-                        "layer_idx": layer_idx,
-                        "tv_attn": tv_attn,
-                    }
+                    layer_capture_info["tv_attn"] = tv_attn
 
             if need_prune and cur_v_num > 0:
                 attn_weights = out[1] if need_attn else None
@@ -546,6 +564,8 @@ class VisualTokenPruner:
 
                 if need_capture:
                     layer_info["tv_attn"] = tv_attn  # [H, L_t, L_v]
+                if visual_hidden_info is not None:
+                    layer_info.update(visual_hidden_info)
 
                 layer_info["layer_idx"] = layer_idx
                 layer_info["prune_stage"] = prune_stage
@@ -563,6 +583,23 @@ class VisualTokenPruner:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _capture_visual_hidden(
+        hidden_states: torch.Tensor,
+        v_token_start: int,
+        v_token_num: int,
+    ) -> Dict[str, Any]:
+        visual_hidden = hidden_states[
+            0,
+            v_token_start:v_token_start + v_token_num,
+        ].detach().cpu()
+        return {
+            "visual_hidden": visual_hidden,
+            "visual_hidden_v_token_start": int(v_token_start),
+            "visual_hidden_v_token_num": int(v_token_num),
+            "visual_hidden_shape": list(visual_hidden.shape),
+        }
+
     def _run_pre_prune_layer(
         self,
         layer,

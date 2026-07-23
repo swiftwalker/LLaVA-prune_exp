@@ -231,6 +231,17 @@ capture:
   compression: "gzip"
   compression_opts: 4
 
+diagnostics:
+  rep_bottleneck:
+    enabled: false                  # opt-in export for SCND representation bottleneck figures
+    question_ids: []                # explicit sample ids only; avoids accidental full hidden dumps
+    sample_indices: []              # optional original dataset row indices for duplicate question_id cases
+    capture_layer: 2                # first pruning layer for C-layer diagnostics
+    output_name: "rep_bottleneck_hidden.h5"
+    precision: "fp16"               # fp16 | fp32
+    compression: "gzip"
+    compression_opts: 4
+
 datasets:
   gqa:
     question_file: "entropy_exp/eval_questions/gqa/llava_gqa_testdev_balanced.jsonl"

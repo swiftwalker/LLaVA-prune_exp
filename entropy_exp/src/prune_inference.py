@@ -154,6 +154,38 @@ def collate_fn(batch):
     return input_ids, image_tensors, image_sizes
 
 
+def _normalize_question_id_set(raw_question_ids: Any) -> set[str]:
+    if raw_question_ids is None:
+        return set()
+    if isinstance(raw_question_ids, (str, int)):
+        return {str(raw_question_ids)}
+    return {str(item) for item in raw_question_ids}
+
+
+def _normalize_int_set(raw_values: Any) -> set[int]:
+    if raw_values is None:
+        return set()
+    if isinstance(raw_values, int):
+        return {int(raw_values)}
+    if isinstance(raw_values, str):
+        raw_values = raw_values.strip()
+        if not raw_values:
+            return set()
+        return {int(raw_values)}
+    return {int(item) for item in raw_values}
+
+
+def _h5_dataset_kwargs(cfg: dict) -> dict:
+    compression = cfg.get("compression", "gzip")
+    if not compression:
+        return {}
+    kwargs = {"compression": compression}
+    compression_opts = cfg.get("compression_opts", 4)
+    if compression_opts is not None:
+        kwargs["compression_opts"] = compression_opts
+    return kwargs
+
+
 def build_text_special_token_mask(tokenizer, text_token_ids: torch.Tensor) -> torch.Tensor:
     """Build a boolean mask over text-side token ids for tokenizer special tokens."""
     special_ids = set(getattr(tokenizer, "all_special_ids", []) or [])
@@ -787,6 +819,18 @@ def run_prune_inference(
     save_importance = capture_cfg.get("save_importance_scores", False)
     save_indices = capture_cfg.get("save_keep_indices", False)
     captures_h5_path = os.path.join(run_dir, "captures.h5") if save_attention else None
+    rep_diag_cfg = config.get("diagnostics", {}).get("rep_bottleneck", {})
+    rep_diag_enabled = bool(rep_diag_cfg.get("enabled", False))
+    rep_diag_question_ids = _normalize_question_id_set(rep_diag_cfg.get("question_ids", []))
+    rep_diag_sample_indices = _normalize_int_set(rep_diag_cfg.get("sample_indices", []))
+    if rep_diag_enabled and not rep_diag_question_ids and not rep_diag_sample_indices:
+        raise ValueError(
+            "diagnostics.rep_bottleneck.enabled=true requires a non-empty "
+            "diagnostics.rep_bottleneck.question_ids or sample_indices list."
+        )
+    rep_diag_layer = int(rep_diag_cfg.get("capture_layer", 2))
+    rep_diag_output_name = str(rep_diag_cfg.get("output_name", "rep_bottleneck_hidden.h5"))
+    rep_diag_h5_path = os.path.join(run_dir, rep_diag_output_name) if rep_diag_enabled else None
 
     # Parse capture_layers: "all" -> None (means all), list -> set
     capture_layers_cfg = capture_cfg.get("capture_layers", "all")
@@ -867,6 +911,46 @@ def run_prune_inference(
 
     # --- load questions ---
     questions = load_dataset_samples(dataset_name, question_file)
+    rep_diag_missing_qids: list[str] = []
+    rep_diag_missing_sample_indices: list[int] = []
+    if rep_diag_enabled:
+        indexed_questions = []
+        for original_sample_idx, line in enumerate(questions):
+            indexed_line = dict(line)
+            indexed_line["_rep_bottleneck_original_sample_idx"] = original_sample_idx
+            indexed_questions.append(indexed_line)
+        questions = indexed_questions
+
+        available_qids = {str(line["question_id"]) for line in questions}
+        available_sample_indices = {int(line["_rep_bottleneck_original_sample_idx"]) for line in questions}
+        rep_diag_missing_qids = sorted(rep_diag_question_ids - available_qids)
+        rep_diag_missing_sample_indices = sorted(rep_diag_sample_indices - available_sample_indices)
+        if rep_diag_missing_qids:
+            print(
+                "[rep-bottleneck] Warning: requested question_ids not found in "
+                f"{dataset_name}: {rep_diag_missing_qids}"
+            )
+        if rep_diag_missing_sample_indices:
+            print(
+                "[rep-bottleneck] Warning: requested sample_indices not found in "
+                f"{dataset_name}: {rep_diag_missing_sample_indices}"
+            )
+        questions = [
+            line
+            for line in questions
+            if (
+                (rep_diag_question_ids and str(line["question_id"]) in rep_diag_question_ids)
+                or (
+                    rep_diag_sample_indices
+                    and int(line["_rep_bottleneck_original_sample_idx"]) in rep_diag_sample_indices
+                )
+            )
+        ]
+        if not questions:
+            raise ValueError(
+                "diagnostics.rep_bottleneck matched zero samples for "
+                f"dataset={dataset_name}."
+            )
 
     effective_max = max_samples or prune_cfg.get("max_samples")
     if effective_max is not None:
@@ -889,6 +973,15 @@ def run_prune_inference(
     all_stats = []
     ans_file = open(answers_path, 'w')
     h5_file = h5py.File(captures_h5_path, "w") if captures_h5_path else None
+    rep_diag_h5_file = h5py.File(rep_diag_h5_path, "w") if rep_diag_h5_path else None
+    if rep_diag_h5_file is not None:
+        rep_diag_h5_file.attrs["dataset"] = dataset_name
+        rep_diag_h5_file.attrs["capture_layer"] = rep_diag_layer
+        rep_diag_h5_file.attrs["requested_question_ids"] = json.dumps(sorted(rep_diag_question_ids))
+        rep_diag_h5_file.attrs["requested_sample_indices"] = json.dumps(sorted(rep_diag_sample_indices))
+        rep_diag_h5_file.attrs["missing_question_ids"] = json.dumps(rep_diag_missing_qids)
+        rep_diag_h5_file.attrs["missing_sample_indices"] = json.dumps(rep_diag_missing_sample_indices)
+        rep_diag_h5_file.attrs["hidden_precision"] = str(rep_diag_cfg.get("precision", "fp16"))
     progress_tag = run_tag
 
     for sample_idx, ((input_ids, image_tensor, image_sizes), line) in enumerate(
@@ -954,6 +1047,7 @@ def run_prune_inference(
                         eos_token_id=eos_token_id,
                         save_tv_attn=save_attention,
                         capture_layers=capture_layers_set,
+                        capture_visual_hidden_layers={rep_diag_layer} if rep_diag_enabled else None,
                     )
                     t1 = time.time()
                     total_time += (t1 - t0)
@@ -1096,11 +1190,45 @@ def run_prune_inference(
             if sample_idx % 50 == 0:
                 h5_file.flush()
 
+        # Write L2 pre-prune visual hidden states for representation bottleneck figures.
+        if rep_diag_h5_file is not None:
+            sample_id = f"{sample_idx:06d}_{str(question_id).replace('/', '__')}"
+            grp = rep_diag_h5_file.create_group(sample_id)
+            grp.attrs["question_id"] = str(question_id)
+            grp.attrs["image_file"] = str(image_file)
+            grp.attrs["has_image"] = bool(has_image)
+            grp.attrs["capture_layer"] = rep_diag_layer
+            grp.attrs["original_sample_idx"] = int(line.get("_rep_bottleneck_original_sample_idx", sample_idx))
+            grp.attrs["prompt"] = str(line.get("text", ""))
+
+            linfo = prune_info.get("layers", {}).get(rep_diag_layer, {})
+            visual_hidden = linfo.get("visual_hidden")
+            if visual_hidden is None:
+                grp.attrs["missing_visual_hidden"] = True
+            else:
+                grp.attrs["missing_visual_hidden"] = False
+                grp.attrs["v_token_start"] = int(linfo.get("visual_hidden_v_token_start", -1))
+                grp.attrs["v_token_num"] = int(linfo.get("visual_hidden_v_token_num", visual_hidden.shape[0]))
+                grp.attrs["hidden_shape"] = json.dumps(list(visual_hidden.shape))
+                layer_grp = grp.create_group(f"layer_{rep_diag_layer}")
+
+                use_fp16 = rep_diag_cfg.get("precision", "fp16") == "fp16"
+                hidden_to_save = visual_hidden.half() if use_fp16 else visual_hidden.float()
+                layer_grp.create_dataset(
+                    "visual_hidden",
+                    data=hidden_to_save.numpy(),
+                    **_h5_dataset_kwargs(rep_diag_cfg),
+                )
+            if sample_idx % 10 == 0:
+                rep_diag_h5_file.flush()
+
         all_stats.append(sample_stats)
 
     ans_file.close()
     if h5_file is not None:
         h5_file.close()
+    if rep_diag_h5_file is not None:
+        rep_diag_h5_file.close()
 
     # --- write stats ---
     with open(stats_path, 'w') as f:
@@ -1129,6 +1257,8 @@ def run_prune_inference(
     print(f"  Stats:    {stats_path}")
     if captures_h5_path:
         print(f"  Captures: {captures_h5_path}")
+    if rep_diag_h5_path:
+        print(f"  Rep bottleneck hidden: {rep_diag_h5_path}")
 
     return run_dir, answers_path, stats_path
 
