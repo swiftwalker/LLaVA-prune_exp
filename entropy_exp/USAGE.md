@@ -59,6 +59,33 @@ LLaVA-1.5 7B/13B 当前都使用 `v_token_num=576`、`patch_per_row=24`。13B
 使用 40 层 decoder，`prune_layers` 仍按绝对层号写，例如 `[2,6,15]`；代码会从
 模型 `config.json` 读取 `hidden_size`、`num_hidden_layers` 等元信息并校验层号范围。
 
+### LLaVA-NeXT Mistral 7B
+
+LLaVA-NeXT 的 `spatial_unpad` any-resolution 输入会为每个样本生成不同长度的
+merged visual sequence（base view、局部 patch grid 与 newline tokens）。因此必须
+使用动态视觉长度，并显式选择 Mistral 对话模板：
+
+```bash
+PYTHON_BIN=/data_ssd/liuyu/.conda/envs/llava-next/bin/python \
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=1 \
+bash entropy_exp/scripts/run_prune.sh sparsevlm_scnd gqa 3 --no-auto-gpu \
+  --set model.path=entropy_exp/models/llava-v1.6-mistral-7b \
+  --set model.name=llava-v1.6-mistral-7b \
+  --set model.disable_mmap=false \
+  --set inference.conv_mode=mistral_instruct \
+  --set pruning.v_token_num=auto \
+  --set 'pruning.prune_layers=[2,6,16]' \
+  --set 'pruning.prune_ratio=[0.90,0.50,0.50]' \
+  --set 'pruning.sparsevlm_scnd.layer_modes=["C","B","S"]' \
+  --set pruning.sparsevlm_scnd.selection_backend=gpu
+```
+
+`v_token_num=auto` 只改变每个样本初始视觉长度的发现方式；逐层
+`prune_ratio` 仍相对于当前存活视觉 token 数计算。当前 NeXT 适配把 newline token
+也视作 merged visual sequence 的成员参与剪枝，stats 会记录
+`initial_visual_token_count`、`visual_token_layout` 与
+`visual_index_semantics=merged_visual_sequence`。LLaVA-1.5 的固定 576-token 路径不变。
+
 ## 2. 快速开始
 
 推荐入口是 `run_prune.sh`：

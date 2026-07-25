@@ -1,0 +1,57 @@
+version: 1
+label: llava-next-mistral-7b-div-cd-high-ultrahigh-remote7
+expected_jobs: 20
+python_bin: /home/liuyu/miniconda3/envs/llava-next/bin/python
+model_path: entropy_exp/models/llava-v1.6-mistral-7b
+model_name: llava-v1.6-mistral-7b
+conv_mode: mistral_instruct
+output_root: algo_compare/analysis/next_mistral_7b_div_cd_high_ultrahigh_remote7/runs
+state_file: algo_compare/analysis/next_mistral_7b_div_cd_high_ultrahigh_remote7/scheduler_state.json
+log_dir: algo_compare/analysis/next_mistral_7b_div_cd_high_ultrahigh_remote7/logs
+gpus: [0, 1, 2, 3, 4, 5, 6]
+max_concurrent_per_gpu: 2
+min_free_gib: 38
+retry_limit: 1
+poll_interval_seconds: 10
+launch_stagger_seconds: 5
+wait_for:
+  state_file: entropy_exp/outputs/scheduler/llava-next-mistral-7b-sss-retain64-remote7-sharded/state.json
+  expected_jobs: 35
+  poll_interval_seconds: 60
+environment:
+  - HF_HUB_OFFLINE=1
+  - TRANSFORMERS_OFFLINE=1
+  - TOKENIZERS_PARALLELISM=false
+  - OMP_NUM_THREADS=4
+  - MKL_NUM_THREADS=4
+methods:
+  divprune:
+    variant: divprune_next_dynamic
+    weight: 1.0
+  cdpruner:
+    variant: cdpruner_next_per_crop_dpp
+    weight: 1.0
+budgets:
+  high:
+    equivalent_average_tokens: 126.25
+    one_shot_tokens: 126
+    divprune_subset_ratio: 0.21875
+    compression_ratio: 0.78125
+    weight: 1.0
+  ultrahigh:
+    equivalent_average_tokens: 62.125
+    one_shot_tokens: 62
+    divprune_subset_ratio: 0.1076388888888889
+    compression_ratio: 0.8923611111111112
+    weight: 0.65
+datasets:
+  - name: gqa
+    samples: 12578
+  - name: pope
+    samples: 8910
+  - name: textvqa
+    samples: 5000
+  - name: scienceqa
+    samples: 4241
+  - name: mme
+    samples: 2374

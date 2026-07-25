@@ -8,20 +8,12 @@ fi
 
 DATASET="$1"
 shift
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 METHOD_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$METHOD_DIR/../.." && pwd)"
-
 RUNNER_PYTHON="${PYTHON_BIN:-/data_ssd/liuyu/.conda/envs/llava-next/bin/python}"
-if [[ "$RUNNER_PYTHON" == */* ]]; then
-  [[ -x "$RUNNER_PYTHON" ]] || RUNNER_PYTHON="python3"
-elif ! command -v "$RUNNER_PYTHON" >/dev/null 2>&1; then
-  RUNNER_PYTHON="python3"
-fi
 
-args=(--method divprune --dataset "$DATASET" --python-bin "$RUNNER_PYTHON")
-
+args=(--method cdpruner --dataset "$DATASET" --python-bin "$RUNNER_PYTHON")
 [[ -n "${MODEL_PATH:-}" ]] && args+=(--model-path "$MODEL_PATH")
 [[ -n "${MODEL_NAME:-}" ]] && args+=(--model-name "$MODEL_NAME")
 [[ -n "${MODEL_BASE:-}" ]] && args+=(--model-base "$MODEL_BASE")
@@ -30,14 +22,7 @@ args=(--method divprune --dataset "$DATASET" --python-bin "$RUNNER_PYTHON")
 [[ -n "${OUTPUT_DIR:-}" ]] && args+=(--output-dir "$OUTPUT_DIR")
 [[ -n "${OFFICIAL_REPO:-}" ]] && args+=(--official-repo "$OFFICIAL_REPO")
 [[ -n "${CONV_MODE:-}" ]] && args+=(--conv-mode "$CONV_MODE")
-[[ -n "${TEMPERATURE:-}" ]] && args+=(--temperature "$TEMPERATURE")
-[[ -n "${TOP_P:-}" ]] && args+=(--top-p "$TOP_P")
-[[ -n "${NUM_BEAMS:-}" ]] && args+=(--num-beams "$NUM_BEAMS")
-[[ -n "${MAX_NEW_TOKENS:-}" ]] && args+=(--max-new-tokens "$MAX_NEW_TOKENS")
-[[ -n "${DIVPRUNE_BASELINE:-}" ]] && args+=(--divprune-baseline "$DIVPRUNE_BASELINE")
-[[ -n "${DIVPRUNE_LAYER_INDEX:-}" ]] && args+=(--divprune-layer-index "$DIVPRUNE_LAYER_INDEX")
-[[ -n "${DIVPRUNE_SUBSET_RATIO:-}" ]] && args+=(--divprune-subset-ratio "$DIVPRUNE_SUBSET_RATIO")
-[[ -n "${DIVPRUNE_VISUAL_TOKEN_COUNT:-}" ]] && args+=(--divprune-visual-token-count "$DIVPRUNE_VISUAL_TOKEN_COUNT")
+[[ -n "${RETAIN_TOKEN:-}" ]] && args+=(--retain-token "$RETAIN_TOKEN")
 [[ -n "${MAX_SAMPLES:-}" ]] && args+=(--max-samples "$MAX_SAMPLES")
 [[ -n "${LLAVA_NEXT_COMPAT:-}" ]] && args+=(--llava-next-compat "$LLAVA_NEXT_COMPAT")
 
@@ -47,7 +32,6 @@ for arg in "$@"; do
     has_eval_arg=1
   fi
 done
-
 if [[ "${EVAL_AFTER:-1}" == "1" && "$has_eval_arg" -eq 0 ]]; then
   args+=(--eval)
 fi

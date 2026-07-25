@@ -1,6 +1,9 @@
-# DivPrune Patches
+# DivPrune LLaVA-NeXT Compatibility
 
-No source patches are required for the initial DivPrune wrapper.
+The pinned official checkout remains unmodified. Its LLaVA-NeXT pruning block
+uses `SYS_TOKEN_LEN=35`, which is not valid for the Mistral prompt template.
 
-The wrapper imports the official `LLaVA/` package from `third_party/divprune`
-and enables DivPrune through the official environment variables.
+`algo_compare.llava_next_official.install_divprune_next_adapter` suppresses
+that block at runtime, infers the visual span from `IMAGE_TOKEN_INDEX`, and
+calls the unchanged official `DivPrune()` selector on the merged anyres visual
+sequence. This also produces per-sample dynamic token-count metadata.

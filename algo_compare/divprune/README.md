@@ -32,3 +32,18 @@ python3 algo_compare/scripts/run_official.py \
 The official implementation lives in the repository's `LLaVA/` checkout and is
 activated by environment variables. The wrapper only adapts local dataset paths,
 model paths, command metadata, and local evaluation.
+
+## LLaVA-NeXT Mistral
+
+The NeXT wrapper keeps the official max-min selector but replaces its fixed
+`SYS_TOKEN_LEN=35` assumption with dynamic visual-span discovery. For anyres
+inputs, `SUBSET_RATIO` is applied to each sample's merged visual sequence, so
+the absolute retained count varies with image shape.
+
+```bash
+PYTHON_BIN=/data_ssd/liuyu/.conda/envs/llava-next/bin/python \
+MODEL_PATH=entropy_exp/models/llava-v1.6-mistral-7b \
+CONV_MODE=mistral_instruct MAX_SAMPLES=3 \
+DIVPRUNE_SUBSET_RATIO=0.21875 \
+bash algo_compare/divprune/scripts/run_official_gqa.sh --no-eval
+```

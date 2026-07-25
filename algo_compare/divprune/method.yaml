@@ -14,10 +14,12 @@ entrypoints:
 variants:
   - name: "divprune_r0p098"
     notes: "Official default retained ratio SUBSET_RATIO=0.098 at LAYER_INDEX=0 for LLaVA-1.5."
+  - name: "divprune_next_dynamic"
+    notes: "Official max-min selector on the dynamically inferred LLaVA-NeXT merged visual span."
 defaults:
-  model_name: "llava-v1.5-7b"
-  variant: "divprune_r0p098"
-  conv_mode: "vicuna_v1"
+  model_name: "llava-v1.6-mistral-7b"
+  variant: "divprune_next_dynamic"
+  conv_mode: "mistral_instruct"
   temperature: 0
   top_p: null
   num_beams: 1
@@ -30,4 +32,6 @@ defaults:
 local_comparison_notes:
   - "DivPrune official code is fetched into third_party and is not vendored."
   - "The wrapper imports the official LLaVA checkout and enables DivPrune through BASELINE/LAYER_INDEX/SUBSET_RATIO."
+  - "For LLaVA-NeXT, the wrapper bypasses the upstream SYS_TOKEN_LEN=35 block and invokes the unchanged official selector on the actual merged visual span."
+  - "LLaVA-NeXT retained counts are dynamic per sample; visual_token_count=576 remains metadata-only."
   - "Local metrics are produced by entropy_exp/src/eval_datasets.py for comparison consistency."

@@ -73,15 +73,19 @@ def _resolve_cached_hf_snapshot(
     if try_to_load_from_cache is None:
         return None
 
-    resolved_files = []
+    cached_files = []
     for filename in required_files:
         cached_path = try_to_load_from_cache(repo_id, filename)
         if cached_path is None or ".no_exist" in str(cached_path):
             return None
-        resolved_files.append(Path(cached_path).resolve())
+        cached_files.append(Path(cached_path))
 
-    snapshot_dir = resolved_files[0].parent
-    if all((snapshot_dir / filename).exists() for filename in required_files):
+    # Snapshot entries are symlinks into ``blobs/``. Resolving each file first
+    # loses the common snapshot directory and incorrectly forces a network HEAD.
+    snapshot_dir = cached_files[0].parent
+    if all(path.parent == snapshot_dir for path in cached_files) and all(
+        (snapshot_dir / filename).exists() for filename in required_files
+    ):
         return str(snapshot_dir)
     return None
 

@@ -36,6 +36,32 @@ class ClipEncoderHelpersTests(unittest.TestCase):
         self.assertTrue(local_only)
         self.assertEqual(source, str(snapshot))
 
+    def test_resolve_vision_tower_source_keeps_snapshot_symlink_parent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_root = Path(tmpdir)
+            blobs = cache_root / "blobs"
+            snapshot = cache_root / "snapshots" / "revision"
+            blobs.mkdir()
+            snapshot.mkdir(parents=True)
+
+            for index, filename in enumerate(
+                ("config.json", "preprocessor_config.json", "pytorch_model.bin")
+            ):
+                blob = blobs / f"blob-{index}"
+                blob.write_text("x", encoding="utf-8")
+                (snapshot / filename).symlink_to(Path("../../blobs") / blob.name)
+
+            with mock.patch(
+                "llava.model.multimodal_encoder.clip_encoder.try_to_load_from_cache",
+                side_effect=lambda _repo_id, filename: snapshot / filename,
+            ):
+                source, local_only = _resolve_vision_tower_source(
+                    "openai/clip-vit-large-patch14-336"
+                )
+
+        self.assertTrue(local_only)
+        self.assertEqual(source, str(snapshot))
+
     def test_direct_hf_mirror_env_disables_proxy_and_restores(self):
         saved_http = os.environ.get("HTTP_PROXY")
         saved_https = os.environ.get("HTTPS_PROXY")

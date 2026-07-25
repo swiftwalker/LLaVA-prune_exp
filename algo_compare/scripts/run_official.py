@@ -48,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-new-tokens", type=int, default=None)
     parser.add_argument("--num-chunks", type=int, default=None)
     parser.add_argument("--chunk-idx", type=int, default=None)
+    parser.add_argument("--max-samples", type=int, default=None, help="Optional deterministic prefix limit for smoke runs")
     parser.add_argument("--fastv-k", type=int, default=None, help="FastV pruning layer K")
     parser.add_argument("--fastv-r", type=float, default=None, help="FastV pruning ratio R")
     parser.add_argument("--fastv-attention-rank", type=int, default=None, help="FastV kept visual token rank")

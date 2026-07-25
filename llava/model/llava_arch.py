@@ -23,7 +23,7 @@ from .multimodal_projector.builder import build_vision_projector
 
 from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 
-from llava.mm_utils import get_anyres_image_grid_shape
+from llava.mm_utils import get_anyres_image_grid_shape, get_unpadded_feature_grid_shape
 
 
 class LlavaMetaModel:
@@ -108,21 +108,18 @@ def unpad_image(tensor, original_size):
     Returns:
     torch.Tensor: The unpadded image tensor.
     """
-    original_width, original_height = original_size
     current_height, current_width = tensor.shape[1:]
+    unpadded_height, unpadded_width = get_unpadded_feature_grid_shape(
+        original_size,
+        current_height,
+        current_width,
+    )
 
-    original_aspect_ratio = original_width / original_height
-    current_aspect_ratio = current_width / current_height
-
-    if original_aspect_ratio > current_aspect_ratio:
-        scale_factor = current_width / original_width
-        new_height = int(original_height * scale_factor)
-        padding = (current_height - new_height) // 2
+    if unpadded_width == current_width:
+        padding = (current_height - unpadded_height) // 2
         unpadded_tensor = tensor[:, padding:current_height - padding, :]
     else:
-        scale_factor = current_height / original_height
-        new_width = int(original_width * scale_factor)
-        padding = (current_width - new_width) // 2
+        padding = (current_width - unpadded_width) // 2
         unpadded_tensor = tensor[:, :, padding:current_width - padding]
 
     return unpadded_tensor

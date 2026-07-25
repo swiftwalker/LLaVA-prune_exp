@@ -5,9 +5,8 @@ Implements a custom layer-by-layer prefill that prunes visual tokens at
 designated layers, followed by greedy autoregressive decoding using the
 pruned KV cache.
 
-Compatible with:
-  - transformers 4.37.x DynamicCache
-  - LLaVA-1.5 (LlamaForCausalLM backbone, eager attention)
+Compatible with transformers 4.37.x DynamicCache and eager-attention
+LLaVA Llama/Mistral decoder backbones.
 """
 
 import math
@@ -106,18 +105,45 @@ def _required_rotary_seq_len(
 
 
 def enable_sparse_position_ids_compat(model) -> bool:
-    """Patch Llama attention to support sparse, non-reindexed position_ids."""
-    try:
-        from transformers.models.llama.modeling_llama import apply_rotary_pos_emb as hf_apply_rotary_pos_emb
-        from transformers.models.llama.modeling_llama import repeat_kv as hf_repeat_kv
-    except Exception:
-        return False
-
+    """Patch Llama or Mistral attention for sparse, non-reindexed positions."""
     layers = getattr(getattr(model, "model", None), "layers", None)
     if layers is None:
         return False
     if getattr(model, "_sparse_position_ids_compat_enabled", False):
         return True
+
+    attention_modules = [
+        getattr(layer, "self_attn", None)
+        for layer in layers
+        if getattr(layer, "self_attn", None) is not None
+    ]
+    if not attention_modules:
+        return False
+
+    try:
+        from transformers.models.llama.modeling_llama import (
+            LlamaAttention,
+            apply_rotary_pos_emb as llama_apply_rotary_pos_emb,
+            repeat_kv as llama_repeat_kv,
+        )
+        from transformers.models.mistral.modeling_mistral import (
+            MistralAttention,
+            apply_rotary_pos_emb as mistral_apply_rotary_pos_emb,
+            repeat_kv as mistral_repeat_kv,
+        )
+    except Exception:
+        return False
+
+    if all(isinstance(module, LlamaAttention) for module in attention_modules):
+        attention_family = "llama"
+        hf_apply_rotary_pos_emb = llama_apply_rotary_pos_emb
+        hf_repeat_kv = llama_repeat_kv
+    elif all(isinstance(module, MistralAttention) for module in attention_modules):
+        attention_family = "mistral"
+        hf_apply_rotary_pos_emb = mistral_apply_rotary_pos_emb
+        hf_repeat_kv = mistral_repeat_kv
+    else:
+        return False
 
     def _patched_forward(
         self,
@@ -136,21 +162,22 @@ def enable_sparse_position_ids_compat(model) -> bool:
 
         bsz, q_len, _ = hidden_states.size()
 
-        if self.config.pretraining_tp > 1:
-            key_value_slicing = (self.num_key_value_heads * self.head_dim) // self.config.pretraining_tp
+        pretraining_tp = max(int(getattr(self.config, "pretraining_tp", 1)), 1)
+        if pretraining_tp > 1:
+            key_value_slicing = (self.num_key_value_heads * self.head_dim) // pretraining_tp
             query_slices = self.q_proj.weight.split(
-                (self.num_heads * self.head_dim) // self.config.pretraining_tp, dim=0
+                (self.num_heads * self.head_dim) // pretraining_tp, dim=0
             )
             key_slices = self.k_proj.weight.split(key_value_slicing, dim=0)
             value_slices = self.v_proj.weight.split(key_value_slicing, dim=0)
 
-            query_states = [F.linear(hidden_states, query_slices[i]) for i in range(self.config.pretraining_tp)]
+            query_states = [F.linear(hidden_states, query_slices[i]) for i in range(pretraining_tp)]
             query_states = torch.cat(query_states, dim=-1)
 
-            key_states = [F.linear(hidden_states, key_slices[i]) for i in range(self.config.pretraining_tp)]
+            key_states = [F.linear(hidden_states, key_slices[i]) for i in range(pretraining_tp)]
             key_states = torch.cat(key_states, dim=-1)
 
-            value_states = [F.linear(hidden_states, value_slices[i]) for i in range(self.config.pretraining_tp)]
+            value_states = [F.linear(hidden_states, value_slices[i]) for i in range(pretraining_tp)]
             value_states = torch.cat(value_states, dim=-1)
         else:
             query_states = self.q_proj(hidden_states)
@@ -210,10 +237,10 @@ def enable_sparse_position_ids_compat(model) -> bool:
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        if self.config.pretraining_tp > 1:
-            attn_output = attn_output.split(self.hidden_size // self.config.pretraining_tp, dim=2)
-            o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
-            attn_output = sum(F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp))
+        if pretraining_tp > 1:
+            attn_output = attn_output.split(self.hidden_size // pretraining_tp, dim=2)
+            o_proj_slices = self.o_proj.weight.split(self.hidden_size // pretraining_tp, dim=1)
+            attn_output = sum(F.linear(attn_output[i], o_proj_slices[i]) for i in range(pretraining_tp))
         else:
             attn_output = self.o_proj(attn_output)
 
@@ -233,6 +260,7 @@ def enable_sparse_position_ids_compat(model) -> bool:
         attn_module._sparse_position_ids_compat_wrapped = True
 
     model._sparse_position_ids_compat_enabled = True
+    model._sparse_position_ids_compat_family = attention_family
     return True
 
 
@@ -327,7 +355,7 @@ class VisualTokenPruner:
             attention_mask: [1, L] or None
             position_ids: [1, L] or None; if provided, preserved across physical pruning
             v_token_start:  index of first visual token
-            v_token_num:    number of visual tokens (576)
+            v_token_num:    number of merged visual tokens for this sample
             text_token_start: index of first text token after vision block
             max_new_tokens: maximum tokens to generate
             eos_token_id:   id of the EOS token for stopping
@@ -412,16 +440,22 @@ class VisualTokenPruner:
     def _pruned_prefill(
         self,
         inputs_embeds: torch.Tensor,
-        initial_position_ids: Optional[torch.Tensor],
-        v_token_start: int,
-        v_token_num: int,
-        text_token_start: int,
+        initial_position_ids: Optional[torch.Tensor] = None,
+        v_token_start: Optional[int] = None,
+        v_token_num: Optional[int] = None,
+        text_token_start: Optional[int] = None,
         text_token_ids: Optional[torch.Tensor] = None,
         text_special_token_mask: Optional[torch.Tensor] = None,
         save_tv_attn: bool = False,
         capture_layers: Optional[set] = None,
         capture_visual_hidden_layers: Optional[set[int]] = None,
     ) -> Tuple[torch.Tensor, DynamicCache, Dict[str, Any]]:
+        if v_token_start is None or v_token_num is None or text_token_start is None:
+            raise TypeError("v_token_start, v_token_num, and text_token_start are required")
+        v_token_start = int(v_token_start)
+        v_token_num = int(v_token_num)
+        text_token_start = int(text_token_start)
+
         device = inputs_embeds.device
         dtype = inputs_embeds.dtype
         batch_size, seq_len, _ = inputs_embeds.shape

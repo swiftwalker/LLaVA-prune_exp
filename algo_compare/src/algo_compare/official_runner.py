@@ -287,6 +287,8 @@ def build_official_run(args: Any) -> OfficialRun:
     defaults = method_cfg.get("defaults", {}) or {}
     inference_defaults = prune_cfg.get("inference", {}) or {}
     retain_token = int(args.retain_token or defaults.get("retain_token") or 192)
+    if method == "cdpruner":
+        method_params = {"visual_token_num_per_crop": retain_token}
     conv_mode = args.conv_mode or defaults.get("conv_mode") or inference_defaults.get("conv_mode") or "vicuna_v1"
     temperature = _prefer(args.temperature, defaults.get("temperature"), inference_defaults.get("temperature"), 0)
     top_p = _prefer(args.top_p, defaults.get("top_p"), inference_defaults.get("top_p"))
@@ -425,6 +427,19 @@ def build_official_run(args: Any) -> OfficialRun:
                 str(method_params["visual_token_count"]),
             ]
         )
+    elif method == "cdpruner":
+        command.extend(
+            [
+                "--dataset",
+                dataset,
+                "--num-beams",
+                str(num_beams),
+                "--max-new-tokens",
+                str(max_new_tokens),
+                "--visual-token-num",
+                str(retain_token),
+            ]
+        )
     elif dataset == "scienceqa":
         command.extend(["--single-pred-prompt", "--retained_tokens", str(retain_token), "--max-new-tokens", str(max_new_tokens)])
     elif dataset == "mmbench":
@@ -435,6 +450,8 @@ def build_official_run(args: Any) -> OfficialRun:
         command.extend(["--model-base", str(resolve_path(args.model_base) or args.model_base)])
     if top_p is not None and dataset != "scienceqa":
         command.extend(["--top_p", str(top_p)])
+    if method in {"divprune", "cdpruner"} and getattr(args, "max_samples", None) is not None:
+        command.extend(["--max-samples", str(args.max_samples)])
 
     env = {"RETAIN_TOKN": str(retain_token)}
     if args.use_version or use_version:
@@ -504,6 +521,19 @@ def build_official_run(args: Any) -> OfficialRun:
         env["PYTHONPATH"] = os.pathsep.join(
             [str(llava_root), str(official_repo)] + ([existing_pythonpath] if existing_pythonpath else [])
         )
+    elif method == "cdpruner":
+        env.update(
+            {
+                "CDPRUNER_OFFICIAL_REPO": str(official_repo),
+                "CDPRUNER_VISUAL_TOKEN_NUM": str(retain_token),
+                "HF_HUB_OFFLINE": os.environ.get("HF_HUB_OFFLINE", "1"),
+                "TRANSFORMERS_OFFLINE": os.environ.get("TRANSFORMERS_OFFLINE", "1"),
+            }
+        )
+        existing_pythonpath = os.environ.get("PYTHONPATH")
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(official_repo)] + ([existing_pythonpath] if existing_pythonpath else [])
+        )
 
     eval_command = None
     if args.eval:
@@ -556,6 +586,7 @@ def build_official_run(args: Any) -> OfficialRun:
             "max_new_tokens": max_new_tokens,
             "num_chunks": num_chunks,
             "chunk_idx": chunk_idx,
+            "max_samples": getattr(args, "max_samples", None),
         },
         "paths": {
             "output_dir": str(output_dir),

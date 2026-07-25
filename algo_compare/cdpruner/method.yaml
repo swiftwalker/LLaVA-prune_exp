@@ -1,0 +1,32 @@
+name: CDPruner
+paper:
+  title: "Beyond Attention or Similarity: Maximizing Conditional Diversity for Token Pruning in MLLMs"
+  venue: "NeurIPS 2025"
+  notes: "Official comparison target for CDPruner."
+official:
+  repo_url: "https://github.com/Theia-4869/CDPruner.git"
+  repo_web: "https://github.com/Theia-4869/CDPruner"
+  target_ref: "main"
+  target_commit: "9541616c40fcd5625de1cdb8ea6c33c129eb7864"
+  local_checkout: "algo_compare/cdpruner/third_party/CDPruner"
+entrypoints:
+  inference_script: "algo_compare/cdpruner/scripts/cdpruner_vqa_runner.py"
+variants:
+  - name: "cdpruner_next_per_crop_dpp"
+    notes: "Official instruction-conditioned DPP applied independently to each canonical LLaVA-NeXT anyres crop."
+defaults:
+  model_name: "llava-v1.6-mistral-7b"
+  variant: "cdpruner_next_per_crop_dpp"
+  retain_token: 126
+  conv_mode: "mistral_instruct"
+  temperature: 0
+  top_p: null
+  num_beams: 1
+  max_new_tokens: 128
+local_comparison_notes:
+  - "Official source is fetched into third_party and is not vendored."
+  - "retain_token is the official per-crop visual_token_num, not the final per-image count."
+  - "The wrapper restores canonical anyres resolution selection; the official fork otherwise forces every image to 672x672."
+  - "The official NeXT path removes the _unpad suffix and returns approximately crop_count * visual_token_num tokens."
+  - "The local Mistral bridge changes generation wiring only; conditional-DPP selection remains official."
+  - "Local metrics are produced by entropy_exp/src/eval_datasets.py for comparison consistency."

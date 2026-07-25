@@ -34,6 +34,11 @@ from algo_compare.vqa_compat import (  # noqa: E402
     normalize_item as normalize_compat_item,
     open_image as open_compat_image,
 )
+from algo_compare.llava_next_official import (  # noqa: E402
+    image_crop_count,
+    install_divprune_next_adapter,
+    is_llava_next_config,
+)
 from llava.constants import (  # noqa: E402
     DEFAULT_IMAGE_TOKEN,
     DEFAULT_IM_END_TOKEN,
@@ -111,8 +116,21 @@ def eval_model(args: argparse.Namespace) -> None:
     model_name = get_model_name_from_path(model_path)
     tokenizer, model, image_processor, _ = load_pretrained_model(model_path, args.model_base, model_name)
 
+    use_next_adapter = args.llava_next_compat == "on" or (
+        args.llava_next_compat == "auto" and is_llava_next_config(model.config)
+    )
+    if use_next_adapter and args.divprune_baseline == "OURS":
+        install_divprune_next_adapter(
+            model,
+            image_token_index=IMAGE_TOKEN_INDEX,
+            subset_ratio=args.divprune_subset_ratio,
+            layer_index=args.divprune_layer_index,
+        )
+
     questions = load_questions(args.dataset, Path(args.question_file))
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
+    if args.max_samples is not None:
+        questions = questions[: args.max_samples]
     answers_file = Path(os.path.expanduser(args.answers_file))
     answers_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -144,8 +162,19 @@ def eval_model(args: argparse.Namespace) -> None:
             }
             if args.top_p is None:
                 generate_args.pop("top_p")
+            model._divprune_last_stats = {
+                "enabled": False,
+                "reason": "no_image" if image_tensor is None else "official_fixed_offset_path",
+            }
             with torch.inference_mode():
                 output_ids = model.generate(input_ids, **generate_args)
+
+            actual_stats = dict(getattr(model, "_divprune_last_stats", {}) or {})
+            actual_before = actual_stats.get("tokens_before")
+            actual_after = actual_stats.get("tokens_after")
+            if image_tensor is not None and not use_next_adapter:
+                actual_before = args.divprune_visual_token_count
+                actual_after = retained_visual_tokens
 
             if hasattr(output_ids, "sequences"):
                 sequences = output_ids.sequences
@@ -168,8 +197,15 @@ def eval_model(args: argparse.Namespace) -> None:
                             "divprune_baseline": args.divprune_baseline,
                             "divprune_layer_index": args.divprune_layer_index,
                             "divprune_subset_ratio": args.divprune_subset_ratio,
-                            "divprune_visual_token_count": args.divprune_visual_token_count,
-                            "divprune_retained_visual_tokens": retained_visual_tokens,
+                            "divprune_visual_token_count_reference": args.divprune_visual_token_count,
+                            "divprune_visual_token_count_actual": actual_before,
+                            "divprune_retained_visual_tokens_reference": retained_visual_tokens,
+                            "divprune_retained_visual_tokens_actual": actual_after,
+                            "divprune_effective_ratio": actual_stats.get("effective_ratio"),
+                            "divprune_visual_start": actual_stats.get("visual_start"),
+                            "divprune_crop_count": image_crop_count(image_tensor),
+                            "divprune_llava_next_compat": use_next_adapter,
+                            "divprune_adapter": actual_stats.get("adapter"),
                             "divprune_enabled": image_tensor is not None,
                         },
                     }
@@ -190,6 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--conv-mode", type=str, default="vicuna_v1")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)
+    parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top_p", type=float, default=None)
     parser.add_argument("--num_beams", type=int, default=1)
@@ -198,6 +235,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--divprune-layer-index", type=int, default=0)
     parser.add_argument("--divprune-subset-ratio", type=float, default=0.098)
     parser.add_argument("--divprune-visual-token-count", type=int, default=576)
+    parser.add_argument(
+        "--llava-next-compat",
+        choices=("auto", "on", "off"),
+        default="auto",
+        help="Use dynamic merged-visual-span pruning for LLaVA-NeXT",
+    )
     return parser
 
 

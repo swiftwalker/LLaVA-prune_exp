@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 METHOD_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$METHOD_DIR/../.." && pwd)"
-OFFICIAL_REPO="${OFFICIAL_REPO:-$METHOD_DIR/third_party/divprune}"
+OFFICIAL_REPO="${OFFICIAL_REPO:-$METHOD_DIR/third_party/CDPruner}"
 MODEL_PATH="${MODEL_PATH:-$REPO_ROOT/entropy_exp/models/llava-v1.6-mistral-7b}"
 PYTHON_BIN="${PYTHON_BIN:-/data_ssd/liuyu/.conda/envs/llava-next/bin/python}"
 status=0
@@ -21,9 +21,9 @@ check_path() {
 }
 
 check_path "official repo" "$OFFICIAL_REPO/.git"
-check_path "official LLaVA package" "$OFFICIAL_REPO/LLaVA/llava/__init__.py"
-check_path "official DivPrune llava_arch" "$OFFICIAL_REPO/LLaVA/llava/model/llava_arch.py"
-check_path "official Mistral model" "$OFFICIAL_REPO/LLaVA/llava/model/language_model/llava_mistral.py"
+check_path "official CDPruner llava_arch" "$OFFICIAL_REPO/llava/model/llava_arch.py"
+check_path "official Mistral model" "$OFFICIAL_REPO/llava/model/language_model/llava_mistral.py"
+check_path "official CLIP tower" "$OFFICIAL_REPO/llava/model/multimodal_encoder/clip_encoder.py"
 check_path "model path" "$MODEL_PATH"
 check_path "GQA questions" "$REPO_ROOT/entropy_exp/eval_questions/gqa/llava_gqa_testdev_balanced.jsonl"
 check_path "GQA images" "$REPO_ROOT/entropy_exp/datasets/gqa/images"
@@ -38,17 +38,24 @@ check_path "ScienceQA images" "$REPO_ROOT/entropy_exp/eval_questions/scienceqa/t
 
 if [[ -x "$PYTHON_BIN" ]]; then
   echo "OK      python: $PYTHON_BIN"
-elif command -v python3 >/dev/null 2>&1; then
-  echo "WARN    python: $PYTHON_BIN missing, python3 is available at $(command -v python3)"
-else
-  echo "MISSING python: $PYTHON_BIN and python3"
-  status=1
-fi
+  if ! "$PYTHON_BIN" - <<'PY'
+import accelerate
+import torch
+import transformers
+from transformers import CLIPTextModelWithProjection, CLIPTokenizerFast
 
-if [[ "$status" -eq 0 ]]; then
-  echo "Environment check passed."
+print(f"VERSIONS torch={torch.__version__} transformers={transformers.__version__} accelerate={accelerate.__version__}")
+print(f"CUDA available={torch.cuda.is_available()} devices={torch.cuda.device_count()}")
+CLIPTokenizerFast.from_pretrained("openai/clip-vit-large-patch14-336", local_files_only=True)
+CLIPTextModelWithProjection.from_pretrained("openai/clip-vit-large-patch14-336", local_files_only=True)
+print("CACHE   CLIP text tokenizer/model: available")
+PY
+  then
+    status=1
+  fi
 else
-  echo "Environment check found missing paths. This command is read-only."
+  echo "MISSING python: $PYTHON_BIN"
+  status=1
 fi
 
 exit "$status"

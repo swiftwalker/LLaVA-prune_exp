@@ -9,6 +9,12 @@ from transformers import StoppingCriteria
 from llava.constants import IMAGE_TOKEN_INDEX
 
 
+def _config_value(config, name, default=None):
+    if isinstance(config, dict):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+
 def select_best_resolution(original_size, possible_resolutions):
     """
     Selects the best resolution from a list of possible resolutions based on the original size.
@@ -114,6 +120,125 @@ def get_anyres_image_grid_shape(image_size, grid_pinpoints, patch_size):
         possible_resolutions = ast.literal_eval(grid_pinpoints)
     width, height = select_best_resolution(image_size, possible_resolutions)
     return width // patch_size, height // patch_size
+
+
+def get_unpadded_feature_grid_shape(original_size, current_height, current_width):
+    """Return the H/W left by ``unpad_image`` without materializing a tensor."""
+    original_width, original_height = (int(original_size[0]), int(original_size[1]))
+    current_height = int(current_height)
+    current_width = int(current_width)
+    if min(original_width, original_height, current_height, current_width) <= 0:
+        raise ValueError(
+            "Image and feature-grid dimensions must be positive, got "
+            f"image={original_size}, grid=({current_height}, {current_width})"
+        )
+
+    if original_width / original_height > current_width / current_height:
+        new_height = int(original_height * (current_width / original_width))
+        padding = (current_height - new_height) // 2
+        return current_height - 2 * padding, current_width
+
+    new_width = int(original_width * (current_height / original_height))
+    padding = (current_width - new_width) // 2
+    return current_height, current_width - 2 * padding
+
+
+def get_visual_token_layout(
+    image_size,
+    model_config,
+    *,
+    patches_per_side,
+    vision_image_size,
+    num_image_crops=None,
+):
+    """Describe the merged visual sequence produced by LLaVA multimodal prep.
+
+    The returned counts follow ``prepare_inputs_labels_for_multimodal`` exactly:
+    a base 24x24 view followed by the unpadded any-resolution tile grid, with
+    one learned newline token appended to each local-grid row.
+    """
+    patches_per_side = int(patches_per_side)
+    vision_image_size = int(vision_image_size)
+    if patches_per_side <= 0 or vision_image_size <= 0:
+        raise ValueError(
+            "patches_per_side and vision_image_size must be positive, got "
+            f"{patches_per_side}, {vision_image_size}"
+        )
+
+    base_tokens = patches_per_side * patches_per_side
+    image_aspect_ratio = str(_config_value(model_config, "image_aspect_ratio", "square"))
+    patch_merge_type = str(_config_value(model_config, "mm_patch_merge_type", "flat"))
+    layout = {
+        "layout_kind": "square",
+        "visual_index_semantics": "merged_visual_sequence",
+        "image_width": int(image_size[0]),
+        "image_height": int(image_size[1]),
+        "base_token_count": int(base_tokens),
+        "local_patch_token_count": 0,
+        "newline_token_count": 0,
+        "local_grid_height": 0,
+        "local_grid_width": 0,
+        "total_token_count": int(base_tokens),
+    }
+
+    if image_aspect_ratio != "anyres":
+        if num_image_crops not in (None, 1):
+            raise ValueError(
+                f"Non-anyres image should have one crop, got {num_image_crops}"
+            )
+        return layout
+
+    grid_pinpoints = _config_value(model_config, "image_grid_pinpoints")
+    if not grid_pinpoints:
+        raise ValueError("anyres model config is missing image_grid_pinpoints")
+    grid_width, grid_height = get_anyres_image_grid_shape(
+        image_size,
+        grid_pinpoints,
+        vision_image_size,
+    )
+    expected_crops = 1 + int(grid_width) * int(grid_height)
+    if num_image_crops is not None and int(num_image_crops) != expected_crops:
+        raise ValueError(
+            "Anyres crop count does not match the selected image grid: "
+            f"got {num_image_crops}, expected {expected_crops} for grid "
+            f"{grid_width}x{grid_height}"
+        )
+
+    local_height = int(grid_height) * patches_per_side
+    local_width = int(grid_width) * patches_per_side
+    newline_tokens = 0
+    if patch_merge_type.startswith("spatial"):
+        if "unpad" in patch_merge_type:
+            local_height, local_width = get_unpadded_feature_grid_shape(
+                image_size,
+                local_height,
+                local_width,
+            )
+            newline_tokens = local_height
+        local_tokens = local_height * local_width
+        total_tokens = base_tokens + local_tokens + newline_tokens
+    elif patch_merge_type == "flat":
+        local_tokens = (expected_crops - 1) * base_tokens
+        local_height = int(grid_height) * patches_per_side
+        local_width = int(grid_width) * patches_per_side
+        total_tokens = expected_crops * base_tokens
+    else:
+        raise ValueError(f"Unexpected mm_patch_merge_type: {patch_merge_type}")
+
+    layout.update(
+        {
+            "layout_kind": f"anyres_{patch_merge_type}",
+            "crop_grid_width": int(grid_width),
+            "crop_grid_height": int(grid_height),
+            "num_image_crops": int(expected_crops),
+            "local_patch_token_count": int(local_tokens),
+            "newline_token_count": int(newline_tokens),
+            "local_grid_height": int(local_height),
+            "local_grid_width": int(local_width),
+            "total_token_count": int(total_tokens),
+        }
+    )
+    return layout
 
 
 def process_anyres_image(image, processor, grid_pinpoints):

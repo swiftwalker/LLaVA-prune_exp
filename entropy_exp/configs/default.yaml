@@ -4,6 +4,7 @@
 model:
   path: "entropy_exp/models/llava-v1.5-7b"
   name: "llava-v1.5-7b"
+  disable_mmap: true            # set false for safetensors-only checkpoints
   attn_implementation: "eager"  # eager: output full attn weights; sdpa: fast but no attn output
 
 inference:
@@ -22,7 +23,7 @@ capture:
   compression: "gzip"
   compression_opts: 4
   max_samples: null            # null = all samples; set to int for debugging
-  v_token_num: 576             # LLaVA-1.5 default: 24x24 patches
+  v_token_num: 576             # positive int, or "auto" for LLaVA-NeXT anyres
 
 datasets:
   gqa:

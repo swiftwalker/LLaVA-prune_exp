@@ -24,6 +24,7 @@ model:
   path: "entropy_exp/models/llava-v1.5-7b"
   name: "llava-v1.5-7b"
   attn_implementation: "eager"      # eager required for output_attentions
+  disable_mmap: true                # set false for safetensors-only checkpoints such as LLaVA-NeXT
 
 inference:
   temperature: 0
@@ -39,7 +40,7 @@ pruning:
   layer_selection: "fixed"          # fixed | dynamic (placeholder)
   prune_layers: [2, 3]             # 剪枝层列表 (0-indexed)
   prune_ratio: [0.5, 0.5]          # 对应每层的剪枝比例（标量则广播到所有层）
-  v_token_num: 576                  # LLaVA-1.5: 24×24 patches
+  v_token_num: 576                  # positive int for fixed layouts; "auto" for LLaVA-NeXT anyres
   max_samples: null                 # null = all; int for debugging
   # --- strategy-specific ---
   attn_score: {}

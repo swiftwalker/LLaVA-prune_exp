@@ -53,7 +53,13 @@ from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_S
 from llava.conversation import conv_templates
 from llava.model.builder import load_pretrained_model
 from llava.utils import disable_torch_init
-from llava.mm_utils import tokenizer_image_token, process_images, load_image_from_base64, get_model_name_from_path
+from llava.mm_utils import (
+    tokenizer_image_token,
+    process_images,
+    load_image_from_base64,
+    get_model_name_from_path,
+    get_visual_token_layout,
+)
 
 from hooks import locate_image_tokens
 from pruner import VisualTokenPruner, enable_sparse_position_ids_compat
@@ -76,7 +82,11 @@ MODEL_CONFIG_METADATA_KEYS = (
     "mm_vision_select_layer",
     "mm_vision_select_feature",
     "image_aspect_ratio",
+    "image_grid_pinpoints",
+    "mm_patch_merge_type",
     "mm_projector_type",
+    "tokenizer_model_max_length",
+    "max_position_embeddings",
     "torch_dtype",
 )
 
@@ -575,6 +585,25 @@ def _normalize_configured_prune_layers(value) -> list[int]:
     raise ValueError(f"prune_layers must be an int or list of ints, got {type(value).__name__}")
 
 
+def normalize_configured_v_token_num(value) -> int | str:
+    """Normalize a fixed LLaVA-1.5 token count or dynamic ``auto`` mode."""
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "auto":
+            return "auto"
+        try:
+            value = int(normalized)
+        except ValueError as exc:
+            raise ValueError(
+                f"pruning.v_token_num must be a positive integer or 'auto', got {value!r}"
+            ) from exc
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(
+            f"pruning.v_token_num must be a positive integer or 'auto', got {value!r}"
+        )
+    return int(value)
+
+
 def _normalize_single_tail_start_layer(value) -> int:
     layers = _normalize_configured_prune_layers(value)
     if len(layers) != 1:
@@ -695,7 +724,7 @@ def _actual_decoder_layer_count(model) -> Optional[int]:
 def validate_loaded_model_runtime(
     model,
     model_config_metadata: dict[str, Any],
-    configured_v_token_num: int,
+    configured_v_token_num: int | str,
 ) -> dict[str, Any]:
     """Validate loaded model shape against config metadata and pruning settings."""
     runtime_metadata: dict[str, Any] = {}
@@ -722,15 +751,33 @@ def validate_loaded_model_runtime(
             vision_patches_per_side = getattr(vision_tower, "num_patches_per_side", None)
     runtime_metadata["vision_token_count"] = vision_token_count
     runtime_metadata["vision_patches_per_side"] = vision_patches_per_side
+    runtime_metadata["visual_token_count_mode"] = configured_v_token_num
+    runtime_metadata["image_aspect_ratio"] = model_config_metadata.get("image_aspect_ratio")
+    runtime_metadata["mm_patch_merge_type"] = model_config_metadata.get("mm_patch_merge_type")
 
+    uses_dynamic_anyres = model_config_metadata.get("image_aspect_ratio") == "anyres"
+    if uses_dynamic_anyres and configured_v_token_num != "auto":
+        raise RuntimeError(
+            "LLaVA-NeXT anyres inputs require pruning.v_token_num=auto; "
+            f"got fixed value {configured_v_token_num!r}"
+        )
     if (
-        isinstance(vision_token_count, int)
+        configured_v_token_num != "auto"
+        and isinstance(vision_token_count, int)
         and int(configured_v_token_num) != vision_token_count
     ):
         raise RuntimeError(
             "Configured pruning.v_token_num does not match the loaded vision tower: "
             f"configured={configured_v_token_num}, vision_tower={vision_token_count}"
         )
+
+    meta_parameters = [name for name, parameter in model.named_parameters() if parameter.is_meta]
+    if meta_parameters:
+        raise RuntimeError(
+            "Loaded model still contains meta parameters; first entries: "
+            f"{meta_parameters[:5]}"
+        )
+    runtime_metadata["meta_parameter_count"] = 0
 
     return runtime_metadata
 
@@ -771,7 +818,7 @@ def run_prune_inference(
     image_folder = resolve(ds_cfg["image_folder"])
     max_new_tokens = int(ds_cfg.get("max_new_tokens", infer_cfg["max_new_tokens"]))
     strategy_name = prune_cfg["strategy"]
-    v_token_num = int(prune_cfg.get("v_token_num", 576))
+    configured_v_token_num = normalize_configured_v_token_num(prune_cfg.get("v_token_num", 576))
     configured_prune_layers = _normalize_configured_prune_layers(prune_cfg["prune_layers"])
     effective_prune_cfg, effective_prune_layers, tail_start_layer = derive_effective_prune_config(
         prune_cfg,
@@ -884,15 +931,22 @@ def run_prune_inference(
 
     target_device = get_primary_visible_cuda_device()
     tokenizer, model, image_processor, context_len = load_pretrained_model(
-        model_path, None, model_name, device_map=target_device, device=target_device, **load_kwargs
+        model_path,
+        None,
+        model_name,
+        device_map=target_device,
+        device=target_device,
+        disable_mmap=bool(model_cfg.get("disable_mmap", True)),
+        **load_kwargs,
     )
     if enable_sparse_position_ids_compat(model):
-        print("[position-ids] Enabled sparse position-id compatibility for Llama attention.")
+        family = getattr(model, "_sparse_position_ids_compat_family", "unknown")
+        print(f"[position-ids] Enabled sparse position-id compatibility for {family} attention.")
     model.eval()
     model_runtime_metadata = validate_loaded_model_runtime(
         model,
         model_config_metadata=model_config_metadata,
-        configured_v_token_num=v_token_num,
+        configured_v_token_num=configured_v_token_num,
     )
     config_snapshot["_run_meta"]["model_runtime_metadata"] = model_runtime_metadata
     with open(config_snapshot_path, 'w') as f:
@@ -1000,19 +1054,48 @@ def run_prune_inference(
             inputs_embeds = None
             generated_ids = None
             output_ids = None
+            visual_layout = None
+            v_token_start = None
+            sample_v_token_num = 0
+            text_token_start = None
 
             try:
                 input_ids_cuda = input_ids.to(device=target_device, non_blocking=True)
                 if has_image:
-                    v_token_start, _, text_token_start = locate_image_tokens(
-                        input_ids, IMAGE_TOKEN_INDEX, v_token_num=v_token_num
-                    )
-                    text_token_ids = input_ids[0, v_token_start + 1:].clone()
-                    text_special_token_mask = build_text_special_token_mask(tokenizer, text_token_ids)
-                    expected_seq_len = v_token_start + v_token_num + (input_ids.shape[1] - (v_token_start + 1))
-
                     # --- prepare multimodal embeddings ---
                     image_tensor_cuda = image_tensor.to(dtype=torch.float16, device=target_device, non_blocking=True)
+                    if image_tensor_cuda.ndim == 5:
+                        num_image_crops = int(image_tensor_cuda.shape[1])
+                    elif image_tensor_cuda.ndim == 4:
+                        num_image_crops = 1
+                    else:
+                        raise RuntimeError(
+                            f"Unsupported image tensor shape: {tuple(image_tensor_cuda.shape)}"
+                        )
+
+                    vision_tower = model.get_vision_tower()
+                    visual_layout = get_visual_token_layout(
+                        image_sizes[0],
+                        model.config,
+                        patches_per_side=vision_tower.num_patches_per_side,
+                        vision_image_size=vision_tower.config.image_size,
+                        num_image_crops=num_image_crops,
+                    )
+                    sample_v_token_num = int(visual_layout["total_token_count"])
+                    if (
+                        configured_v_token_num != "auto"
+                        and int(configured_v_token_num) != sample_v_token_num
+                    ):
+                        raise RuntimeError(
+                            "Configured visual token count does not match this sample: "
+                            f"configured={configured_v_token_num}, actual={sample_v_token_num}, "
+                            f"layout={visual_layout}"
+                        )
+                    v_token_start, _, text_token_start = locate_image_tokens(
+                        input_ids,
+                        IMAGE_TOKEN_INDEX,
+                        v_token_num=sample_v_token_num,
+                    )
 
                     (
                         _input_ids,
@@ -1025,12 +1108,32 @@ def run_prune_inference(
                         input_ids_cuda, None, None, None, None,
                         image_tensor_cuda, image_sizes=list(image_sizes),
                     )
-                    if inputs_embeds.shape[1] != expected_seq_len:
+                    untruncated_seq_len = int(input_ids.shape[1]) - 1 + sample_v_token_num
+                    tokenizer_max_length = getattr(model.config, "tokenizer_model_max_length", None)
+                    expected_seq_len = (
+                        min(untruncated_seq_len, int(tokenizer_max_length))
+                        if tokenizer_max_length is not None
+                        else untruncated_seq_len
+                    )
+                    actual_seq_len = int(inputs_embeds.shape[1])
+                    if actual_seq_len != expected_seq_len:
                         raise RuntimeError(
                             f"Expanded sequence length mismatch for question_id={question_id}: "
-                            f"expected {expected_seq_len}, got {inputs_embeds.shape[1]}. "
-                            f"Check v_token_num (configured={v_token_num})."
+                            f"expected {expected_seq_len}, got {actual_seq_len}; "
+                            f"layout={visual_layout}."
                         )
+                    if text_token_start > actual_seq_len:
+                        raise RuntimeError(
+                            "Tokenizer truncation reached the visual block, which is unsupported: "
+                            f"visual_end={text_token_start}, sequence_length={actual_seq_len}"
+                        )
+
+                    actual_text_length = actual_seq_len - text_token_start
+                    text_token_ids = input_ids[
+                        0,
+                        v_token_start + 1:v_token_start + 1 + actual_text_length,
+                    ].clone()
+                    text_special_token_mask = build_text_special_token_mask(tokenizer, text_token_ids)
 
                     # --- generate with pruning ---
                     t0 = time.time()
@@ -1039,7 +1142,7 @@ def run_prune_inference(
                         attention_mask=attention_mask,
                         position_ids=position_ids,
                         v_token_start=v_token_start,
-                        v_token_num=v_token_num,
+                        v_token_num=sample_v_token_num,
                         text_token_start=text_token_start,
                         text_token_ids=text_token_ids,
                         text_special_token_mask=text_special_token_mask,
@@ -1140,6 +1243,14 @@ def run_prune_inference(
             "decode_time": prune_info["decode_time"],
             "total_time": prune_info["total_time"],
         }
+        if visual_layout is not None:
+            sample_stats.update(
+                {
+                    "initial_visual_token_count": int(sample_v_token_num),
+                    "visual_index_semantics": visual_layout["visual_index_semantics"],
+                    "visual_token_layout": visual_layout,
+                }
+            )
 
         # Per-layer pruning details
         for layer_idx, linfo in prune_info.get("layers", {}).items():
@@ -1160,9 +1271,11 @@ def run_prune_inference(
             grp = h5_file.create_group(sample_id)
             grp.attrs["question_id"] = str(question_id)
             grp.attrs["image_file"] = str(image_file)
-            grp.attrs["v_token_start"] = v_token_start
-            grp.attrs["v_token_num"] = v_token_num
-            grp.attrs["text_token_start"] = text_token_start
+            grp.attrs["v_token_start"] = -1 if v_token_start is None else int(v_token_start)
+            grp.attrs["v_token_num"] = int(sample_v_token_num)
+            grp.attrs["text_token_start"] = -1 if text_token_start is None else int(text_token_start)
+            if visual_layout is not None:
+                grp.attrs["visual_token_layout"] = json.dumps(visual_layout, sort_keys=True)
 
             use_fp16 = capture_cfg.get("precision", "fp16") == "fp16"
             compression = capture_cfg.get("compression", "gzip")
@@ -1200,6 +1313,11 @@ def run_prune_inference(
             grp.attrs["capture_layer"] = rep_diag_layer
             grp.attrs["original_sample_idx"] = int(line.get("_rep_bottleneck_original_sample_idx", sample_idx))
             grp.attrs["prompt"] = str(line.get("text", ""))
+            grp.attrs["visual_index_semantics"] = (
+                "none" if visual_layout is None else visual_layout["visual_index_semantics"]
+            )
+            if visual_layout is not None:
+                grp.attrs["visual_token_layout"] = json.dumps(visual_layout, sort_keys=True)
 
             linfo = prune_info.get("layers", {}).get(rep_diag_layer, {})
             visual_hidden = linfo.get("visual_hidden")
@@ -1240,17 +1358,21 @@ def run_prune_inference(
     # --- summary ---
     prune_layer = pruner.prune_layers[0] if pruner.prune_layers else -1
     avg_pruned = 0
+    avg_visual_before = 0
     if all_stats:
         key = f"layer_{prune_layer}_pruned"
         vals = [s.get(key, 0) for s in all_stats]
         avg_pruned = sum(vals) / len(vals)
+        before_key = f"layer_{prune_layer}_before"
+        before_vals = [s[before_key] for s in all_stats if before_key in s]
+        avg_visual_before = sum(before_vals) / len(before_vals) if before_vals else 0
 
     print(f"\nDone! {len(questions)} samples processed.")
     print(f"  Run mode:          {run_mode}")
     print(f"  Strategy:          {strategy_name}")
     print(f"  Prune stage:       {prune_info.get('prune_stage', strategy.prune_stage()) if questions else strategy.prune_stage()}")
     print(f"  Prune layer(s):    {pruner.prune_layers}")
-    print(f"  Avg tokens pruned: {avg_pruned:.1f} / {v_token_num}")
+    print(f"  Avg tokens pruned: {avg_pruned:.1f} / {avg_visual_before:.1f}")
     print(f"  Avg time/sample:   {avg_time:.3f}s")
     print(f"  Run dir:  {run_dir}")
     print(f"  Answers:  {answers_path}")
