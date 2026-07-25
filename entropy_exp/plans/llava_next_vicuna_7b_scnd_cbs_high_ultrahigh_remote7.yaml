@@ -1,0 +1,121 @@
+version: 1
+label: "llava-next-vicuna-7b-scnd-cbs-high-ultrahigh-remote7"
+pool_size: 10
+
+gpu:
+  min_free_gib: 18
+  selection: "max_free"
+  sample_seconds: 2
+  poll_interval_seconds: 10
+
+retry:
+  budget_ratio: 0.4
+  rounding: "ceil"
+
+tmux:
+  session_name: "sched_next_vicuna_scnd_cbs_remote7"
+  log_dir: "entropy_exp/outputs/logs/tmux"
+
+environment:
+  conda_sh: "/home/liuyu/miniconda3/etc/profile.d/conda.sh"
+  conda_env: "/home/liuyu/miniconda3/envs/llava-next"
+  extra_env:
+    - "PYTHON_BIN=/home/liuyu/miniconda3/envs/llava-next/bin/python"
+    - "PREFERRED_LLAVA_ENV_NAME=llava-next"
+    - "HF_HUB_OFFLINE=1"
+    - "TRANSFORMERS_OFFLINE=1"
+    - "TOKENIZERS_PARALLELISM=false"
+    - "OMP_NUM_THREADS=4"
+    - "MKL_NUM_THREADS=4"
+
+defaults:
+  max_samples: null
+  extra_sets:
+    - "model.path=entropy_exp/models/llava-v1.6-vicuna-7b"
+    - "model.name=llava-v1.6-vicuna-7b"
+    - "model.attn_implementation=eager"
+    - "model.disable_mmap=false"
+    - "inference.conv_mode=vicuna_v1"
+    - "inference.seed=42"
+    - "pruning.layer_selection=fixed"
+    - "pruning.prune_layers=[2,6,16]"
+    - "pruning.v_token_num=auto"
+    - "pruning.sparsevlm_scnd.layer_modes=[\"C\",\"B\",\"S\"]"
+    - "pruning.sparsevlm_scnd.seed_ratio_min=0.15"
+    - "pruning.sparsevlm_scnd.seed_ratio_max=0.55"
+    - "pruning.sparsevlm_scnd.seed_pool_multiplier=2.0"
+    - "pruning.sparsevlm_scnd.saliency_floor_min=0.65"
+    - "pruning.sparsevlm_scnd.saliency_floor_max=0.90"
+    - "pruning.sparsevlm_scnd.boundary_ratio=0.25"
+    - "pruning.sparsevlm_scnd.saliency_repair=true"
+    - "pruning.sparsevlm_scnd.distance_metric=cosine"
+    - "pruning.sparsevlm_scnd.selection_backend=gpu"
+    - "pruning.sparsevlm_scnd.c_selection_rule=native"
+    - "pruning.sparsevlm_scnd.seed=42"
+    - "pruning.sparsevlm_scnd.use_score_memory=false"
+    - "capture.save_attention=false"
+    - "capture.save_importance_scores=false"
+    - "capture.save_keep_indices=false"
+    - "output.base_dir=entropy_exp/outputs/scnd_llava_next_vicuna_7b_cbs_high_ultrahigh_remote7"
+
+experiments:
+  - name: "gqa_scnd_cbs_high"
+    dataset: "gqa"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.4739583333333333,0.636963696369637,0.6727272727272727]"
+      - "output.run_tag_suffix=next_vicuna_cbs_high_remote7"
+  - name: "gqa_scnd_cbs_ultrahigh"
+    dataset: "gqa"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.8854166666666666,0.5454545454545454,0.43333333333333335]"
+      - "output.run_tag_suffix=next_vicuna_cbs_ultrahigh_remote7"
+  - name: "pope_scnd_cbs_high"
+    dataset: "pope"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.4739583333333333,0.636963696369637,0.6727272727272727]"
+      - "output.run_tag_suffix=next_vicuna_cbs_high_remote7"
+  - name: "pope_scnd_cbs_ultrahigh"
+    dataset: "pope"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.8854166666666666,0.5454545454545454,0.43333333333333335]"
+      - "output.run_tag_suffix=next_vicuna_cbs_ultrahigh_remote7"
+  - name: "textvqa_scnd_cbs_high"
+    dataset: "textvqa"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.4739583333333333,0.636963696369637,0.6727272727272727]"
+      - "output.run_tag_suffix=next_vicuna_cbs_high_remote7"
+  - name: "textvqa_scnd_cbs_ultrahigh"
+    dataset: "textvqa"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.8854166666666666,0.5454545454545454,0.43333333333333335]"
+      - "output.run_tag_suffix=next_vicuna_cbs_ultrahigh_remote7"
+  - name: "scienceqa_scnd_cbs_high"
+    dataset: "scienceqa"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.4739583333333333,0.636963696369637,0.6727272727272727]"
+      - "output.run_tag_suffix=next_vicuna_cbs_high_remote7"
+  - name: "scienceqa_scnd_cbs_ultrahigh"
+    dataset: "scienceqa"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.8854166666666666,0.5454545454545454,0.43333333333333335]"
+      - "output.run_tag_suffix=next_vicuna_cbs_ultrahigh_remote7"
+  - name: "mme_scnd_cbs_high"
+    dataset: "mme"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.4739583333333333,0.636963696369637,0.6727272727272727]"
+      - "output.run_tag_suffix=next_vicuna_cbs_high_remote7"
+  - name: "mme_scnd_cbs_ultrahigh"
+    dataset: "mme"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets:
+      - "pruning.prune_ratio=[0.8854166666666666,0.5454545454545454,0.43333333333333335]"
+      - "output.run_tag_suffix=next_vicuna_cbs_ultrahigh_remote7"
