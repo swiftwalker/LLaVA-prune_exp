@@ -15,10 +15,10 @@ variants:
   - name: "cdpruner_next_per_crop_dpp"
     notes: "Official instruction-conditioned DPP applied independently to each canonical LLaVA-NeXT anyres crop."
 defaults:
-  model_name: "llava-v1.6-mistral-7b"
+  model_name: "llava-v1.6-vicuna-7b"
   variant: "cdpruner_next_per_crop_dpp"
   retain_token: 126
-  conv_mode: "mistral_instruct"
+  conv_mode: "vicuna_v1"
   temperature: 0
   top_p: null
   num_beams: 1
@@ -28,5 +28,6 @@ local_comparison_notes:
   - "retain_token is the official per-crop visual_token_num, not the final per-image count."
   - "The wrapper restores canonical anyres resolution selection; the official fork otherwise forces every image to 672x672."
   - "The official NeXT path removes the _unpad suffix and returns approximately crop_count * visual_token_num tokens."
-  - "The local Mistral bridge changes generation wiring only; conditional-DPP selection remains official."
+  - "Vicuna uses the official native LlavaLlamaForCausalLM generation path; no selector bridge is required."
+  - "The local Mistral bridge remains available for explicit Mistral runs and changes generation wiring only."
   - "Local metrics are produced by entropy_exp/src/eval_datasets.py for comparison consistency."

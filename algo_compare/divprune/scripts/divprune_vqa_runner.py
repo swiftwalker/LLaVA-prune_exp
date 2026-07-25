@@ -38,6 +38,7 @@ from algo_compare.llava_next_official import (  # noqa: E402
     image_crop_count,
     install_divprune_next_adapter,
     is_llava_next_config,
+    llava_language_backbone,
 )
 from llava.constants import (  # noqa: E402
     DEFAULT_IMAGE_TOKEN,
@@ -119,6 +120,7 @@ def eval_model(args: argparse.Namespace) -> None:
     use_next_adapter = args.llava_next_compat == "on" or (
         args.llava_next_compat == "auto" and is_llava_next_config(model.config)
     )
+    language_backbone = llava_language_backbone(model)
     if use_next_adapter and args.divprune_baseline == "OURS":
         install_divprune_next_adapter(
             model,
@@ -205,6 +207,7 @@ def eval_model(args: argparse.Namespace) -> None:
                             "divprune_visual_start": actual_stats.get("visual_start"),
                             "divprune_crop_count": image_crop_count(image_tensor),
                             "divprune_llava_next_compat": use_next_adapter,
+                            "divprune_language_backbone": language_backbone,
                             "divprune_adapter": actual_stats.get("adapter"),
                             "divprune_enabled": image_tensor is not None,
                         },

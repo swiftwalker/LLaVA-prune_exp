@@ -22,6 +22,28 @@ def is_llava_next_config(config: Any) -> bool:
     return model_type == "llava_mistral" or aspect_ratio == "anyres" or patch_merge.startswith("spatial")
 
 
+def llava_language_backbone(model_or_config: Any) -> str:
+    """Return the decoder family used by a LLaVA model.
+
+    Original LLaVA-NeXT Vicuna checkpoints use ``model_type=llava`` while the
+    official pruning forks instantiate ``LlavaLlamaForCausalLM``.  Looking at
+    both the config and runtime class keeps that path distinct from Mistral.
+    """
+
+    config = getattr(model_or_config, "config", model_or_config)
+    text_config = getattr(config, "text_config", None)
+    candidates = (
+        str(getattr(config, "model_type", "")).lower(),
+        str(getattr(text_config, "model_type", "")).lower(),
+        type(model_or_config).__name__.lower(),
+    )
+    if any("mistral" in value for value in candidates):
+        return "mistral"
+    if any("llama" in value or value == "llava" for value in candidates):
+        return "llama"
+    return "unknown"
+
+
 def image_crop_count(images: Any) -> int:
     """Count CLIP crops in the batch-size-one image representation."""
 
@@ -263,8 +285,7 @@ def configure_cdpruner_model(model: Any, visual_token_num: int) -> None:
 
 
 def is_cdpruner_mistral(model: Any) -> bool:
-    model_type = str(getattr(getattr(model, "config", None), "model_type", "")).lower()
-    return model_type == "llava_mistral" or "mistral" in type(model).__name__.lower()
+    return llava_language_backbone(model) == "mistral"
 
 
 @torch.no_grad()
@@ -277,7 +298,7 @@ def generate_with_cdpruner(
     texts: str | None = None,
     **kwargs: Any,
 ) -> tuple[Any, int]:
-    """Run official CDPruner, repairing the missing Mistral generate wiring."""
+    """Run official CDPruner through its native Llama or bridged Mistral path."""
 
     if not is_cdpruner_mistral(model):
         output = model.generate(inputs, images=images, image_sizes=image_sizes, texts=texts, **kwargs)

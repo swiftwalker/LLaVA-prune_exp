@@ -17,9 +17,9 @@ variants:
   - name: "divprune_next_dynamic"
     notes: "Official max-min selector on the dynamically inferred LLaVA-NeXT merged visual span."
 defaults:
-  model_name: "llava-v1.6-mistral-7b"
+  model_name: "llava-v1.6-vicuna-7b"
   variant: "divprune_next_dynamic"
-  conv_mode: "mistral_instruct"
+  conv_mode: "vicuna_v1"
   temperature: 0
   top_p: null
   num_beams: 1

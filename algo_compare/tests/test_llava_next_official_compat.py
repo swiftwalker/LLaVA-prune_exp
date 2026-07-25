@@ -26,6 +26,7 @@ image_crop_count = compat.image_crop_count
 install_cdpruner_next_image_adapter = compat.install_cdpruner_next_image_adapter
 install_divprune_next_adapter = compat.install_divprune_next_adapter
 is_llava_next_config = compat.is_llava_next_config
+llava_language_backbone = compat.llava_language_backbone
 
 
 class FakeDivPruneModel:
@@ -75,11 +76,45 @@ class FakeCDPrunerMistral(FakeGenerationBase):
         raise AssertionError("The unadapted Mistral generate path must be bypassed for images")
 
 
+class FakeCDPrunerVicuna:
+    def __init__(self):
+        self.config = SimpleNamespace(
+            model_type="llava",
+            image_aspect_ratio="anyres",
+            mm_patch_merge_type="spatial_unpad",
+        )
+        self.model = SimpleNamespace()
+        self._vision_tower = SimpleNamespace(num_patches=576)
+
+    def get_vision_tower(self):
+        return self._vision_tower
+
+    def generate(self, inputs, **kwargs):
+        self.generate_inputs = inputs
+        self.generate_kwargs = kwargs
+        return torch.tensor([[9, 10]]), 378
+
+
 class LlavaNextOfficialCompatTest(unittest.TestCase):
     def test_next_config_detection(self):
         self.assertTrue(is_llava_next_config(SimpleNamespace(model_type="llava_mistral")))
         self.assertTrue(is_llava_next_config(SimpleNamespace(image_aspect_ratio="anyres")))
+        self.assertTrue(
+            is_llava_next_config(
+                SimpleNamespace(
+                    model_type="llava",
+                    image_aspect_ratio="anyres",
+                    mm_patch_merge_type="spatial_unpad",
+                )
+            )
+        )
         self.assertFalse(is_llava_next_config(SimpleNamespace(model_type="llava_llama")))
+
+    def test_language_backbone_detection(self):
+        self.assertEqual(llava_language_backbone(SimpleNamespace(model_type="llava")), "llama")
+        self.assertEqual(llava_language_backbone(SimpleNamespace(model_type="llava_llama")), "llama")
+        self.assertEqual(llava_language_backbone(SimpleNamespace(model_type="llava_mistral")), "mistral")
+        self.assertEqual(llava_language_backbone(SimpleNamespace(model_type="unknown")), "unknown")
 
     def test_image_crop_count(self):
         self.assertEqual(image_crop_count(torch.zeros(1, 5, 3, 4, 4)), 5)
@@ -138,6 +173,26 @@ class LlavaNextOfficialCompatTest(unittest.TestCase):
         self.assertEqual(model.model.visual_token_num, 126)
         self.assertEqual(model.prepare_kwargs["texts"], "what is shown?")
         self.assertEqual(model.parent_generate_kwargs["max_new_tokens"], 4)
+
+    def test_cdpruner_vicuna_uses_official_native_generation(self):
+        model = FakeCDPrunerVicuna()
+        configure_cdpruner_model(model, 126)
+        inputs = torch.tensor([[1, -200, 2]])
+        images = torch.zeros(1, 3, 3, 4, 4)
+        output, effective = generate_with_cdpruner(
+            model,
+            inputs,
+            images=images,
+            image_sizes=[(8, 8)],
+            texts="what is shown?",
+            max_new_tokens=4,
+        )
+        self.assertTrue(torch.equal(output, torch.tensor([[9, 10]])))
+        self.assertEqual(effective, 378)
+        self.assertTrue(torch.equal(model.generate_inputs, inputs))
+        self.assertIs(model.generate_kwargs["images"], images)
+        self.assertEqual(model.generate_kwargs["texts"], "what is shown?")
+        self.assertEqual(model.generate_kwargs["max_new_tokens"], 4)
 
     def test_cdpruner_budget_validation(self):
         model = FakeCDPrunerMistral()

@@ -32,6 +32,7 @@ from algo_compare.llava_next_official import (  # noqa: E402
     install_cdpruner_next_image_adapter,
     is_cdpruner_mistral,
     is_llava_next_config,
+    llava_language_backbone,
 )
 from algo_compare.vqa_compat import (  # noqa: E402
     SUPPORTED_DATASETS as VQA_DATASETS,
@@ -121,6 +122,7 @@ def eval_model(args: argparse.Namespace) -> None:
     )
     configure_cdpruner_model(model, args.visual_token_num)
     mistral_bridge = is_cdpruner_mistral(model)
+    language_backbone = llava_language_backbone(model)
     use_next_adapter = args.llava_next_compat == "on" or (
         args.llava_next_compat == "auto" and is_llava_next_config(model.config)
     )
@@ -201,6 +203,10 @@ def eval_model(args: argparse.Namespace) -> None:
                             "cdpruner_crop_count": crop_count,
                             "cdpruner_expected_crop_product": crop_count * int(args.visual_token_num),
                             "cdpruner_llava_next_mistral_bridge": mistral_bridge,
+                            "cdpruner_language_backbone": language_backbone,
+                            "cdpruner_generation_path": (
+                                "mistral_bridge" if mistral_bridge else "official_llama_native"
+                            ),
                             "cdpruner_llava_next_compat": use_next_adapter,
                             "cdpruner_image_adapter": (
                                 "canonical_anyres_resolution" if use_next_adapter else "official_fixed_672"
@@ -224,7 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-folder", default="")
     parser.add_argument("--question-file", required=True)
     parser.add_argument("--answers-file", required=True)
-    parser.add_argument("--conv-mode", default="mistral_instruct")
+    parser.add_argument("--conv-mode", default="vicuna_v1")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=0.0)

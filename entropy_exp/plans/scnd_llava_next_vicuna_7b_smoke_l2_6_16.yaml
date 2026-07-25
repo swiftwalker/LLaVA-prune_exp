@@ -1,0 +1,64 @@
+version: 1
+label: "scnd-llava-next-vicuna-7b-smoke-l2-6-16"
+pool_size: 1
+
+gpu:
+  min_free_gib: 35
+  selection: "max_free"
+  sample_seconds: 2
+  poll_interval_seconds: 10
+
+retry:
+  budget_ratio: 0.0
+  rounding: "ceil"
+
+tmux:
+  session_name: "sched_scnd_llava_next_vicuna_7b_smoke"
+  log_dir: "entropy_exp/outputs/logs/tmux"
+
+environment:
+  conda_sh: "/opt/miniconda3/etc/profile.d/conda.sh"
+  conda_env: "/data_ssd/liuyu/.conda/envs/llava-next"
+  extra_env:
+    - "PYTHON_BIN=/data_ssd/liuyu/.conda/envs/llava-next/bin/python"
+    - "PREFERRED_LLAVA_ENV_NAME=llava-next"
+    - "HF_HUB_OFFLINE=1"
+    - "TRANSFORMERS_OFFLINE=1"
+    - "TOKENIZERS_PARALLELISM=false"
+
+defaults:
+  max_samples: 3
+  extra_sets:
+    - "model.path=entropy_exp/models/llava-v1.6-vicuna-7b"
+    - "model.name=llava-v1.6-vicuna-7b"
+    - "model.attn_implementation=eager"
+    - "model.disable_mmap=false"
+    - "inference.conv_mode=vicuna_v1"
+    - "inference.seed=42"
+    - "pruning.layer_selection=fixed"
+    - "pruning.prune_layers=[2,6,16]"
+    - "pruning.prune_ratio=[0.90,0.50,0.50]"
+    - "pruning.v_token_num=auto"
+    - "pruning.sparsevlm_scnd.layer_modes=[\"C\",\"B\",\"S\"]"
+    - "pruning.sparsevlm_scnd.selection_backend=gpu"
+    - "pruning.sparsevlm_scnd.c_selection_rule=native"
+    - "pruning.sparsevlm_scnd.distance_metric=cosine"
+    - "pruning.sparsevlm_scnd.saliency_repair=true"
+    - "capture.save_attention=false"
+    - "capture.save_importance_scores=true"
+    - "capture.save_keep_indices=true"
+    - "output.base_dir=entropy_exp/outputs/scnd_llava_next_vicuna_7b_smoke_l2_6_16"
+
+experiments:
+  - name: "gqa_baseline"
+    dataset: "gqa"
+    strategies: ["baseline"]
+    extra_sets: ["output.run_tag_suffix=next_vicuna_baseline"]
+  - name: "gqa_sparsevlm"
+    dataset: "gqa"
+    strategies: ["sparsevlm"]
+    extra_sets: ["output.run_tag_suffix=next_vicuna_sparsevlm"]
+  - name: "gqa_scnd"
+    dataset: "gqa"
+    strategies: ["sparsevlm_scnd"]
+    extra_sets: ["output.run_tag_suffix=next_vicuna_scnd_exact_gpu"]

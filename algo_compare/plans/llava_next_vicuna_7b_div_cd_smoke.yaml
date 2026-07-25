@@ -1,0 +1,40 @@
+version: 1
+label: llava-next-vicuna-7b-div-cd-smoke
+expected_jobs: 2
+python_bin: /data_ssd/liuyu/.conda/envs/llava-next/bin/python
+model_path: entropy_exp/models/llava-v1.6-vicuna-7b
+model_name: llava-v1.6-vicuna-7b
+conv_mode: vicuna_v1
+output_root: algo_compare/analysis/next_vicuna_7b_div_cd_smoke/runs
+state_file: algo_compare/analysis/next_vicuna_7b_div_cd_smoke/scheduler_state.json
+log_dir: algo_compare/analysis/next_vicuna_7b_div_cd_smoke/logs
+gpus: [1, 5]
+max_concurrent_per_gpu: 1
+min_free_gib: 30
+retry_limit: 0
+poll_interval_seconds: 10
+launch_stagger_seconds: 2
+max_samples: 3
+environment:
+  - HF_HUB_OFFLINE=1
+  - TRANSFORMERS_OFFLINE=1
+  - TOKENIZERS_PARALLELISM=false
+  - OMP_NUM_THREADS=4
+  - MKL_NUM_THREADS=4
+methods:
+  divprune:
+    variant: divprune_next_dynamic
+    weight: 1.0
+  cdpruner:
+    variant: cdpruner_next_per_crop_dpp
+    weight: 1.0
+budgets:
+  high:
+    equivalent_average_tokens: 126.25
+    one_shot_tokens: 126
+    divprune_subset_ratio: 0.21875
+    compression_ratio: 0.78125
+    weight: 1.0
+datasets:
+  - name: gqa
+    samples: 12578

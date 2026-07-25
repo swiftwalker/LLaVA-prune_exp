@@ -59,6 +59,27 @@ LLaVA-1.5 7B/13B 当前都使用 `v_token_num=576`、`patch_per_row=24`。13B
 使用 40 层 decoder，`prune_layers` 仍按绝对层号写，例如 `[2,6,15]`；代码会从
 模型 `config.json` 读取 `hidden_size`、`num_hidden_layers` 等元信息并校验层号范围。
 
+### LLaVA-NeXT Vicuna 7B
+
+Vicuna 使用 Llama decoder 与 `vicuna_v1` 对话模板。其 any-resolution
+视觉序列同样必须使用动态长度：
+
+```bash
+PYTHON_BIN=/data_ssd/liuyu/.conda/envs/llava-next/bin/python \
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 CUDA_VISIBLE_DEVICES=1 \
+bash entropy_exp/scripts/run_prune.sh sparsevlm_scnd gqa 3 --no-auto-gpu \
+  --set model.path=entropy_exp/models/llava-v1.6-vicuna-7b \
+  --set model.name=llava-v1.6-vicuna-7b \
+  --set model.attn_implementation=eager \
+  --set model.disable_mmap=false \
+  --set inference.conv_mode=vicuna_v1 \
+  --set pruning.v_token_num=auto \
+  --set 'pruning.prune_layers=[2,6,16]' \
+  --set 'pruning.prune_ratio=[0.90,0.50,0.50]' \
+  --set 'pruning.sparsevlm_scnd.layer_modes=["C","B","S"]' \
+  --set pruning.sparsevlm_scnd.selection_backend=gpu
+```
+
 ### LLaVA-NeXT Mistral 7B
 
 LLaVA-NeXT 的 `spatial_unpad` any-resolution 输入会为每个样本生成不同长度的

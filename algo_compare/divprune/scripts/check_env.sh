@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 METHOD_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$METHOD_DIR/../.." && pwd)"
 OFFICIAL_REPO="${OFFICIAL_REPO:-$METHOD_DIR/third_party/divprune}"
-MODEL_PATH="${MODEL_PATH:-$REPO_ROOT/entropy_exp/models/llava-v1.6-mistral-7b}"
+MODEL_PATH="${MODEL_PATH:-$REPO_ROOT/entropy_exp/models/llava-v1.6-vicuna-7b}"
 PYTHON_BIN="${PYTHON_BIN:-/data_ssd/liuyu/.conda/envs/llava-next/bin/python}"
 status=0
 
@@ -23,7 +23,7 @@ check_path() {
 check_path "official repo" "$OFFICIAL_REPO/.git"
 check_path "official LLaVA package" "$OFFICIAL_REPO/LLaVA/llava/__init__.py"
 check_path "official DivPrune llava_arch" "$OFFICIAL_REPO/LLaVA/llava/model/llava_arch.py"
-check_path "official Mistral model" "$OFFICIAL_REPO/LLaVA/llava/model/language_model/llava_mistral.py"
+check_path "official Llama model" "$OFFICIAL_REPO/LLaVA/llava/model/language_model/llava_llama.py"
 check_path "model path" "$MODEL_PATH"
 check_path "GQA questions" "$REPO_ROOT/entropy_exp/eval_questions/gqa/llava_gqa_testdev_balanced.jsonl"
 check_path "GQA images" "$REPO_ROOT/entropy_exp/datasets/gqa/images"

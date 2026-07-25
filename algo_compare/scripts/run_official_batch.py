@@ -60,7 +60,7 @@ def build_jobs(plan: dict[str, Any]) -> list[Job]:
     model_path = str(resolve_path(plan["model_path"]))
     output_root = resolve_path(plan["output_root"])
     model_name = str(plan["model_name"])
-    conv_mode = str(plan.get("conv_mode", "mistral_instruct"))
+    conv_mode = str(plan.get("conv_mode", "vicuna_v1"))
     jobs: list[Job] = []
 
     for method, method_cfg in plan["methods"].items():
@@ -70,6 +70,12 @@ def build_jobs(plan: dict[str, Any]) -> list[Job]:
             for dataset_cfg in plan["datasets"]:
                 dataset = str(dataset_cfg["name"])
                 expected_samples = int(dataset_cfg["samples"])
+                max_samples_value = dataset_cfg.get("max_samples", plan.get("max_samples"))
+                max_samples = None if max_samples_value is None else int(max_samples_value)
+                if max_samples is not None:
+                    if max_samples <= 0:
+                        raise ValueError(f"max_samples must be positive, got {max_samples}")
+                    expected_samples = min(expected_samples, max_samples)
                 output_dir = output_root / method / budget / dataset
                 command = [
                     python_bin,
@@ -96,6 +102,8 @@ def build_jobs(plan: dict[str, Any]) -> list[Job]:
                     "0",
                     "--eval",
                 ]
+                if max_samples is not None:
+                    command.extend(["--max-samples", str(max_samples)])
                 if method == "divprune":
                     command.extend(
                         [

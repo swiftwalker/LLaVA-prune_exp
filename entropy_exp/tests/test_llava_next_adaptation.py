@@ -219,5 +219,87 @@ class MistralSparsePositionCompatibilityTests(unittest.TestCase):
         self.assertEqual(cache.get_seq_length(), 5)
 
 
+class LlamaSparsePositionCompatibilityTests(unittest.TestCase):
+    def test_llama_patch_preserves_dense_output_and_supports_sparse_cache(self):
+        from transformers import LlamaConfig, LlamaForCausalLM
+        from transformers.cache_utils import DynamicCache
+
+        torch.manual_seed(11)
+        config = LlamaConfig(
+            vocab_size=64,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            max_position_embeddings=128,
+            attention_dropout=0.0,
+        )
+        config._attn_implementation = "eager"
+        model = LlamaForCausalLM(config).eval()
+        hidden = torch.randn(1, 6, 32)
+        dense_positions = torch.arange(6, dtype=torch.long).unsqueeze(0)
+        dense_mask = _make_causal_mask(6, hidden.dtype, hidden.device)
+
+        with torch.no_grad():
+            native = model.model.layers[0](
+                hidden,
+                attention_mask=dense_mask,
+                position_ids=dense_positions,
+                use_cache=False,
+                output_attentions=True,
+            )
+
+        self.assertTrue(enable_sparse_position_ids_compat(model))
+        self.assertEqual(model._sparse_position_ids_compat_family, "llama")
+        with torch.no_grad():
+            patched = model.model.layers[0](
+                hidden,
+                attention_mask=dense_mask,
+                position_ids=dense_positions,
+                use_cache=False,
+                output_attentions=True,
+            )
+        torch.testing.assert_close(patched[0], native[0], rtol=0, atol=0)
+        torch.testing.assert_close(patched[1], native[1], rtol=0, atol=0)
+
+        sparse_hidden = hidden[:, :4]
+        sparse_positions = torch.tensor([[0, 1, 3, 6]], dtype=torch.long)
+        sparse_mask = _make_causal_mask(4, hidden.dtype, hidden.device)
+        cache = DynamicCache()
+        with torch.no_grad():
+            current = sparse_hidden
+            for layer in model.model.layers:
+                current = layer(
+                    current,
+                    attention_mask=sparse_mask,
+                    position_ids=sparse_positions,
+                    past_key_value=cache,
+                    use_cache=True,
+                    output_attentions=False,
+                )[0]
+
+            decode_hidden = torch.randn(1, 1, 32)
+            decode_mask = _make_causal_mask(
+                1,
+                decode_hidden.dtype,
+                decode_hidden.device,
+                past_kv_len=cache.get_seq_length(),
+            )
+            for layer in model.model.layers:
+                decode_hidden = layer(
+                    decode_hidden,
+                    attention_mask=decode_mask,
+                    position_ids=torch.tensor([[7]], dtype=torch.long),
+                    past_key_value=cache,
+                    use_cache=True,
+                    output_attentions=False,
+                )[0]
+
+        self.assertEqual(tuple(current.shape), (1, 4, 32))
+        self.assertEqual(tuple(decode_hidden.shape), (1, 1, 32))
+        self.assertEqual(cache.get_seq_length(), 5)
+
+
 if __name__ == "__main__":
     unittest.main()

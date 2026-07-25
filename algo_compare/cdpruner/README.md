@@ -1,13 +1,14 @@
 # CDPruner Official LLaVA-NeXT Wrapper
 
 This directory runs the pinned official CDPruner implementation on
-LLaVA-v1.6-Mistral-7B without modifying the third-party checkout.
+LLaVA-v1.6-Vicuna-7B without modifying the third-party checkout.
 
 The official repository contains a LLaVA-NeXT anyres path, but its CDPruner
-generation wiring is present only in `llava_llama.py`. The local bridge gives
-Mistral the same data flow: question text enters the official CLIP text tower,
-the official conditional-DPP selector prepares visual embeddings, and parent
-Mistral generation consumes those embeddings.
+generation wiring is implemented in `llava_llama.py`, so the Vicuna checkpoint
+uses the official native path directly. Question text enters the official CLIP
+text tower and the official conditional-DPP selector prepares visual
+embeddings. A local generation bridge remains available for explicit Mistral
+runs; it does not replace the selector.
 
 The official fork also forces every input to a `672x672` anyres canvas. The
 local NeXT adapter restores the model's canonical resolution selection so that
@@ -25,8 +26,8 @@ bash algo_compare/cdpruner/scripts/fetch_official.sh
 bash algo_compare/cdpruner/scripts/check_env.sh
 
 PYTHON_BIN=/data_ssd/liuyu/.conda/envs/llava-next/bin/python \
-MODEL_PATH=entropy_exp/models/llava-v1.6-mistral-7b \
-CONV_MODE=mistral_instruct RETAIN_TOKEN=126 MAX_SAMPLES=3 \
+MODEL_PATH=entropy_exp/models/llava-v1.6-vicuna-7b \
+CONV_MODE=vicuna_v1 RETAIN_TOKEN=126 MAX_SAMPLES=3 \
 bash algo_compare/cdpruner/scripts/run_official_gqa.sh --no-eval
 ```
 
