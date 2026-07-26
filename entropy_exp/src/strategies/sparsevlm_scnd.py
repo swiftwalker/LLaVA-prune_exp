@@ -16,6 +16,11 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
+from .scnd_entropy_calibration import (
+    VALID_CALIBRATION_MODES,
+    apply_entropy_calibration,
+    load_calibration_artifact,
+)
 from .sparsevlm_adaptive_stratified import compute_target_keep_count
 from .sparsevlm_diverse_mmr import (
     SparseVLMDiverseMMRStrategy,
@@ -107,7 +112,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             raise ValueError(f"Layer {layer_idx} is missing from sparsevlm_scnd.layer_modes")
         return mode_map[int(layer_idx)]
 
-    def _get_scnd_params(self) -> Dict[str, float | bool | str | int]:
+    def _get_scnd_params(self) -> Dict[str, object]:
         seed_ratio_min = float(self.config.get("seed_ratio_min", 0.15))
         seed_ratio_max = float(self.config.get("seed_ratio_max", 0.55))
         seed_pool_multiplier = float(self.config.get("seed_pool_multiplier", 2.0))
@@ -119,6 +124,11 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         selection_backend = str(self.config.get("selection_backend", "auto")).lower()
         c_selection_rule = str(self.config.get("c_selection_rule", "native")).lower()
         seed = int(self.config.get("seed", 42))
+        entropy_calibration_cfg = self.config.get("entropy_calibration", {}) or {}
+        if not isinstance(entropy_calibration_cfg, dict):
+            raise ValueError("sparsevlm_scnd.entropy_calibration must be a mapping")
+        entropy_calibration_mode = str(entropy_calibration_cfg.get("mode", "identity")).lower()
+        entropy_calibration_path = entropy_calibration_cfg.get("artifact_path")
 
         if not 0.0 <= seed_ratio_min <= seed_ratio_max <= 1.0:
             raise ValueError(
@@ -154,6 +164,13 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 f"sparsevlm_scnd.c_selection_rule only supports {sorted(VALID_C_SELECTION_RULES)}, "
                 f"got {c_selection_rule!r}"
             )
+        if entropy_calibration_mode not in VALID_CALIBRATION_MODES:
+            raise ValueError(
+                "sparsevlm_scnd.entropy_calibration.mode only supports "
+                f"{sorted(VALID_CALIBRATION_MODES)}, got {entropy_calibration_mode!r}"
+            )
+        if entropy_calibration_mode != "identity" and not entropy_calibration_path:
+            raise ValueError("quantile_affine entropy calibration requires artifact_path")
 
         return {
             "seed_ratio_min": seed_ratio_min,
@@ -167,7 +184,36 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "selection_backend": selection_backend,
             "c_selection_rule": c_selection_rule,
             "seed": seed,
+            "entropy_calibration_mode": entropy_calibration_mode,
+            "entropy_calibration_path": entropy_calibration_path,
         }
+
+    def _entropy_control(
+        self,
+        raw_entropy_norm: float,
+        layer_idx: int,
+        layer_mode: str,
+        params: Dict[str, object],
+    ) -> Dict[str, object]:
+        calibration_mode = str(params["entropy_calibration_mode"])
+        if layer_mode != "C" or calibration_mode == "identity":
+            return apply_entropy_calibration(raw_entropy_norm, "identity", None)
+
+        artifact = getattr(self, "_entropy_calibration_artifact", None)
+        if artifact is None:
+            artifact = load_calibration_artifact(
+                str(params["entropy_calibration_path"]),
+                expected_model_name=self.config.get("_model_name"),
+                expected_model_fingerprint=self.config.get("_model_config_fingerprint"),
+                expected_layer=int(layer_idx),
+            )
+            self._entropy_calibration_artifact = artifact
+        elif int(artifact["capture_layer"]) != int(layer_idx):
+            raise ValueError(
+                "Entropy calibration artifact is bound to layer "
+                f"{artifact['capture_layer']}, but C selection was requested at layer {layer_idx}"
+            )
+        return apply_entropy_calibration(raw_entropy_norm, calibration_mode, artifact)
 
     @staticmethod
     def _score_list(scores: torch.Tensor) -> List[float]:
@@ -1390,6 +1436,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         global_prune_step = int(memory["global_prune_step"])
         random_seed = self._derive_random_seed(context, layer_idx, global_prune_step, int(params["seed"]))
         entropy_raw, entropy_norm = compute_entropy_stats(visual_scores)
+        entropy_control = self._entropy_control(entropy_norm, layer_idx, mode, params)
+        entropy_norm_control = float(entropy_control["control_value"])
         prune_ratio = self.get_prune_ratio(layer_idx, visual_scores)
         min_visual_tokens_after_prune = int(self.config.get("min_visual_tokens_after_prune", 16))
         target_keep = compute_target_keep_count(
@@ -1424,7 +1472,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     saliency_score=mixed_score,
                     distance=distance,
                     target_keep=target_keep,
-                    entropy_norm=entropy_norm,
+                    entropy_norm=entropy_norm_control,
                     seed_ratio_min=float(params["seed_ratio_min"]),
                     seed_ratio_max=float(params["seed_ratio_max"]),
                     seed_pool_multiplier=float(params["seed_pool_multiplier"]),
@@ -1438,7 +1486,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     saliency_score=mixed_score,
                     distance=distance,
                     target_keep=target_keep,
-                    entropy_norm=entropy_norm,
+                    entropy_norm=entropy_norm_control,
                     seed_ratio_min=float(params["seed_ratio_min"]),
                     seed_ratio_max=float(params["seed_ratio_max"]),
                     seed_pool_multiplier=float(params["seed_pool_multiplier"]),
@@ -1452,7 +1500,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     saliency_score=mixed_score,
                     distance=distance,
                     target_keep=target_keep,
-                    entropy_norm=entropy_norm,
+                    entropy_norm=entropy_norm_control,
                     seed_ratio_min=float(params["seed_ratio_min"]),
                     seed_ratio_max=float(params["seed_ratio_max"]),
                     seed_pool_multiplier=float(params["seed_pool_multiplier"]),
@@ -1465,7 +1513,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     saliency_score=mixed_score,
                     distance=distance,
                     target_keep=target_keep,
-                    entropy_norm=entropy_norm,
+                    entropy_norm=entropy_norm_control,
                     seed_ratio_min=float(params["seed_ratio_min"]),
                     seed_ratio_max=float(params["seed_ratio_max"]),
                     seed_pool_multiplier=float(params["seed_pool_multiplier"]),
@@ -1547,6 +1595,14 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "distance_metric": params["distance_metric"],
             "saliency_entropy": entropy_raw,
             "saliency_entropy_norm": entropy_norm,
+            "saliency_entropy_norm_control": entropy_norm_control,
+            "entropy_calibration_mode": params["entropy_calibration_mode"],
+            "entropy_calibration_applied": bool(mode == "C" and params["entropy_calibration_mode"] != "identity"),
+            "entropy_calibration_q_low": entropy_control["q_low"],
+            "entropy_calibration_q_high": entropy_control["q_high"],
+            "entropy_calibration_clipped_low": entropy_control["clipped_low"],
+            "entropy_calibration_clipped_high": entropy_control["clipped_high"],
+            "entropy_calibration_artifact_path": entropy_control["artifact_path"],
             "seed_ratio_min": params["seed_ratio_min"],
             "seed_ratio_max": params["seed_ratio_max"],
             "seed_pool_multiplier": params["seed_pool_multiplier"],

@@ -78,6 +78,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Reference visual token count used for metadata retained-token calculation",
     )
+    parser.add_argument(
+        "--cdpruner-llava-next-compat",
+        choices=("auto", "on", "off"),
+        default="auto",
+        help="Select canonical NeXT adapter or the official fixed-672 CDPruner path",
+    )
+    parser.add_argument(
+        "--cdpruner-padding-diagnostics",
+        action="store_true",
+        help="Capture official CDPruner masks and report selected padding-token ratios",
+    )
     parser.add_argument("--eval", action="store_true", help="Run local entropy_exp evaluator after inference")
     parser.add_argument("--no-eval", action="store_false", dest="eval", help="Disable local eval")
     parser.add_argument("--dry-run", action="store_true", help="Print resolved paths and command without running")

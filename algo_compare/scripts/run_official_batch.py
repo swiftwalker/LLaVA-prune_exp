@@ -113,6 +113,15 @@ def build_jobs(plan: dict[str, Any]) -> list[Job]:
                             "576",
                         ]
                     )
+                elif method == "cdpruner":
+                    command.extend(
+                        [
+                            "--cdpruner-llava-next-compat",
+                            str(method_cfg.get("llava_next_compat", "auto")),
+                        ]
+                    )
+                    if bool(method_cfg.get("padding_diagnostics", False)):
+                        command.append("--cdpruner-padding-diagnostics")
                 job_id = f"{method}_{budget}_{dataset}"
                 jobs.append(
                     Job(

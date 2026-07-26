@@ -6,6 +6,7 @@ interface assumptions around the official selection implementations.
 
 from __future__ import annotations
 
+import math
 import os
 import types
 from typing import Any
@@ -106,6 +107,109 @@ def install_cdpruner_next_image_adapter(mm_utils_module: Any) -> None:
     )
     mm_utils_module.select_best_resolution = canonical_anyres_best_resolution
     mm_utils_module._cdpruner_next_image_adapter_installed = True
+
+
+def install_cdpruner_selection_capture(model: Any) -> None:
+    """Capture official DPP masks for post-hoc diagnostics without changing selection."""
+    if getattr(model, "_cdpruner_selection_capture_installed", False):
+        return
+    original_encode_images = model.encode_images
+
+    def encode_images_with_capture(self: Any, images: Any, texts: Any = None):
+        image_features, index_masks = original_encode_images(images, texts=texts)
+        self._cdpruner_last_index_masks = index_masks.detach().cpu()
+        return image_features, index_masks
+
+    model.encode_images = types.MethodType(encode_images_with_capture, model)
+    model._cdpruner_selection_capture_installed = True
+
+
+def cdpruner_padding_diagnostics(
+    index_masks: torch.Tensor,
+    image_size: tuple[int, int],
+    canvas_size: tuple[int, int],
+    *,
+    crop_size: int,
+    patches_per_side: int,
+) -> dict[str, Any]:
+    """Measure selected local-crop tokens whose patch centers lie in padding."""
+    if index_masks.ndim != 2:
+        raise ValueError(f"CDPruner index masks must be [crops, tokens], got {tuple(index_masks.shape)}")
+    original_width, original_height = (int(value) for value in image_size)
+    canvas_width, canvas_height = (int(value) for value in canvas_size)
+    if min(original_width, original_height, canvas_width, canvas_height) <= 0:
+        raise ValueError("Image and canvas dimensions must be positive")
+    if canvas_width % crop_size or canvas_height % crop_size:
+        raise ValueError(f"Canvas {canvas_size} is not divisible by crop size {crop_size}")
+    if int(index_masks.shape[1]) != patches_per_side * patches_per_side:
+        raise ValueError(
+            "CDPruner mask width does not match the vision patch grid: "
+            f"{index_masks.shape[1]} vs {patches_per_side ** 2}"
+        )
+
+    scale_w = canvas_width / original_width
+    scale_h = canvas_height / original_height
+    if scale_w < scale_h:
+        resized_width = canvas_width
+        resized_height = min(math.ceil(original_height * scale_w), canvas_height)
+    else:
+        resized_height = canvas_height
+        resized_width = min(math.ceil(original_width * scale_h), canvas_width)
+    paste_x = (canvas_width - resized_width) // 2
+    paste_y = (canvas_height - resized_height) // 2
+
+    grid_width = canvas_width // crop_size
+    grid_height = canvas_height // crop_size
+    expected_crops = 1 + grid_width * grid_height
+    if int(index_masks.shape[0]) != expected_crops:
+        raise ValueError(f"CDPruner crop count mismatch: {index_masks.shape[0]} vs expected {expected_crops}")
+
+    padding_masks = torch.zeros_like(index_masks, dtype=torch.bool)
+    patch_size = crop_size / patches_per_side
+    crop_index = 1
+    for grid_y in range(grid_height):
+        for grid_x in range(grid_width):
+            for patch_y in range(patches_per_side):
+                center_y = grid_y * crop_size + (patch_y + 0.5) * patch_size
+                for patch_x in range(patches_per_side):
+                    center_x = grid_x * crop_size + (patch_x + 0.5) * patch_size
+                    is_padding = not (
+                        paste_x <= center_x < paste_x + resized_width
+                        and paste_y <= center_y < paste_y + resized_height
+                    )
+                    padding_masks[crop_index, patch_y * patches_per_side + patch_x] = is_padding
+            crop_index += 1
+
+    selected = index_masks.to(dtype=torch.bool)
+    local_selected = selected[1:]
+    local_padding = padding_masks[1:]
+    selected_padding = selected & padding_masks
+    local_selected_count = int(local_selected.sum().item())
+    selected_count = int(selected.sum().item())
+    local_padding_count = int(local_padding.sum().item())
+    all_padding_count = int(padding_masks.sum().item())
+    selected_padding_count = int(selected_padding.sum().item())
+    local_selected_padding_count = int((local_selected & local_padding).sum().item())
+    local_candidate_count = int(local_padding.numel())
+    all_candidate_count = int(padding_masks.numel())
+
+    return {
+        "canvas_width": canvas_width,
+        "canvas_height": canvas_height,
+        "resized_content_width": resized_width,
+        "resized_content_height": resized_height,
+        "padding_measurement": "patch_center_outside_resized_content",
+        "padding_candidate_count_all_crops": all_padding_count,
+        "padding_candidate_ratio_all_crops": all_padding_count / all_candidate_count,
+        "padding_candidate_count_local_crops": local_padding_count,
+        "padding_candidate_ratio_local_crops": local_padding_count / local_candidate_count,
+        "selected_padding_count_all_crops": selected_padding_count,
+        "selected_padding_ratio_all_crops": selected_padding_count / selected_count if selected_count else 0.0,
+        "selected_padding_count_local_crops": local_selected_padding_count,
+        "selected_padding_ratio_local_crops": (
+            local_selected_padding_count / local_selected_count if local_selected_count else 0.0
+        ),
+    }
 
 
 def _valid_input_ids(input_ids: torch.Tensor, attention_mask: torch.Tensor | None) -> torch.Tensor:

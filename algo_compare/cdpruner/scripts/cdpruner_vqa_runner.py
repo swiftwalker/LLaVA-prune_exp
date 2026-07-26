@@ -26,10 +26,12 @@ def _add_import_paths() -> None:
 _add_import_paths()
 
 from algo_compare.llava_next_official import (  # noqa: E402
+    cdpruner_padding_diagnostics,
     configure_cdpruner_model,
     generate_with_cdpruner,
     image_crop_count,
     install_cdpruner_next_image_adapter,
+    install_cdpruner_selection_capture,
     is_cdpruner_mistral,
     is_llava_next_config,
     llava_language_backbone,
@@ -128,6 +130,8 @@ def eval_model(args: argparse.Namespace) -> None:
     )
     if use_next_adapter:
         install_cdpruner_next_image_adapter(llava_mm_utils)
+    if args.padding_diagnostics:
+        install_cdpruner_selection_capture(model)
 
     questions = load_compat_questions(args.dataset, Path(args.question_file))
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
@@ -187,6 +191,23 @@ def eval_model(args: argparse.Namespace) -> None:
                 output_ids = output_ids.sequences
             outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
             crop_count = image_crop_count(image_tensor)
+            padding_stats: dict[str, Any] = {}
+            if args.padding_diagnostics and image_sizes:
+                index_masks = getattr(model, "_cdpruner_last_index_masks", None)
+                if index_masks is None:
+                    raise RuntimeError("CDPruner selection capture did not produce index masks")
+                canvas_size = llava_mm_utils.select_best_resolution(
+                    image_sizes[0],
+                    model.config.image_grid_pinpoints,
+                )
+                vision_tower = model.get_vision_tower()
+                padding_stats = cdpruner_padding_diagnostics(
+                    index_masks,
+                    image_sizes[0],
+                    canvas_size,
+                    crop_size=int(vision_tower.config.image_size),
+                    patches_per_side=int(vision_tower.num_patches_per_side),
+                )
             progress.set_postfix(vtn=effective_visual_tokens, crops=crop_count)
             answer_stream.write(
                 json.dumps(
@@ -213,6 +234,8 @@ def eval_model(args: argparse.Namespace) -> None:
                             ),
                             "cdpruner_official_unpad_disabled": "unpad"
                             in str(getattr(model.config, "mm_patch_merge_type", "")),
+                            "cdpruner_padding_diagnostics": bool(args.padding_diagnostics),
+                            **{f"cdpruner_{key}": value for key, value in padding_stats.items()},
                         },
                     },
                     ensure_ascii=False,
@@ -240,6 +263,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--visual-token-num", type=int, required=True)
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--llava-next-compat", choices=("auto", "on", "off"), default="auto")
+    parser.add_argument("--padding-diagnostics", action="store_true")
     return parser
 
 

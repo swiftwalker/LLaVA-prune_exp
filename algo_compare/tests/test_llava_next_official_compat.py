@@ -20,10 +20,12 @@ SPEC.loader.exec_module(compat)
 
 apply_divprune_to_prepared_inputs = compat.apply_divprune_to_prepared_inputs
 canonical_anyres_best_resolution = compat.canonical_anyres_best_resolution
+cdpruner_padding_diagnostics = compat.cdpruner_padding_diagnostics
 configure_cdpruner_model = compat.configure_cdpruner_model
 generate_with_cdpruner = compat.generate_with_cdpruner
 image_crop_count = compat.image_crop_count
 install_cdpruner_next_image_adapter = compat.install_cdpruner_next_image_adapter
+install_cdpruner_selection_capture = compat.install_cdpruner_selection_capture
 install_divprune_next_adapter = compat.install_divprune_next_adapter
 is_llava_next_config = compat.is_llava_next_config
 llava_language_backbone = compat.llava_language_backbone
@@ -93,6 +95,12 @@ class FakeCDPrunerVicuna:
         self.generate_inputs = inputs
         self.generate_kwargs = kwargs
         return torch.tensor([[9, 10]]), 378
+
+
+class FakeCDPrunerSelector:
+    def encode_images(self, images, texts=None):
+        self.encode_args = (images, texts)
+        return torch.ones(2, 4, 3), torch.tensor([[True, False, True, False], [False, True, False, True]])
 
 
 class LlavaNextOfficialCompatTest(unittest.TestCase):
@@ -209,6 +217,30 @@ class LlavaNextOfficialCompatTest(unittest.TestCase):
         self.assertEqual(module.select_best_resolution((1000, 500), resolutions), expected)
         self.assertEqual(expected, (672, 336))
         self.assertTrue(module._cdpruner_next_image_adapter_installed)
+
+    def test_cdpruner_selection_capture_is_semantics_preserving(self):
+        model = FakeCDPrunerSelector()
+        install_cdpruner_selection_capture(model)
+        features, masks = model.encode_images(torch.zeros(1), texts="question")
+        self.assertEqual(tuple(features.shape), (2, 4, 3))
+        self.assertTrue(torch.equal(model._cdpruner_last_index_masks, masks))
+
+    def test_cdpruner_padding_diagnostics_counts_selected_padding(self):
+        masks = torch.zeros(5, 4, dtype=torch.bool)
+        masks[:, 0] = True
+        masks[1:, 2] = True
+        stats = cdpruner_padding_diagnostics(
+            masks,
+            image_size=(672, 224),
+            canvas_size=(672, 672),
+            crop_size=336,
+            patches_per_side=2,
+        )
+        self.assertEqual(stats["canvas_width"], 672)
+        self.assertGreater(stats["padding_candidate_ratio_local_crops"], 0.0)
+        self.assertGreater(stats["selected_padding_count_all_crops"], 0)
+        self.assertGreaterEqual(stats["selected_padding_ratio_all_crops"], 0.0)
+        self.assertLessEqual(stats["selected_padding_ratio_all_crops"], 1.0)
 
     def test_canonical_anyres_rejects_empty_candidates(self):
         with self.assertRaises(ValueError):

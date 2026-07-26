@@ -438,8 +438,12 @@ def build_official_run(args: Any) -> OfficialRun:
                 str(max_new_tokens),
                 "--visual-token-num",
                 str(retain_token),
+                "--llava-next-compat",
+                str(getattr(args, "cdpruner_llava_next_compat", "auto")),
             ]
         )
+        if getattr(args, "cdpruner_padding_diagnostics", False):
+            command.append("--padding-diagnostics")
     elif dataset == "scienceqa":
         command.extend(["--single-pred-prompt", "--retained_tokens", str(retain_token), "--max-new-tokens", str(max_new_tokens)])
     elif dataset == "mmbench":
@@ -578,6 +582,12 @@ def build_official_run(args: Any) -> OfficialRun:
         "retain_token": retain_token,
         "use_version": env.get("USE_VERSION"),
         "method_params": method_params,
+        "cdpruner_llava_next_compat": (
+            getattr(args, "cdpruner_llava_next_compat", None) if method == "cdpruner" else None
+        ),
+        "cdpruner_padding_diagnostics": (
+            bool(getattr(args, "cdpruner_padding_diagnostics", False)) if method == "cdpruner" else None
+        ),
         "inference": {
             "conv_mode": conv_mode,
             "temperature": temperature,

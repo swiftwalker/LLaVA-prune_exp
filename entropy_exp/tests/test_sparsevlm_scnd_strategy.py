@@ -1,6 +1,9 @@
+import json
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 import torch
 
@@ -8,6 +11,7 @@ SRC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, SRC_DIR)
 
 from strategies import get_strategy
+from strategies.scnd_entropy_calibration import ENTROPY_DEFINITION
 from strategies.sparsevlm_scnd import SparseVLMSCNDStrategy, _scnd_distance_matrix
 
 
@@ -114,6 +118,14 @@ class SparseVLMSCNDTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             invalid_rule._get_scnd_params()
 
+        invalid_calibration = self._strategy(entropy_calibration={"mode": "bogus"})
+        with self.assertRaises(ValueError):
+            invalid_calibration._get_scnd_params()
+
+        missing_artifact = self._strategy(entropy_calibration={"mode": "quantile_affine"})
+        with self.assertRaisesRegex(ValueError, "artifact_path"):
+            missing_artifact._get_scnd_params()
+
         self._prepare(strategy, 4)
         attn = _full_attention(
             seq_len=7,
@@ -125,6 +137,43 @@ class SparseVLMSCNDTests(unittest.TestCase):
 
         self.assertEqual(keep.numel(), info["target_keep"])
         self.assertEqual(info["selection_backend_effective"], "python")
+
+    def test_entropy_calibration_identity_and_quantile_control(self):
+        identity = self._strategy(entropy_calibration={"mode": "identity"})
+        identity_params = identity._get_scnd_params()
+        identity_result = identity._entropy_control(0.72, 0, "C", identity_params)
+        self.assertEqual(identity_result["control_value"], 0.72)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact_path = Path(tmp_dir) / "calibration.json"
+            artifact_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "mode": "quantile_affine",
+                        "entropy_definition": ENTROPY_DEFINITION,
+                        "model_name": "toy-model",
+                        "model_config_fingerprint": "toy-fingerprint",
+                        "capture_layer": 0,
+                        "quantiles": {
+                            "low_probability": 0.05,
+                            "high_probability": 0.95,
+                            "low_value": 0.60,
+                            "high_value": 0.80,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calibrated = self._strategy(
+                entropy_calibration={"mode": "quantile_affine", "artifact_path": str(artifact_path)},
+                _model_name="toy-model",
+                _model_config_fingerprint="toy-fingerprint",
+            )
+            calibrated_result = calibrated._entropy_control(0.70, 0, "C", calibrated._get_scnd_params())
+            self.assertAlmostEqual(calibrated_result["control_value"], 0.5)
+            with self.assertRaisesRegex(ValueError, "bound to layer"):
+                calibrated._entropy_control(0.70, 1, "C", calibrated._get_scnd_params())
 
     def test_distance_metric_matrices_are_larger_is_more_diverse(self):
         embeds = torch.tensor([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)

@@ -65,6 +65,7 @@ from hooks import locate_image_tokens
 from pruner import VisualTokenPruner, enable_sparse_position_ids_compat
 from run_layout import build_run_dir, build_run_rel_dir
 from strategies import get_strategy
+from strategies.scnd_entropy_calibration import model_config_fingerprint
 from dataset_adapters import SUPPORTED_DATASETS, load_dataset_samples
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
@@ -222,6 +223,101 @@ def _set_optional_layer_field(sample_stats: dict, field_name: str, value: Any) -
         sample_stats[field_name] = serialized
 
 
+def _normalized_positive_entropy(values: Any) -> tuple[float, float]:
+    scores = torch.as_tensor(values, dtype=torch.float64).flatten().clamp_min(0.0)
+    num_tokens = int(scores.numel())
+    if num_tokens <= 1:
+        return 0.0, 0.0
+    score_sum = scores.sum()
+    if float(score_sum.item()) <= 0.0:
+        return 0.0, 0.0
+    probabilities = scores / score_sum
+    positive = probabilities > 0
+    entropy = -(probabilities[positive] * torch.log(probabilities[positive])).sum()
+    entropy_norm = torch.clamp(entropy / torch.log(scores.new_tensor(float(num_tokens))), 0.0, 1.0)
+    return float(entropy.item()), float(entropy_norm.item())
+
+
+def _visual_token_roles(original_indices: Any, visual_layout: dict[str, Any]) -> list[str]:
+    indices = [int(index) for index in _serialize_optional_sequence(original_indices) or []]
+    base_count = int(visual_layout.get("base_token_count", 0))
+    local_width = int(visual_layout.get("local_grid_width", 0))
+    newline_count = int(visual_layout.get("newline_token_count", 0))
+    total_count = int(visual_layout.get("total_token_count", 0))
+
+    roles: list[str] = []
+    for index in indices:
+        if index < 0 or index >= total_count:
+            raise ValueError(f"Visual token index {index} is outside layout size {total_count}")
+        if index < base_count:
+            roles.append("base")
+            continue
+        relative_index = index - base_count
+        is_newline = (
+            newline_count > 0
+            and local_width > 0
+            and relative_index % (local_width + 1) == local_width
+        )
+        roles.append("newline" if is_newline else "local_patch")
+    return roles
+
+
+def compute_visual_token_role_stats(layer_info: dict, visual_layout: Optional[dict]) -> dict[str, Any]:
+    """Summarize anyres token roles without exporting per-token arrays."""
+    if not visual_layout:
+        return {}
+    current_indices = layer_info.get("current_patch_indices")
+    keep_indices = layer_info.get("keep_patch_indices", layer_info.get("keep_indices"))
+    if current_indices is None or keep_indices is None:
+        return {}
+
+    current_roles = _visual_token_roles(current_indices, visual_layout)
+    keep_roles = _visual_token_roles(keep_indices, visual_layout)
+    role_stats: dict[str, Any] = {}
+    for role, field_prefix in (
+        ("base", "base_token"),
+        ("local_patch", "local_patch_token"),
+        ("newline", "newline_token"),
+    ):
+        before = current_roles.count(role)
+        after = keep_roles.count(role)
+        role_stats[f"{field_prefix}_count_before"] = before
+        role_stats[f"{field_prefix}_count_after"] = after
+        role_stats[f"{field_prefix}_keep_rate"] = float(after / before) if before else None
+
+    importance_scores = layer_info.get("importance_scores")
+    if importance_scores is None:
+        return role_stats
+    scores = torch.as_tensor(importance_scores, dtype=torch.float64).flatten()
+    if int(scores.numel()) != len(current_roles):
+        raise ValueError(
+            "importance_scores length must match current visual-token indices for role diagnostics, "
+            f"got {scores.numel()} vs {len(current_roles)}"
+        )
+
+    patch_mask = torch.tensor(
+        [role != "newline" for role in current_roles],
+        dtype=torch.bool,
+    )
+    patch_entropy, patch_entropy_norm = _normalized_positive_entropy(scores[patch_mask])
+    role_stats.update(
+        {
+            "patch_only_saliency_entropy": patch_entropy,
+            "patch_only_saliency_entropy_norm": patch_entropy_norm,
+            "patch_only_saliency_token_count": int(patch_mask.sum().item()),
+        }
+    )
+    positive_scores = scores.clamp_min(0.0)
+    positive_sum = positive_scores.sum()
+    newline_mask = ~patch_mask
+    role_stats["newline_saliency_mass_ratio"] = (
+        float(positive_scores[newline_mask].sum().item() / positive_sum.item())
+        if float(positive_sum.item()) > 0.0
+        else 0.0
+    )
+    return role_stats
+
+
 def append_layer_stats_fields(
     sample_stats: dict,
     layer_idx: int,
@@ -229,6 +325,7 @@ def append_layer_stats_fields(
     *,
     save_importance: bool,
     save_indices: bool,
+    visual_layout: Optional[dict] = None,
 ) -> None:
     sample_stats[f"layer_{layer_idx}_ratio"] = layer_info["prune_ratio"]
     sample_stats[f"layer_{layer_idx}_before"] = layer_info["num_visual_before"]
@@ -247,64 +344,33 @@ def append_layer_stats_fields(
             layer_info.get("text_relevance_scores"),
         )
 
-    if not save_indices:
-        return
-
     keep_indices = layer_info.get("keep_indices")
     pruned_indices = layer_info.get("pruned_indices")
     keep_patch_indices = layer_info.get("keep_patch_indices", keep_indices)
     pruned_patch_indices = layer_info.get("pruned_patch_indices", pruned_indices)
 
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_keep_indices", keep_indices)
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_pruned_indices", pruned_indices)
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_keep_patch_indices", keep_patch_indices)
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_pruned_patch_indices", pruned_patch_indices)
-    _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_rater_indices", layer_info.get("rater_indices"))
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_current_patch_indices",
-        layer_info.get("current_patch_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_high_keep_indices",
-        layer_info.get("high_keep_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_low_keep_indices",
-        layer_info.get("low_keep_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_high_keep_patch_indices",
-        layer_info.get("high_keep_patch_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_low_keep_patch_indices",
-        layer_info.get("low_keep_patch_indices"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_stratum_selected_counts",
-        layer_info.get("stratum_selected_counts"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_stratum_candidate_counts",
-        layer_info.get("stratum_candidate_counts"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_stratum_deficits",
-        layer_info.get("stratum_deficits"),
-    )
-    _set_optional_layer_field(
-        sample_stats,
-        f"layer_{layer_idx}_stratum_quotas",
-        layer_info.get("stratum_quotas"),
-    )
+    if save_indices:
+        for key, value in (
+            ("keep_indices", keep_indices),
+            ("pruned_indices", pruned_indices),
+            ("keep_patch_indices", keep_patch_indices),
+            ("pruned_patch_indices", pruned_patch_indices),
+            ("rater_indices", layer_info.get("rater_indices")),
+            ("current_patch_indices", layer_info.get("current_patch_indices")),
+            ("high_keep_indices", layer_info.get("high_keep_indices")),
+            ("low_keep_indices", layer_info.get("low_keep_indices")),
+            ("high_keep_patch_indices", layer_info.get("high_keep_patch_indices")),
+            ("low_keep_patch_indices", layer_info.get("low_keep_patch_indices")),
+            ("stratum_selected_counts", layer_info.get("stratum_selected_counts")),
+            ("stratum_candidate_counts", layer_info.get("stratum_candidate_counts")),
+            ("stratum_deficits", layer_info.get("stratum_deficits")),
+            ("stratum_quotas", layer_info.get("stratum_quotas")),
+        ):
+            _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_{key}", value)
+
+    for key, value in compute_visual_token_role_stats(layer_info, visual_layout).items():
+        if value is not None:
+            sample_stats[f"layer_{layer_idx}_{key}"] = value
 
     for key in (
         "target_keep",
@@ -317,6 +383,14 @@ def append_layer_stats_fields(
         "intra_stratum_mode",
         "adaptive_alpha",
         "saliency_entropy_norm",
+        "saliency_entropy_norm_control",
+        "entropy_calibration_mode",
+        "entropy_calibration_applied",
+        "entropy_calibration_q_low",
+        "entropy_calibration_q_high",
+        "entropy_calibration_clipped_low",
+        "entropy_calibration_clipped_high",
+        "entropy_calibration_artifact_path",
         "global_prune_step",
         "global_current_weight",
         "global_ema_decay",
@@ -424,6 +498,9 @@ def append_layer_stats_fields(
     ):
         if key in layer_info and layer_info[key] is not None:
             sample_stats[f"layer_{layer_idx}_{key}"] = _serialize_optional_sequence(layer_info[key])
+
+    if not save_indices:
+        return
 
     for key in (
         "global_selection_score",
@@ -826,7 +903,13 @@ def run_prune_inference(
         model_config_metadata=model_config_metadata,
     )
     strategy_extra = effective_prune_cfg.get(strategy_name, {})
-    strategy_config = {**effective_prune_cfg, "seed": infer_cfg.get("seed", 42), **strategy_extra}
+    strategy_config = {
+        **effective_prune_cfg,
+        "seed": infer_cfg.get("seed", 42),
+        **strategy_extra,
+        "_model_name": model_name,
+        "_model_config_fingerprint": model_config_fingerprint(model_config_metadata),
+    }
     strategy = get_strategy(strategy_name, strategy_config)
 
     # --- output paths: per-run directory ---
@@ -1263,6 +1346,7 @@ def run_prune_inference(
                 linfo,
                 save_importance=save_importance,
                 save_indices=save_indices,
+                visual_layout=visual_layout,
             )
 
         # Write attention captures to HDF5 (same format as Phase 1)
