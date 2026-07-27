@@ -129,6 +129,9 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             raise ValueError("sparsevlm_scnd.entropy_calibration must be a mapping")
         entropy_calibration_mode = str(entropy_calibration_cfg.get("mode", "identity")).lower()
         entropy_calibration_path = entropy_calibration_cfg.get("artifact_path")
+        budget_keep_fraction_low = float(entropy_calibration_cfg.get("budget_keep_fraction_low", 0.125))
+        budget_keep_fraction_high = float(entropy_calibration_cfg.get("budget_keep_fraction_high", 0.5))
+        diversity_tail_gain = float(entropy_calibration_cfg.get("diversity_tail_gain", 1.0))
 
         if not 0.0 <= seed_ratio_min <= seed_ratio_max <= 1.0:
             raise ValueError(
@@ -170,7 +173,14 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 f"{sorted(VALID_CALIBRATION_MODES)}, got {entropy_calibration_mode!r}"
             )
         if entropy_calibration_mode != "identity" and not entropy_calibration_path:
-            raise ValueError("quantile_affine entropy calibration requires artifact_path")
+            raise ValueError(f"{entropy_calibration_mode} entropy calibration requires artifact_path")
+        if not 0.0 < budget_keep_fraction_low < budget_keep_fraction_high <= 1.0:
+            raise ValueError(
+                "entropy_calibration budget bounds must satisfy 0 < low < high <= 1, got "
+                f"{budget_keep_fraction_low}, {budget_keep_fraction_high}"
+            )
+        if diversity_tail_gain < 0.0:
+            raise ValueError(f"entropy_calibration.diversity_tail_gain must be >= 0, got {diversity_tail_gain}")
 
         return {
             "seed_ratio_min": seed_ratio_min,
@@ -186,6 +196,9 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "seed": seed,
             "entropy_calibration_mode": entropy_calibration_mode,
             "entropy_calibration_path": entropy_calibration_path,
+            "entropy_calibration_budget_keep_fraction_low": budget_keep_fraction_low,
+            "entropy_calibration_budget_keep_fraction_high": budget_keep_fraction_high,
+            "entropy_calibration_diversity_tail_gain": diversity_tail_gain,
         }
 
     def _entropy_control(
@@ -194,10 +207,11 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         layer_idx: int,
         layer_mode: str,
         params: Dict[str, object],
+        keep_fraction: Optional[float] = None,
     ) -> Dict[str, object]:
         calibration_mode = str(params["entropy_calibration_mode"])
         if layer_mode != "C" or calibration_mode == "identity":
-            return apply_entropy_calibration(raw_entropy_norm, "identity", None)
+            return apply_entropy_calibration(raw_entropy_norm, "identity", None, keep_fraction=keep_fraction)
 
         artifact = getattr(self, "_entropy_calibration_artifact", None)
         if artifact is None:
@@ -213,7 +227,15 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 "Entropy calibration artifact is bound to layer "
                 f"{artifact['capture_layer']}, but C selection was requested at layer {layer_idx}"
             )
-        return apply_entropy_calibration(raw_entropy_norm, calibration_mode, artifact)
+        return apply_entropy_calibration(
+            raw_entropy_norm,
+            calibration_mode,
+            artifact,
+            keep_fraction=keep_fraction,
+            budget_keep_fraction_low=float(params["entropy_calibration_budget_keep_fraction_low"]),
+            budget_keep_fraction_high=float(params["entropy_calibration_budget_keep_fraction_high"]),
+            diversity_tail_gain=float(params["entropy_calibration_diversity_tail_gain"]),
+        )
 
     @staticmethod
     def _score_list(scores: torch.Tensor) -> List[float]:
@@ -1436,8 +1458,6 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         global_prune_step = int(memory["global_prune_step"])
         random_seed = self._derive_random_seed(context, layer_idx, global_prune_step, int(params["seed"]))
         entropy_raw, entropy_norm = compute_entropy_stats(visual_scores)
-        entropy_control = self._entropy_control(entropy_norm, layer_idx, mode, params)
-        entropy_norm_control = float(entropy_control["control_value"])
         prune_ratio = self.get_prune_ratio(layer_idx, visual_scores)
         min_visual_tokens_after_prune = int(self.config.get("min_visual_tokens_after_prune", 16))
         target_keep = compute_target_keep_count(
@@ -1445,6 +1465,14 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             prune_ratio=prune_ratio,
             min_visual_tokens_after_prune=min_visual_tokens_after_prune,
         )
+        entropy_control = self._entropy_control(
+            entropy_norm,
+            layer_idx,
+            mode,
+            params,
+            keep_fraction=float(target_keep / v_token_num),
+        )
+        entropy_norm_control = float(entropy_control["control_value"])
         distance: Optional[torch.Tensor] = None
         distance_time_ms = 0.0
         selection_start = 0.0
@@ -1603,6 +1631,13 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "entropy_calibration_clipped_low": entropy_control["clipped_low"],
             "entropy_calibration_clipped_high": entropy_control["clipped_high"],
             "entropy_calibration_artifact_path": entropy_control["artifact_path"],
+            "entropy_calibration_quantile_value": entropy_control["quantile_value"],
+            "entropy_calibration_budget_keep_fraction": entropy_control["budget_keep_fraction"],
+            "entropy_calibration_budget_pressure": entropy_control["budget_pressure"],
+            "entropy_calibration_budget_keep_fraction_low": entropy_control["budget_keep_fraction_low"],
+            "entropy_calibration_budget_keep_fraction_high": entropy_control["budget_keep_fraction_high"],
+            "entropy_calibration_diversity_tail_gain": entropy_control["diversity_tail_gain"],
+            "entropy_calibration_diversity_tail_delta": entropy_control["diversity_tail_delta"],
             "seed_ratio_min": params["seed_ratio_min"],
             "seed_ratio_max": params["seed_ratio_max"],
             "seed_pool_multiplier": params["seed_pool_multiplier"],

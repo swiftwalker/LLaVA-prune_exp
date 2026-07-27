@@ -9,7 +9,11 @@ from typing import Any, Mapping
 
 
 ENTROPY_DEFINITION = "raw_positive_shannon_div_log_n_v1"
-VALID_CALIBRATION_MODES = {"identity", "quantile_affine"}
+VALID_CALIBRATION_MODES = {"identity", "quantile_affine", "budget_adaptive_quantile"}
+
+
+def _clamp01(value: float) -> float:
+    return min(max(float(value), 0.0), 1.0)
 
 
 def model_config_fingerprint(metadata: Mapping[str, Any]) -> str:
@@ -77,34 +81,82 @@ def load_calibration_artifact(
     return artifact
 
 
-def apply_entropy_calibration(raw_entropy_norm: float, mode: str, artifact: Mapping[str, Any] | None) -> dict[str, Any]:
+def apply_entropy_calibration(
+    raw_entropy_norm: float,
+    mode: str,
+    artifact: Mapping[str, Any] | None,
+    *,
+    keep_fraction: float | None = None,
+    budget_keep_fraction_low: float = 0.125,
+    budget_keep_fraction_high: float = 0.5,
+    diversity_tail_gain: float = 1.0,
+) -> dict[str, Any]:
     mode = str(mode).lower()
     if mode not in VALID_CALIBRATION_MODES:
         raise ValueError(f"entropy_calibration.mode only supports {sorted(VALID_CALIBRATION_MODES)}, got {mode!r}")
 
-    raw_value = min(max(float(raw_entropy_norm), 0.0), 1.0)
+    raw_value = _clamp01(raw_entropy_norm)
     if mode == "identity":
         return {
             "control_value": raw_value,
+            "quantile_value": None,
             "mode": mode,
             "q_low": None,
             "q_high": None,
             "clipped_low": False,
             "clipped_high": False,
             "artifact_path": None,
+            "budget_keep_fraction": keep_fraction,
+            "budget_pressure": 0.0,
+            "budget_keep_fraction_low": budget_keep_fraction_low,
+            "budget_keep_fraction_high": budget_keep_fraction_high,
+            "diversity_tail_gain": diversity_tail_gain,
+            "diversity_tail_delta": 0.0,
         }
     if artifact is None:
-        raise ValueError("quantile_affine entropy calibration requires an artifact")
+        raise ValueError(f"{mode} entropy calibration requires an artifact")
 
     q_low = float(artifact["quantiles"]["low_value"])
     q_high = float(artifact["quantiles"]["high_value"])
-    scaled = (raw_value - q_low) / (q_high - q_low)
+    quantile_value = _clamp01((raw_value - q_low) / (q_high - q_low))
+    budget_pressure = 0.0
+    diversity_tail_delta = 0.0
+    control_value = quantile_value
+    if mode == "budget_adaptive_quantile":
+        if keep_fraction is None:
+            raise ValueError("budget_adaptive_quantile requires keep_fraction")
+        keep_fraction = float(keep_fraction)
+        if not 0.0 < keep_fraction <= 1.0:
+            raise ValueError(f"keep_fraction must be in (0, 1], got {keep_fraction}")
+        if not 0.0 < budget_keep_fraction_low < budget_keep_fraction_high <= 1.0:
+            raise ValueError(
+                "budget keep-fraction bounds must satisfy 0 < low < high <= 1, got "
+                f"{budget_keep_fraction_low}, {budget_keep_fraction_high}"
+            )
+        if diversity_tail_gain < 0.0:
+            raise ValueError(f"diversity_tail_gain must be non-negative, got {diversity_tail_gain}")
+
+        budget_pressure = _clamp01(
+            (budget_keep_fraction_high - keep_fraction)
+            / (budget_keep_fraction_high - budget_keep_fraction_low)
+        )
+        diversity_tail_delta = max(quantile_value - raw_value, 0.0) * float(diversity_tail_gain)
+        diversity_control = _clamp01(raw_value + diversity_tail_delta)
+        control_value = (1.0 - budget_pressure) * quantile_value + budget_pressure * diversity_control
+
     return {
-        "control_value": min(max(scaled, 0.0), 1.0),
+        "control_value": _clamp01(control_value),
+        "quantile_value": quantile_value,
         "mode": mode,
         "q_low": q_low,
         "q_high": q_high,
         "clipped_low": raw_value <= q_low,
         "clipped_high": raw_value >= q_high,
         "artifact_path": artifact.get("_resolved_path"),
+        "budget_keep_fraction": keep_fraction,
+        "budget_pressure": budget_pressure,
+        "budget_keep_fraction_low": float(budget_keep_fraction_low),
+        "budget_keep_fraction_high": float(budget_keep_fraction_high),
+        "diversity_tail_gain": float(diversity_tail_gain),
+        "diversity_tail_delta": float(diversity_tail_delta),
     }

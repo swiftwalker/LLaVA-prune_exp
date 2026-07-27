@@ -53,6 +53,70 @@ class SCNDEntropyCalibrationTests(unittest.TestCase):
         self.assertEqual(apply_entropy_calibration(0.50, "quantile_affine", artifact)["control_value"], 0.0)
         self.assertEqual(apply_entropy_calibration(0.90, "quantile_affine", artifact)["control_value"], 1.0)
 
+    def test_budget_adaptive_quantile_changes_direction_with_budget(self):
+        artifact = {
+            "quantiles": {"low_value": 0.60, "high_value": 0.80},
+            "_resolved_path": "/tmp/calibration.json",
+        }
+        high = apply_entropy_calibration(
+            0.65,
+            "budget_adaptive_quantile",
+            artifact,
+            keep_fraction=0.50,
+        )
+        ultra = apply_entropy_calibration(
+            0.65,
+            "budget_adaptive_quantile",
+            artifact,
+            keep_fraction=0.125,
+        )
+        middle = apply_entropy_calibration(
+            0.65,
+            "budget_adaptive_quantile",
+            artifact,
+            keep_fraction=0.3125,
+        )
+        self.assertAlmostEqual(high["control_value"], 0.25)
+        self.assertAlmostEqual(ultra["control_value"], 0.65)
+        self.assertAlmostEqual(middle["control_value"], 0.45)
+        self.assertEqual(high["budget_pressure"], 0.0)
+        self.assertEqual(ultra["budget_pressure"], 1.0)
+
+    def test_budget_adaptive_quantile_expands_only_high_entropy_tail(self):
+        artifact = {"quantiles": {"low_value": 0.60, "high_value": 0.80}}
+        result = apply_entropy_calibration(
+            0.78,
+            "budget_adaptive_quantile",
+            artifact,
+            keep_fraction=0.10,
+            diversity_tail_gain=1.0,
+        )
+        self.assertAlmostEqual(result["quantile_value"], 0.9)
+        self.assertAlmostEqual(result["diversity_tail_delta"], 0.12)
+        self.assertAlmostEqual(result["control_value"], 0.9)
+
+        unchanged = apply_entropy_calibration(
+            0.65,
+            "budget_adaptive_quantile",
+            artifact,
+            keep_fraction=0.10,
+        )
+        self.assertAlmostEqual(unchanged["control_value"], 0.65)
+
+    def test_budget_adaptive_quantile_validates_budget_inputs(self):
+        artifact = {"quantiles": {"low_value": 0.60, "high_value": 0.80}}
+        with self.assertRaisesRegex(ValueError, "keep_fraction"):
+            apply_entropy_calibration(0.70, "budget_adaptive_quantile", artifact)
+        with self.assertRaisesRegex(ValueError, "bounds"):
+            apply_entropy_calibration(
+                0.70,
+                "budget_adaptive_quantile",
+                artifact,
+                keep_fraction=0.1,
+                budget_keep_fraction_low=0.5,
+                budget_keep_fraction_high=0.5,
+            )
+
     def test_artifact_is_bound_to_model_and_layer(self):
         metadata = {
             "model_type": "llava",

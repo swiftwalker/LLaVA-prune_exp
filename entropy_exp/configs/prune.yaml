@@ -175,8 +175,11 @@ pruning:
     c_selection_rule: "native"
     seed: 42
     entropy_calibration:
-      mode: "identity"               # identity | quantile_affine
+      mode: "identity"               # identity | quantile_affine | budget_adaptive_quantile
       artifact_path: null
+      budget_keep_fraction_low: 0.125
+      budget_keep_fraction_high: 0.5
+      diversity_tail_gain: 1.0
     use_score_memory: false
     global_current_weight: 0.5
     global_ema_decay: 0.6

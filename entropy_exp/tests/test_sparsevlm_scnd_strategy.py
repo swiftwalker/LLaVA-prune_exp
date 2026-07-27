@@ -126,6 +126,16 @@ class SparseVLMSCNDTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "artifact_path"):
             missing_artifact._get_scnd_params()
 
+        invalid_budget_bounds = self._strategy(
+            entropy_calibration={
+                "mode": "identity",
+                "budget_keep_fraction_low": 0.5,
+                "budget_keep_fraction_high": 0.5,
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "budget bounds"):
+            invalid_budget_bounds._get_scnd_params()
+
         self._prepare(strategy, 4)
         attn = _full_attention(
             seq_len=7,
@@ -174,6 +184,35 @@ class SparseVLMSCNDTests(unittest.TestCase):
             self.assertAlmostEqual(calibrated_result["control_value"], 0.5)
             with self.assertRaisesRegex(ValueError, "bound to layer"):
                 calibrated._entropy_control(0.70, 1, "C", calibrated._get_scnd_params())
+
+            budget_adaptive = self._strategy(
+                entropy_calibration={
+                    "mode": "budget_adaptive_quantile",
+                    "artifact_path": str(artifact_path),
+                    "budget_keep_fraction_low": 0.125,
+                    "budget_keep_fraction_high": 0.5,
+                    "diversity_tail_gain": 1.0,
+                },
+                _model_name="toy-model",
+                _model_config_fingerprint="toy-fingerprint",
+            )
+            high_result = budget_adaptive._entropy_control(
+                0.65,
+                0,
+                "C",
+                budget_adaptive._get_scnd_params(),
+                keep_fraction=0.5,
+            )
+            ultra_result = budget_adaptive._entropy_control(
+                0.65,
+                0,
+                "C",
+                budget_adaptive._get_scnd_params(),
+                keep_fraction=0.125,
+            )
+            self.assertEqual(high_result["budget_pressure"], 0.0)
+            self.assertEqual(ultra_result["budget_pressure"], 1.0)
+            self.assertLess(high_result["control_value"], ultra_result["control_value"])
 
     def test_distance_metric_matrices_are_larger_is_more_diverse(self):
         embeds = torch.tensor([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
