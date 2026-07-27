@@ -36,7 +36,12 @@ VALID_LAYER_MODES = {"C", "B", "S"}
 VALID_SELECTION_BACKENDS = {"auto", "gpu", "python"}
 VALID_C_SELECTION_RULES = {"native", "random_feasible"}
 VALID_DISTANCE_METRICS = {"cosine", "euclidean", "dot"}
-VALID_VISUAL_ROLE_CONSTRAINT_MODES = {"none", "local_floor", "budget_adaptive_local_floor"}
+VALID_VISUAL_ROLE_CONSTRAINT_MODES = {
+    "none",
+    "local_floor",
+    "budget_adaptive_local_floor",
+    "budget_adaptive_saliency_gated_local_floor",
+}
 
 
 def _clamp01(value: float) -> float:
@@ -141,6 +146,10 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         local_floor_ratio = float(visual_role_cfg.get("local_floor_ratio", 1.0))
         role_budget_keep_fraction_low = float(visual_role_cfg.get("budget_keep_fraction_low", 0.125))
         role_budget_keep_fraction_high = float(visual_role_cfg.get("budget_keep_fraction_high", 0.5))
+        role_max_visual_tokens_before = int(visual_role_cfg.get("max_visual_tokens_before", 2200))
+        role_min_local_saliency_mass_ratio = float(
+            visual_role_cfg.get("min_local_saliency_mass_ratio", 0.70)
+        )
 
         if not 0.0 <= seed_ratio_min <= seed_ratio_max <= 1.0:
             raise ValueError(
@@ -205,6 +214,16 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 "visual_role_constraint budget bounds must satisfy 0 < low < high <= 1, got "
                 f"{role_budget_keep_fraction_low}, {role_budget_keep_fraction_high}"
             )
+        if role_max_visual_tokens_before <= 0:
+            raise ValueError(
+                "sparsevlm_scnd.visual_role_constraint.max_visual_tokens_before must be positive, "
+                f"got {role_max_visual_tokens_before}"
+            )
+        if not 0.0 <= role_min_local_saliency_mass_ratio <= 1.0:
+            raise ValueError(
+                "sparsevlm_scnd.visual_role_constraint.min_local_saliency_mass_ratio must be in [0, 1], "
+                f"got {role_min_local_saliency_mass_ratio}"
+            )
         if visual_role_mode != "none" and c_selection_rule != "native":
             raise ValueError("visual_role_constraint is only supported with c_selection_rule=native")
 
@@ -229,7 +248,27 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "visual_role_local_floor_ratio": local_floor_ratio,
             "visual_role_budget_keep_fraction_low": role_budget_keep_fraction_low,
             "visual_role_budget_keep_fraction_high": role_budget_keep_fraction_high,
+            "visual_role_max_visual_tokens_before": role_max_visual_tokens_before,
+            "visual_role_min_local_saliency_mass_ratio": role_min_local_saliency_mass_ratio,
         }
+
+    @staticmethod
+    def _visual_role_local_saliency_mass_ratio(
+        visual_scores: torch.Tensor,
+        visual_role_ids: torch.Tensor,
+    ) -> float:
+        scores = visual_scores.detach().to(device="cpu", dtype=torch.float64).flatten().clamp_min(0.0)
+        roles = visual_role_ids.detach().to(device="cpu", dtype=torch.long).flatten()
+        if int(scores.numel()) != int(roles.numel()):
+            raise ValueError(
+                "visual_scores and visual_role_ids must have the same length, "
+                f"got {scores.numel()} vs {roles.numel()}"
+            )
+        total_mass = float(scores.sum().item())
+        if total_mass <= 0.0:
+            return 0.0
+        local_mass = float(scores[roles == ROLE_LOCAL_PATCH].sum().item())
+        return float(local_mass / total_mass)
 
     @staticmethod
     def _visual_role_constraint_control(
@@ -238,17 +277,39 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         keep_fraction: float,
         keep_fraction_low: float,
         keep_fraction_high: float,
-    ) -> Dict[str, float | str | bool]:
+        num_visual_tokens_before: Optional[int] = None,
+        local_saliency_mass_ratio: Optional[float] = None,
+        max_visual_tokens_before: int = 2200,
+        min_local_saliency_mass_ratio: float = 0.70,
+    ) -> Dict[str, float | int | str | bool | None]:
         keep_fraction = _clamp01(keep_fraction)
+        layout_gate_passed = True
+        saliency_gate_passed = True
+        gate_passed = True
         if mode == "none":
             pressure = 0.0
         elif mode == "local_floor":
             pressure = 1.0
-        elif mode == "budget_adaptive_local_floor":
+        elif mode in {
+            "budget_adaptive_local_floor",
+            "budget_adaptive_saliency_gated_local_floor",
+        }:
             pressure = _clamp01(
                 (float(keep_fraction_high) - keep_fraction)
                 / (float(keep_fraction_high) - float(keep_fraction_low))
             )
+            if mode == "budget_adaptive_saliency_gated_local_floor":
+                layout_gate_passed = (
+                    num_visual_tokens_before is not None
+                    and int(num_visual_tokens_before) <= int(max_visual_tokens_before)
+                )
+                saliency_gate_passed = (
+                    local_saliency_mass_ratio is not None
+                    and float(local_saliency_mass_ratio) >= float(min_local_saliency_mass_ratio)
+                )
+                gate_passed = bool(layout_gate_passed and saliency_gate_passed)
+                if not gate_passed:
+                    pressure = 0.0
         else:
             raise ValueError(f"Unsupported visual role constraint mode: {mode}")
         return {
@@ -260,6 +321,17 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "local_floor_ratio_effective": float(local_floor_ratio * pressure),
             "budget_keep_fraction_low": float(keep_fraction_low),
             "budget_keep_fraction_high": float(keep_fraction_high),
+            "num_visual_tokens_before": (
+                int(num_visual_tokens_before) if num_visual_tokens_before is not None else None
+            ),
+            "local_saliency_mass_ratio": (
+                float(local_saliency_mass_ratio) if local_saliency_mass_ratio is not None else None
+            ),
+            "max_visual_tokens_before": int(max_visual_tokens_before),
+            "min_local_saliency_mass_ratio": float(min_local_saliency_mass_ratio),
+            "layout_gate_passed": bool(layout_gate_passed),
+            "saliency_gate_passed": bool(saliency_gate_passed),
+            "gate_passed": bool(gate_passed),
         }
 
     def _entropy_control(
@@ -1799,14 +1871,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             keep_fraction=float(target_keep / v_token_num),
         )
         entropy_norm_control = float(entropy_control["control_value"])
-        visual_role_control = self._visual_role_constraint_control(
-            mode=str(params["visual_role_constraint_mode"]),
-            local_floor_ratio=float(params["visual_role_local_floor_ratio"]),
-            keep_fraction=float(target_keep / v_token_num),
-            keep_fraction_low=float(params["visual_role_budget_keep_fraction_low"]),
-            keep_fraction_high=float(params["visual_role_budget_keep_fraction_high"]),
-        )
         current_visual_role_ids: Optional[torch.Tensor] = None
+        visual_role_local_saliency_mass_ratio: Optional[float] = None
         if mode == "C" and str(params["visual_role_constraint_mode"]) != "none":
             visual_layout = context.get("visual_layout")
             if visual_layout is None:
@@ -1818,6 +1884,21 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 visual_layout,
                 device=mixed_score.device,
             )
+            visual_role_local_saliency_mass_ratio = self._visual_role_local_saliency_mass_ratio(
+                visual_scores,
+                current_visual_role_ids,
+            )
+        visual_role_control = self._visual_role_constraint_control(
+            mode=str(params["visual_role_constraint_mode"]),
+            local_floor_ratio=float(params["visual_role_local_floor_ratio"]),
+            keep_fraction=float(target_keep / v_token_num),
+            keep_fraction_low=float(params["visual_role_budget_keep_fraction_low"]),
+            keep_fraction_high=float(params["visual_role_budget_keep_fraction_high"]),
+            num_visual_tokens_before=int(v_token_num) if mode == "C" else None,
+            local_saliency_mass_ratio=visual_role_local_saliency_mass_ratio,
+            max_visual_tokens_before=int(params["visual_role_max_visual_tokens_before"]),
+            min_local_saliency_mass_ratio=float(params["visual_role_min_local_saliency_mass_ratio"]),
+        )
         distance: Optional[torch.Tensor] = None
         distance_time_ms = 0.0
         selection_start = 0.0
@@ -1900,15 +1981,16 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 )
             _sync_if_cuda(distance)
             selection_time_ms = (time.perf_counter() - selection_start) * 1000.0
-            selection_rule = (
-                "saliency_constrained_random_feasible"
-                if c_selection_rule == "random_feasible"
-                else (
-                    "saliency_constrained_native_divprune_anyres_local_floor"
-                    if bool(visual_role_control["applied"])
-                    else "saliency_constrained_native_divprune"
+            if c_selection_rule == "random_feasible":
+                selection_rule = "saliency_constrained_random_feasible"
+            elif bool(visual_role_control["applied"]):
+                selection_rule = (
+                    "saliency_constrained_native_divprune_anyres_saliency_gated_local_floor"
+                    if visual_role_control["mode"] == "budget_adaptive_saliency_gated_local_floor"
+                    else "saliency_constrained_native_divprune_anyres_local_floor"
                 )
-            )
+            else:
+                selection_rule = "saliency_constrained_native_divprune"
         elif mode == "B":
             _sync_if_cuda(current_visual_embeds)
             selection_start = time.perf_counter()
@@ -1999,6 +2081,15 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "visual_role_local_floor_ratio_effective": visual_role_control["local_floor_ratio_effective"],
             "visual_role_budget_keep_fraction_low": visual_role_control["budget_keep_fraction_low"],
             "visual_role_budget_keep_fraction_high": visual_role_control["budget_keep_fraction_high"],
+            "visual_role_num_visual_tokens_before": visual_role_control["num_visual_tokens_before"],
+            "visual_role_local_saliency_mass_ratio": visual_role_control["local_saliency_mass_ratio"],
+            "visual_role_max_visual_tokens_before": visual_role_control["max_visual_tokens_before"],
+            "visual_role_min_local_saliency_mass_ratio": visual_role_control[
+                "min_local_saliency_mass_ratio"
+            ],
+            "visual_role_layout_gate_passed": visual_role_control["layout_gate_passed"],
+            "visual_role_saliency_gate_passed": visual_role_control["saliency_gate_passed"],
+            "visual_role_gate_passed": visual_role_control["gate_passed"],
             "seed_ratio_min": params["seed_ratio_min"],
             "seed_ratio_max": params["seed_ratio_max"],
             "seed_pool_multiplier": params["seed_pool_multiplier"],

@@ -143,6 +143,20 @@ class SparseVLMSCNDTests(unittest.TestCase):
             role_constraint._get_scnd_params()["visual_role_constraint_mode"],
             "budget_adaptive_local_floor",
         )
+        gated_role_constraint = self._strategy(
+            visual_role_constraint={
+                "mode": "budget_adaptive_saliency_gated_local_floor",
+                "max_visual_tokens_before": 2200,
+                "min_local_saliency_mass_ratio": 0.70,
+            }
+        )
+        gated_params = gated_role_constraint._get_scnd_params()
+        self.assertEqual(
+            gated_params["visual_role_constraint_mode"],
+            "budget_adaptive_saliency_gated_local_floor",
+        )
+        self.assertEqual(gated_params["visual_role_max_visual_tokens_before"], 2200)
+        self.assertEqual(gated_params["visual_role_min_local_saliency_mass_ratio"], 0.70)
         invalid_role_mode = self._strategy(visual_role_constraint={"mode": "bogus"})
         with self.assertRaisesRegex(ValueError, "visual_role_constraint.mode"):
             invalid_role_mode._get_scnd_params()
@@ -151,6 +165,16 @@ class SparseVLMSCNDTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "local_floor_ratio"):
             invalid_role_ratio._get_scnd_params()
+        invalid_role_max_tokens = self._strategy(
+            visual_role_constraint={"mode": "none", "max_visual_tokens_before": 0}
+        )
+        with self.assertRaisesRegex(ValueError, "max_visual_tokens_before"):
+            invalid_role_max_tokens._get_scnd_params()
+        invalid_role_saliency_mass = self._strategy(
+            visual_role_constraint={"mode": "none", "min_local_saliency_mass_ratio": 1.1}
+        )
+        with self.assertRaisesRegex(ValueError, "min_local_saliency_mass_ratio"):
+            invalid_role_saliency_mass._get_scnd_params()
         random_role_constraint = self._strategy(
             c_selection_rule="random_feasible",
             visual_role_constraint={"mode": "local_floor"},
@@ -186,6 +210,81 @@ class SparseVLMSCNDTests(unittest.TestCase):
         self.assertEqual(ultra["budget_pressure"], 1.0)
         self.assertEqual(ultra["local_floor_ratio_effective"], 1.0)
         self.assertAlmostEqual(middle["local_floor_ratio_effective"], 0.45)
+
+    def test_saliency_gated_visual_role_constraint_requires_both_gates(self):
+        kwargs = {
+            "mode": "budget_adaptive_saliency_gated_local_floor",
+            "local_floor_ratio": 1.0,
+            "keep_fraction": 0.125,
+            "keep_fraction_low": 0.125,
+            "keep_fraction_high": 0.5,
+            "max_visual_tokens_before": 2200,
+            "min_local_saliency_mass_ratio": 0.70,
+        }
+        passed = self._strategy()._visual_role_constraint_control(
+            num_visual_tokens_before=2184,
+            local_saliency_mass_ratio=0.75,
+            **kwargs,
+        )
+        layout_failed = self._strategy()._visual_role_constraint_control(
+            num_visual_tokens_before=2242,
+            local_saliency_mass_ratio=0.75,
+            **kwargs,
+        )
+        saliency_failed = self._strategy()._visual_role_constraint_control(
+            num_visual_tokens_before=2184,
+            local_saliency_mass_ratio=0.69,
+            **kwargs,
+        )
+
+        self.assertTrue(passed["gate_passed"])
+        self.assertEqual(passed["local_floor_ratio_effective"], 1.0)
+        self.assertFalse(layout_failed["layout_gate_passed"])
+        self.assertEqual(layout_failed["local_floor_ratio_effective"], 0.0)
+        self.assertFalse(saliency_failed["saliency_gate_passed"])
+        self.assertEqual(saliency_failed["local_floor_ratio_effective"], 0.0)
+
+    def test_saliency_gated_visual_role_constraint_uses_raw_positive_mass(self):
+        strategy = self._strategy(
+            prune_ratio=0.5,
+            seed_ratio_min=0.5,
+            seed_ratio_max=0.5,
+            saliency_floor_min=0.0,
+            saliency_floor_max=0.0,
+            visual_role_constraint={
+                "mode": "budget_adaptive_saliency_gated_local_floor",
+                "local_floor_ratio": 1.0,
+                "budget_keep_fraction_low": 0.125,
+                "budget_keep_fraction_high": 0.75,
+                "max_visual_tokens_before": 4,
+                "min_local_saliency_mass_ratio": 0.80,
+            },
+        )
+        self._prepare(strategy, 4)
+        strategy.sample_context["visual_layout"] = {
+            "base_token_count": 2,
+            "local_patch_token_count": 2,
+            "newline_token_count": 0,
+            "local_grid_width": 2,
+            "total_token_count": 4,
+        }
+        attn = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.2, 0.1, 0.8, 0.7], [0.2, 0.1, 0.8, 0.7]],
+        )
+        embeds = torch.eye(4, dtype=torch.float32)
+
+        keep, info = strategy.compute_keep_mask(attn, 1, 4, 5, 0, current_visual_embeds=embeds)
+
+        self.assertEqual(keep.numel(), 2)
+        self.assertTrue(info["visual_role_gate_passed"])
+        self.assertAlmostEqual(info["visual_role_local_saliency_mass_ratio"], 1.5 / 1.8)
+        self.assertEqual(
+            info["selection_rule"],
+            "saliency_constrained_native_divprune_anyres_saliency_gated_local_floor",
+        )
 
     def test_anyres_local_floor_preserves_saliency_topk_local_capacity(self):
         strategy = self._strategy(
