@@ -214,6 +214,26 @@ class SparseVLMSCNDTests(unittest.TestCase):
             self.assertEqual(ultra_result["budget_pressure"], 1.0)
             self.assertLess(high_result["control_value"], ultra_result["control_value"])
 
+            tail_adaptive = self._strategy(
+                entropy_calibration={
+                    "mode": "budget_adaptive_tail_quantile",
+                    "artifact_path": str(artifact_path),
+                    "budget_keep_fraction_low": 0.125,
+                    "budget_keep_fraction_high": 0.5,
+                    "diversity_tail_gain": 1.0,
+                },
+                _model_name="toy-model",
+                _model_config_fingerprint="toy-fingerprint",
+            )
+            tail_result = tail_adaptive._entropy_control(
+                0.70,
+                0,
+                "C",
+                tail_adaptive._get_scnd_params(),
+                keep_fraction=0.125,
+            )
+            self.assertAlmostEqual(tail_result["control_value"], 0.75)
+
     def test_distance_metric_matrices_are_larger_is_more_diverse(self):
         embeds = torch.tensor([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
 

@@ -175,7 +175,7 @@ pruning:
     c_selection_rule: "native"
     seed: 42
     entropy_calibration:
-      mode: "identity"               # identity | quantile_affine | budget_adaptive_quantile
+      mode: "identity"               # identity | quantile_affine | budget_adaptive_quantile | budget_adaptive_tail_quantile
       artifact_path: null
       budget_keep_fraction_low: 0.125
       budget_keep_fraction_high: 0.5

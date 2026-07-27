@@ -9,7 +9,12 @@ from typing import Any, Mapping
 
 
 ENTROPY_DEFINITION = "raw_positive_shannon_div_log_n_v1"
-VALID_CALIBRATION_MODES = {"identity", "quantile_affine", "budget_adaptive_quantile"}
+VALID_CALIBRATION_MODES = {
+    "identity",
+    "quantile_affine",
+    "budget_adaptive_quantile",
+    "budget_adaptive_tail_quantile",
+}
 
 
 def _clamp01(value: float) -> float:
@@ -122,9 +127,9 @@ def apply_entropy_calibration(
     budget_pressure = 0.0
     diversity_tail_delta = 0.0
     control_value = quantile_value
-    if mode == "budget_adaptive_quantile":
+    if mode in {"budget_adaptive_quantile", "budget_adaptive_tail_quantile"}:
         if keep_fraction is None:
-            raise ValueError("budget_adaptive_quantile requires keep_fraction")
+            raise ValueError(f"{mode} requires keep_fraction")
         keep_fraction = float(keep_fraction)
         if not 0.0 < keep_fraction <= 1.0:
             raise ValueError(f"keep_fraction must be in (0, 1], got {keep_fraction}")
@@ -140,8 +145,16 @@ def apply_entropy_calibration(
             (budget_keep_fraction_high - keep_fraction)
             / (budget_keep_fraction_high - budget_keep_fraction_low)
         )
-        diversity_tail_delta = max(quantile_value - raw_value, 0.0) * float(diversity_tail_gain)
-        diversity_control = _clamp01(raw_value + diversity_tail_delta)
+        if mode == "budget_adaptive_quantile":
+            diversity_tail_delta = max(quantile_value - raw_value, 0.0) * float(diversity_tail_gain)
+            diversity_control = _clamp01(raw_value + diversity_tail_delta)
+        else:
+            # Preserve the confident q=0 endpoint and expand only the uncertain
+            # interior/tail of the architecture-calibrated quantile range.
+            diversity_tail_delta = (
+                quantile_value * (1.0 - quantile_value) * float(diversity_tail_gain)
+            )
+            diversity_control = _clamp01(quantile_value + diversity_tail_delta)
         control_value = (1.0 - budget_pressure) * quantile_value + budget_pressure * diversity_control
 
     return {

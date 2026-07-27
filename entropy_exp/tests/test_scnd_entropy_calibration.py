@@ -117,6 +117,38 @@ class SCNDEntropyCalibrationTests(unittest.TestCase):
                 budget_keep_fraction_high=0.5,
             )
 
+    def test_budget_adaptive_tail_quantile_preserves_confident_endpoint(self):
+        artifact = {"quantiles": {"low_value": 0.60, "high_value": 0.80}}
+        confident = apply_entropy_calibration(
+            0.60,
+            "budget_adaptive_tail_quantile",
+            artifact,
+            keep_fraction=0.125,
+        )
+        uncertain = apply_entropy_calibration(
+            0.70,
+            "budget_adaptive_tail_quantile",
+            artifact,
+            keep_fraction=0.125,
+        )
+        saturated = apply_entropy_calibration(
+            0.80,
+            "budget_adaptive_tail_quantile",
+            artifact,
+            keep_fraction=0.125,
+        )
+        high_budget = apply_entropy_calibration(
+            0.70,
+            "budget_adaptive_tail_quantile",
+            artifact,
+            keep_fraction=0.50,
+        )
+        self.assertEqual(confident["control_value"], 0.0)
+        self.assertAlmostEqual(uncertain["quantile_value"], 0.5)
+        self.assertAlmostEqual(uncertain["control_value"], 0.75)
+        self.assertEqual(saturated["control_value"], 1.0)
+        self.assertAlmostEqual(high_budget["control_value"], 0.5)
+
     def test_artifact_is_bound_to_model_and_layer(self):
         metadata = {
             "model_type": "llava",
