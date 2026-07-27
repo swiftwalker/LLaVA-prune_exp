@@ -346,6 +346,7 @@ class VisualTokenPruner:
         save_tv_attn: bool = False,
         capture_layers: Optional[set] = None,
         capture_visual_hidden_layers: Optional[set[int]] = None,
+        visual_layout: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, Dict[str, Any]]:
         """
         Generate with visual token pruning.
@@ -383,6 +384,7 @@ class VisualTokenPruner:
                 save_tv_attn=save_tv_attn,
                 capture_layers=capture_layers,
                 capture_visual_hidden_layers=capture_visual_hidden_layers,
+                visual_layout=visual_layout,
             )
         finally:
             self.strategy.clear_sample()
@@ -449,6 +451,7 @@ class VisualTokenPruner:
         save_tv_attn: bool = False,
         capture_layers: Optional[set] = None,
         capture_visual_hidden_layers: Optional[set[int]] = None,
+        visual_layout: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, DynamicCache, Dict[str, Any]]:
         if v_token_start is None or v_token_num is None or text_token_start is None:
             raise TypeError("v_token_start, v_token_num, and text_token_start are required")
@@ -478,6 +481,8 @@ class VisualTokenPruner:
             text_token_ids=text_token_ids,
             text_special_token_mask=text_special_token_mask,
         )
+        if visual_layout is not None and self.strategy.sample_context is not None:
+            self.strategy.sample_context["visual_layout"] = dict(visual_layout)
         if sample_info:
             prune_info["sample"] = sample_info
 

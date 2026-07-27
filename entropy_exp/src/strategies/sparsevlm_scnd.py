@@ -21,6 +21,7 @@ from .scnd_entropy_calibration import (
     apply_entropy_calibration,
     load_calibration_artifact,
 )
+from .scnd_visual_roles import ROLE_LOCAL_PATCH, visual_token_role_ids
 from .sparsevlm_adaptive_stratified import compute_target_keep_count
 from .sparsevlm_diverse_mmr import (
     SparseVLMDiverseMMRStrategy,
@@ -35,6 +36,7 @@ VALID_LAYER_MODES = {"C", "B", "S"}
 VALID_SELECTION_BACKENDS = {"auto", "gpu", "python"}
 VALID_C_SELECTION_RULES = {"native", "random_feasible"}
 VALID_DISTANCE_METRICS = {"cosine", "euclidean", "dot"}
+VALID_VISUAL_ROLE_CONSTRAINT_MODES = {"none", "local_floor", "budget_adaptive_local_floor"}
 
 
 def _clamp01(value: float) -> float:
@@ -132,6 +134,13 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         budget_keep_fraction_low = float(entropy_calibration_cfg.get("budget_keep_fraction_low", 0.125))
         budget_keep_fraction_high = float(entropy_calibration_cfg.get("budget_keep_fraction_high", 0.5))
         diversity_tail_gain = float(entropy_calibration_cfg.get("diversity_tail_gain", 1.0))
+        visual_role_cfg = self.config.get("visual_role_constraint", {}) or {}
+        if not isinstance(visual_role_cfg, dict):
+            raise ValueError("sparsevlm_scnd.visual_role_constraint must be a mapping")
+        visual_role_mode = str(visual_role_cfg.get("mode", "none")).lower()
+        local_floor_ratio = float(visual_role_cfg.get("local_floor_ratio", 1.0))
+        role_budget_keep_fraction_low = float(visual_role_cfg.get("budget_keep_fraction_low", 0.125))
+        role_budget_keep_fraction_high = float(visual_role_cfg.get("budget_keep_fraction_high", 0.5))
 
         if not 0.0 <= seed_ratio_min <= seed_ratio_max <= 1.0:
             raise ValueError(
@@ -181,6 +190,23 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             )
         if diversity_tail_gain < 0.0:
             raise ValueError(f"entropy_calibration.diversity_tail_gain must be >= 0, got {diversity_tail_gain}")
+        if visual_role_mode not in VALID_VISUAL_ROLE_CONSTRAINT_MODES:
+            raise ValueError(
+                "sparsevlm_scnd.visual_role_constraint.mode only supports "
+                f"{sorted(VALID_VISUAL_ROLE_CONSTRAINT_MODES)}, got {visual_role_mode!r}"
+            )
+        if not 0.0 <= local_floor_ratio <= 1.0:
+            raise ValueError(
+                "sparsevlm_scnd.visual_role_constraint.local_floor_ratio must be in [0, 1], "
+                f"got {local_floor_ratio}"
+            )
+        if not 0.0 < role_budget_keep_fraction_low < role_budget_keep_fraction_high <= 1.0:
+            raise ValueError(
+                "visual_role_constraint budget bounds must satisfy 0 < low < high <= 1, got "
+                f"{role_budget_keep_fraction_low}, {role_budget_keep_fraction_high}"
+            )
+        if visual_role_mode != "none" and c_selection_rule != "native":
+            raise ValueError("visual_role_constraint is only supported with c_selection_rule=native")
 
         return {
             "seed_ratio_min": seed_ratio_min,
@@ -199,6 +225,41 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "entropy_calibration_budget_keep_fraction_low": budget_keep_fraction_low,
             "entropy_calibration_budget_keep_fraction_high": budget_keep_fraction_high,
             "entropy_calibration_diversity_tail_gain": diversity_tail_gain,
+            "visual_role_constraint_mode": visual_role_mode,
+            "visual_role_local_floor_ratio": local_floor_ratio,
+            "visual_role_budget_keep_fraction_low": role_budget_keep_fraction_low,
+            "visual_role_budget_keep_fraction_high": role_budget_keep_fraction_high,
+        }
+
+    @staticmethod
+    def _visual_role_constraint_control(
+        mode: str,
+        local_floor_ratio: float,
+        keep_fraction: float,
+        keep_fraction_low: float,
+        keep_fraction_high: float,
+    ) -> Dict[str, float | str | bool]:
+        keep_fraction = _clamp01(keep_fraction)
+        if mode == "none":
+            pressure = 0.0
+        elif mode == "local_floor":
+            pressure = 1.0
+        elif mode == "budget_adaptive_local_floor":
+            pressure = _clamp01(
+                (float(keep_fraction_high) - keep_fraction)
+                / (float(keep_fraction_high) - float(keep_fraction_low))
+            )
+        else:
+            raise ValueError(f"Unsupported visual role constraint mode: {mode}")
+        return {
+            "mode": str(mode),
+            "applied": bool(mode != "none" and pressure > 0.0),
+            "budget_keep_fraction": float(keep_fraction),
+            "budget_pressure": float(pressure),
+            "local_floor_ratio": float(local_floor_ratio),
+            "local_floor_ratio_effective": float(local_floor_ratio * pressure),
+            "budget_keep_fraction_low": float(keep_fraction_low),
+            "budget_keep_fraction_high": float(keep_fraction_high),
         }
 
     def _entropy_control(
@@ -397,6 +458,100 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         return selected, gains
 
     @staticmethod
+    def _local_floor_count(
+        saliency_desc: torch.Tensor,
+        keep_count: int,
+        visual_role_ids: Optional[torch.Tensor],
+        local_floor_ratio: float,
+    ) -> Tuple[int, int]:
+        if visual_role_ids is None or local_floor_ratio <= 0.0 or keep_count <= 0:
+            return 0, 0
+        role_ids = visual_role_ids.to(device=saliency_desc.device, dtype=torch.long)
+        topk = saliency_desc[: int(keep_count)]
+        topk_local_count = int((role_ids.index_select(0, topk) == ROLE_LOCAL_PATCH).sum().item())
+        floor_count = min(
+            topk_local_count,
+            int(math.ceil(float(topk_local_count) * float(local_floor_ratio) - 1e-12)),
+        )
+        return topk_local_count, floor_count
+
+    @staticmethod
+    def _rebalance_seed_local_capacity_gpu(
+        seed_indices: torch.Tensor,
+        seed_gains: torch.Tensor,
+        saliency_desc: torch.Tensor,
+        visual_role_ids: Optional[torch.Tensor],
+        keep_count: int,
+        local_floor_count: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if visual_role_ids is None or local_floor_count <= 0 or int(seed_indices.numel()) == 0:
+            return seed_indices, seed_gains
+
+        role_ids = visual_role_ids.to(device=seed_indices.device, dtype=torch.long)
+        local_mask = role_ids == ROLE_LOCAL_PATCH
+        seed_local_count = int(local_mask.index_select(0, seed_indices).sum().item())
+        required_seed_local = max(0, int(local_floor_count) - (int(keep_count) - int(seed_indices.numel())))
+        deficit = required_seed_local - seed_local_count
+        if deficit <= 0:
+            return seed_indices, seed_gains
+
+        selected_mask = torch.zeros(int(role_ids.numel()), device=seed_indices.device, dtype=torch.bool)
+        selected_mask[seed_indices] = True
+        incoming = saliency_desc[
+            local_mask.index_select(0, saliency_desc) & ~selected_mask.index_select(0, saliency_desc)
+        ][:deficit]
+        outgoing_positions = torch.nonzero(
+            ~local_mask.index_select(0, seed_indices), as_tuple=False
+        ).flatten().flip(0)[:deficit]
+        if int(incoming.numel()) != deficit or int(outgoing_positions.numel()) != deficit:
+            raise AssertionError("Could not preserve enough local-patch capacity during SCND seed selection")
+
+        adjusted_indices = seed_indices.clone()
+        adjusted_gains = seed_gains.clone()
+        adjusted_indices[outgoing_positions] = incoming
+        adjusted_gains[outgoing_positions] = 0.0
+        return adjusted_indices, adjusted_gains
+
+    @staticmethod
+    def _rebalance_seed_local_capacity(
+        seed_indices: List[int],
+        seed_gains: List[float],
+        saliency_desc: List[int],
+        visual_role_ids: Optional[List[int]],
+        keep_count: int,
+        local_floor_count: int,
+    ) -> Tuple[List[int], List[float]]:
+        if visual_role_ids is None or local_floor_count <= 0 or not seed_indices:
+            return seed_indices, seed_gains
+
+        required_seed_local = max(0, int(local_floor_count) - (int(keep_count) - len(seed_indices)))
+        seed_local_count = sum(visual_role_ids[int(index)] == ROLE_LOCAL_PATCH for index in seed_indices)
+        deficit = required_seed_local - seed_local_count
+        if deficit <= 0:
+            return seed_indices, seed_gains
+
+        selected = set(int(index) for index in seed_indices)
+        incoming = [
+            int(index)
+            for index in saliency_desc
+            if visual_role_ids[int(index)] == ROLE_LOCAL_PATCH and int(index) not in selected
+        ][:deficit]
+        outgoing_positions = [
+            position
+            for position in range(len(seed_indices) - 1, -1, -1)
+            if visual_role_ids[int(seed_indices[position])] != ROLE_LOCAL_PATCH
+        ][:deficit]
+        if len(incoming) != deficit or len(outgoing_positions) != deficit:
+            raise AssertionError("Could not preserve enough local-patch capacity during SCND seed selection")
+
+        adjusted_indices = list(seed_indices)
+        adjusted_gains = list(seed_gains)
+        for position, incoming_index in zip(outgoing_positions, incoming):
+            adjusted_indices[position] = int(incoming_index)
+            adjusted_gains[position] = 0.0
+        return adjusted_indices, adjusted_gains
+
+    @staticmethod
     def _saliency_sum(saliency_values: List[float], indices: List[int]) -> float:
         return float(sum(max(float(saliency_values[int(idx)]), 0.0) for idx in indices))
 
@@ -461,6 +616,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         saliency_score: torch.Tensor,
         distance: torch.Tensor,
         saliency_mass_floor: float,
+        visual_role_ids: Optional[List[int]] = None,
+        local_floor_count: int = 0,
     ) -> Tuple[List[int], List[Dict[str, float | int]]]:
         saliency_values = self._score_list(saliency_score)
         selected_set = set(int(idx) for idx in selected)
@@ -479,6 +636,32 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             replaceable = [idx for idx in selected_set if idx not in seed_set]
             if not replaceable:
                 replaceable = list(selected_set)
+            if visual_role_ids is not None and local_floor_count > 0:
+                selected_local_count = sum(
+                    visual_role_ids[int(index)] == ROLE_LOCAL_PATCH for index in selected_set
+                )
+                incoming_is_local = visual_role_ids[int(incoming)] == ROLE_LOCAL_PATCH
+                replaceable = [
+                    index
+                    for index in replaceable
+                    if (
+                        selected_local_count
+                        - int(visual_role_ids[int(index)] == ROLE_LOCAL_PATCH)
+                        + int(incoming_is_local)
+                        >= int(local_floor_count)
+                    )
+                ]
+                if not replaceable and not incoming_is_local:
+                    local_incoming = [
+                        index
+                        for index in unselected
+                        if visual_role_ids[int(index)] == ROLE_LOCAL_PATCH
+                    ]
+                    if local_incoming:
+                        incoming = max(local_incoming, key=lambda idx: (saliency_values[idx], -idx))
+                        replaceable = [idx for idx in selected_set if idx not in seed_set] or list(selected_set)
+                if not replaceable:
+                    break
             outgoing = min(
                 replaceable,
                 key=lambda idx: (saliency_values[idx], contributions.get(int(idx), 0.0), -int(idx)),
@@ -504,6 +687,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         saliency_score: torch.Tensor,
         distance: torch.Tensor,
         saliency_mass_floor: torch.Tensor,
+        visual_role_ids: Optional[torch.Tensor] = None,
+        local_floor_count: int = 0,
     ) -> Tuple[torch.Tensor, List[Dict[str, float | int]]]:
         positive_saliency = saliency_score.to(dtype=torch.float32).clamp_min(0.0)
         selected_mask = selected_mask.clone()
@@ -528,6 +713,22 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             replaceable_mask = selected_mask & ~seed_mask
             if not bool(replaceable_mask.any().item()):
                 replaceable_mask = selected_mask
+            if visual_role_ids is not None and local_floor_count > 0:
+                role_ids = visual_role_ids.to(device=selected_mask.device, dtype=torch.long)
+                local_mask = role_ids == ROLE_LOCAL_PATCH
+                selected_local_count = int((selected_mask & local_mask).sum().item())
+                incoming_is_local = bool(local_mask[incoming].item())
+                if not incoming_is_local and selected_local_count <= int(local_floor_count):
+                    replaceable_mask = replaceable_mask & ~local_mask
+                if not bool(replaceable_mask.any().item()) and not incoming_is_local:
+                    local_incoming_mask = unselected_mask & local_mask
+                    if bool(local_incoming_mask.any().item()):
+                        incoming = self._best_high_saliency_low_index(local_incoming_mask, positive_saliency)
+                        replaceable_mask = selected_mask & ~seed_mask
+                        if not bool(replaceable_mask.any().item()):
+                            replaceable_mask = selected_mask
+                if not bool(replaceable_mask.any().item()):
+                    break
             outgoing = self._best_low_saliency_low_contribution_high_index(
                 replaceable_mask,
                 positive_saliency,
@@ -565,6 +766,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         saliency_floor_min: float,
         saliency_floor_max: float,
         saliency_repair: bool,
+        visual_role_ids: Optional[torch.Tensor] = None,
+        local_floor_ratio: float = 0.0,
     ) -> Dict[str, object]:
         num_visual = int(saliency_score.numel())
         if target_keep <= 0:
@@ -582,6 +785,9 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 "saliency_mass_topk": 0.0,
                 "feasible_candidate_count": 0,
                 "repair_replacements": [],
+                "topk_local_patch_count": 0,
+                "local_patch_floor_count": 0,
+                "selected_local_patch_count": 0,
             }
 
         keep_count = min(int(target_keep), num_visual)
@@ -589,6 +795,20 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         saliency_desc = deterministic_descending_indices(saliency_score).detach().cpu().tolist()
         topk_indices = [int(idx) for idx in saliency_desc[:keep_count]]
         saliency_mass_topk = self._saliency_sum(saliency_values, topk_indices)
+        role_values = (
+            [int(value) for value in visual_role_ids.detach().cpu().tolist()]
+            if visual_role_ids is not None
+            else None
+        )
+        topk_local_count = (
+            sum(role_values[int(index)] == ROLE_LOCAL_PATCH for index in topk_indices)
+            if role_values is not None
+            else 0
+        )
+        local_floor_count = min(
+            topk_local_count,
+            int(math.ceil(float(topk_local_count) * float(local_floor_ratio) - 1e-12)),
+        )
 
         entropy_norm = _clamp01(entropy_norm)
         seed_ratio = seed_ratio_min + (seed_ratio_max - seed_ratio_min) * (1.0 - entropy_norm)
@@ -602,6 +822,14 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             saliency_score=saliency_score,
             pool_indices=seed_pool_indices,
             select_count=seed_count,
+        )
+        seed_indices, seed_gains = self._rebalance_seed_local_capacity(
+            seed_indices=seed_indices,
+            seed_gains=seed_gains,
+            saliency_desc=saliency_desc,
+            visual_role_ids=role_values,
+            keep_count=keep_count,
+            local_floor_count=local_floor_count,
         )
 
         eta = saliency_floor_min + (saliency_floor_max - saliency_floor_min) * (1.0 - entropy_norm)
@@ -621,6 +849,16 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 break
             slots_after_candidate = keep_count - len(selected) - 1
             feasible: List[int] = []
+            selected_local_count = (
+                sum(role_values[int(index)] == ROLE_LOCAL_PATCH for index in selected)
+                if role_values is not None
+                else 0
+            )
+            remaining_local_count = (
+                sum(role_values[int(index)] == ROLE_LOCAL_PATCH for index in remaining)
+                if role_values is not None
+                else 0
+            )
             for idx in remaining:
                 possible_mass = (
                     selected_mass
@@ -633,10 +871,35 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                         slots=slots_after_candidate,
                     )
                 )
-                if possible_mass + 1e-8 >= saliency_mass_floor:
+                role_feasible = True
+                if role_values is not None and local_floor_count > 0:
+                    candidate_is_local = int(role_values[int(idx)] == ROLE_LOCAL_PATCH)
+                    remaining_local_after = remaining_local_count - candidate_is_local
+                    possible_local_count = (
+                        selected_local_count
+                        + candidate_is_local
+                        + min(slots_after_candidate, remaining_local_after)
+                    )
+                    role_feasible = possible_local_count >= local_floor_count
+                if possible_mass + 1e-8 >= saliency_mass_floor and role_feasible:
                     feasible.append(int(idx))
             feasible_candidate_count += len(feasible)
-            candidate_pool = feasible if feasible else remaining
+            if feasible:
+                candidate_pool = feasible
+            elif role_values is not None and local_floor_count > 0:
+                role_feasible_remaining = []
+                for idx in remaining:
+                    candidate_is_local = int(role_values[int(idx)] == ROLE_LOCAL_PATCH)
+                    possible_local_count = (
+                        selected_local_count
+                        + candidate_is_local
+                        + min(slots_after_candidate, remaining_local_count - candidate_is_local)
+                    )
+                    if possible_local_count >= local_floor_count:
+                        role_feasible_remaining.append(int(idx))
+                candidate_pool = role_feasible_remaining if role_feasible_remaining else remaining
+            else:
+                candidate_pool = remaining
 
             candidate_tensor = torch.tensor(candidate_pool, device=distance.device, dtype=torch.long)
             if selected:
@@ -661,6 +924,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 saliency_score=saliency_score,
                 distance=distance,
                 saliency_mass_floor=saliency_mass_floor,
+                visual_role_ids=role_values,
+                local_floor_count=local_floor_count,
             )
             selected_mass = self._saliency_sum(saliency_values, selected)
 
@@ -679,6 +944,13 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "saliency_mass_topk": float(saliency_mass_topk),
             "feasible_candidate_count": int(feasible_candidate_count),
             "repair_replacements": repair_replacements,
+            "topk_local_patch_count": int(topk_local_count),
+            "local_patch_floor_count": int(local_floor_count),
+            "selected_local_patch_count": int(
+                sum(role_values[int(index)] == ROLE_LOCAL_PATCH for index in selected)
+                if role_values is not None
+                else 0
+            ),
         }
 
     def _saliency_constrained_native_divprune_select_gpu(
@@ -694,6 +966,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         saliency_floor_min: float,
         saliency_floor_max: float,
         saliency_repair: bool,
+        visual_role_ids: Optional[torch.Tensor] = None,
+        local_floor_ratio: float = 0.0,
     ) -> Dict[str, object]:
         num_visual = int(saliency_score.numel())
         device = saliency_score.device
@@ -713,6 +987,9 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 "saliency_mass_topk": 0.0,
                 "feasible_candidate_count": 0,
                 "repair_replacements": [],
+                "topk_local_patch_count": 0,
+                "local_patch_floor_count": 0,
+                "selected_local_patch_count": 0,
             }
 
         keep_count = min(int(target_keep), num_visual)
@@ -721,6 +998,17 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         saliency_desc = self._descending_indices_tensor(saliency_score)
         topk_indices = saliency_desc[:keep_count]
         saliency_mass_topk = positive_saliency.index_select(0, topk_indices).sum()
+        role_ids = (
+            visual_role_ids.to(device=device, dtype=torch.long)
+            if visual_role_ids is not None
+            else None
+        )
+        topk_local_count, local_floor_count = self._local_floor_count(
+            saliency_desc=saliency_desc,
+            keep_count=keep_count,
+            visual_role_ids=role_ids,
+            local_floor_ratio=local_floor_ratio,
+        )
 
         seed_ratio = seed_ratio_min + (seed_ratio_max - seed_ratio_min) * (1.0 - entropy_norm)
         seed_count = min(keep_count, int(math.ceil(float(keep_count) * seed_ratio)))
@@ -733,6 +1021,14 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             saliency_score=saliency_score,
             pool_indices=seed_pool_indices,
             select_count=seed_count,
+        )
+        seed_indices, seed_gains = self._rebalance_seed_local_capacity_gpu(
+            seed_indices=seed_indices,
+            seed_gains=seed_gains,
+            saliency_desc=saliency_desc,
+            visual_role_ids=role_ids,
+            keep_count=keep_count,
+            local_floor_count=local_floor_count,
         )
 
         eta = saliency_floor_min + (saliency_floor_max - saliency_floor_min) * (1.0 - entropy_norm)
@@ -791,10 +1087,31 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     )
 
             possible_mass = selected_mass + positive_saliency + possible_remaining
-            feasible_mask = remaining_mask & (possible_mass + 1e-8 >= saliency_mass_floor)
+            saliency_feasible_mask = remaining_mask & (possible_mass + 1e-8 >= saliency_mass_floor)
+            role_feasible_mask = remaining_mask
+            if role_ids is not None and local_floor_count > 0:
+                local_mask = role_ids == ROLE_LOCAL_PATCH
+                selected_local_count = int((selected_mask & local_mask).sum().item())
+                remaining_local_count = int((remaining_mask & local_mask).sum().item())
+                candidate_is_local = local_mask.to(dtype=torch.long)
+                remaining_local_after = remaining_local_count - candidate_is_local
+                future_local_capacity = torch.clamp(
+                    remaining_local_after,
+                    min=0,
+                    max=max(int(slots_after_candidate), 0),
+                )
+                possible_local_count = selected_local_count + candidate_is_local + future_local_capacity
+                role_feasible_mask = remaining_mask & (possible_local_count >= int(local_floor_count))
+
+            feasible_mask = saliency_feasible_mask & role_feasible_mask
             feasible_count = int(feasible_mask.sum().item())
             feasible_candidate_count += feasible_count
-            candidate_mask = feasible_mask if feasible_count > 0 else remaining_mask
+            if feasible_count > 0:
+                candidate_mask = feasible_mask
+            elif bool(role_feasible_mask.any().item()):
+                candidate_mask = role_feasible_mask
+            else:
+                candidate_mask = remaining_mask
 
             gains = min_distance if selected_count > 0 else torch.zeros_like(min_distance)
             best_idx = self._best_high_gain_saliency_low_index(candidate_mask, gains, saliency_score)
@@ -822,6 +1139,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 saliency_score=saliency_score,
                 distance=distance,
                 saliency_mass_floor=saliency_mass_floor,
+                visual_role_ids=role_ids,
+                local_floor_count=local_floor_count,
             )
             selected_mass = positive_saliency[selected_mask].sum()
 
@@ -840,6 +1159,13 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "saliency_mass_topk": float(saliency_mass_topk.item()),
             "feasible_candidate_count": int(feasible_candidate_count),
             "repair_replacements": repair_replacements,
+            "topk_local_patch_count": int(topk_local_count),
+            "local_patch_floor_count": int(local_floor_count),
+            "selected_local_patch_count": int(
+                ((role_ids == ROLE_LOCAL_PATCH) & selected_mask).sum().item()
+                if role_ids is not None
+                else 0
+            ),
         }
 
     def _saliency_constrained_random_feasible_select(
@@ -1473,6 +1799,25 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             keep_fraction=float(target_keep / v_token_num),
         )
         entropy_norm_control = float(entropy_control["control_value"])
+        visual_role_control = self._visual_role_constraint_control(
+            mode=str(params["visual_role_constraint_mode"]),
+            local_floor_ratio=float(params["visual_role_local_floor_ratio"]),
+            keep_fraction=float(target_keep / v_token_num),
+            keep_fraction_low=float(params["visual_role_budget_keep_fraction_low"]),
+            keep_fraction_high=float(params["visual_role_budget_keep_fraction_high"]),
+        )
+        current_visual_role_ids: Optional[torch.Tensor] = None
+        if mode == "C" and str(params["visual_role_constraint_mode"]) != "none":
+            visual_layout = context.get("visual_layout")
+            if visual_layout is None:
+                raise ValueError(
+                    "sparsevlm_scnd.visual_role_constraint requires visual_layout sample metadata"
+                )
+            current_visual_role_ids = visual_token_role_ids(
+                current_patch_indices,
+                visual_layout,
+                device=mixed_score.device,
+            )
         distance: Optional[torch.Tensor] = None
         distance_time_ms = 0.0
         selection_start = 0.0
@@ -1535,6 +1880,8 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     saliency_floor_min=float(params["saliency_floor_min"]),
                     saliency_floor_max=float(params["saliency_floor_max"]),
                     saliency_repair=bool(params["saliency_repair"]),
+                    visual_role_ids=current_visual_role_ids,
+                    local_floor_ratio=float(visual_role_control["local_floor_ratio_effective"]),
                 )
             else:
                 selection = self._saliency_constrained_native_divprune_select(
@@ -1548,13 +1895,19 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     saliency_floor_min=float(params["saliency_floor_min"]),
                     saliency_floor_max=float(params["saliency_floor_max"]),
                     saliency_repair=bool(params["saliency_repair"]),
+                    visual_role_ids=current_visual_role_ids,
+                    local_floor_ratio=float(visual_role_control["local_floor_ratio_effective"]),
                 )
             _sync_if_cuda(distance)
             selection_time_ms = (time.perf_counter() - selection_start) * 1000.0
             selection_rule = (
                 "saliency_constrained_random_feasible"
                 if c_selection_rule == "random_feasible"
-                else "saliency_constrained_native_divprune"
+                else (
+                    "saliency_constrained_native_divprune_anyres_local_floor"
+                    if bool(visual_role_control["applied"])
+                    else "saliency_constrained_native_divprune"
+                )
             )
         elif mode == "B":
             _sync_if_cuda(current_visual_embeds)
@@ -1638,6 +1991,14 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "entropy_calibration_budget_keep_fraction_high": entropy_control["budget_keep_fraction_high"],
             "entropy_calibration_diversity_tail_gain": entropy_control["diversity_tail_gain"],
             "entropy_calibration_diversity_tail_delta": entropy_control["diversity_tail_delta"],
+            "visual_role_constraint_mode": visual_role_control["mode"],
+            "visual_role_constraint_applied": bool(mode == "C" and visual_role_control["applied"]),
+            "visual_role_budget_keep_fraction": visual_role_control["budget_keep_fraction"],
+            "visual_role_budget_pressure": visual_role_control["budget_pressure"],
+            "visual_role_local_floor_ratio": visual_role_control["local_floor_ratio"],
+            "visual_role_local_floor_ratio_effective": visual_role_control["local_floor_ratio_effective"],
+            "visual_role_budget_keep_fraction_low": visual_role_control["budget_keep_fraction_low"],
+            "visual_role_budget_keep_fraction_high": visual_role_control["budget_keep_fraction_high"],
             "seed_ratio_min": params["seed_ratio_min"],
             "seed_ratio_max": params["seed_ratio_max"],
             "seed_pool_multiplier": params["seed_pool_multiplier"],

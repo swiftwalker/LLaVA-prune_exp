@@ -66,6 +66,7 @@ from pruner import VisualTokenPruner, enable_sparse_position_ids_compat
 from run_layout import build_run_dir, build_run_rel_dir
 from strategies import get_strategy
 from strategies.scnd_entropy_calibration import model_config_fingerprint
+from strategies.scnd_visual_roles import visual_token_role_names
 from dataset_adapters import SUPPORTED_DATASETS, load_dataset_samples
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
@@ -239,27 +240,8 @@ def _normalized_positive_entropy(values: Any) -> tuple[float, float]:
 
 
 def _visual_token_roles(original_indices: Any, visual_layout: dict[str, Any]) -> list[str]:
-    indices = [int(index) for index in _serialize_optional_sequence(original_indices) or []]
-    base_count = int(visual_layout.get("base_token_count", 0))
-    local_width = int(visual_layout.get("local_grid_width", 0))
-    newline_count = int(visual_layout.get("newline_token_count", 0))
-    total_count = int(visual_layout.get("total_token_count", 0))
-
-    roles: list[str] = []
-    for index in indices:
-        if index < 0 or index >= total_count:
-            raise ValueError(f"Visual token index {index} is outside layout size {total_count}")
-        if index < base_count:
-            roles.append("base")
-            continue
-        relative_index = index - base_count
-        is_newline = (
-            newline_count > 0
-            and local_width > 0
-            and relative_index % (local_width + 1) == local_width
-        )
-        roles.append("newline" if is_newline else "local_patch")
-    return roles
+    indices = _serialize_optional_sequence(original_indices) or []
+    return visual_token_role_names(indices, visual_layout)
 
 
 def compute_visual_token_role_stats(layer_info: dict, visual_layout: Optional[dict]) -> dict[str, Any]:
@@ -309,12 +291,32 @@ def compute_visual_token_role_stats(layer_info: dict, visual_layout: Optional[di
     )
     positive_scores = scores.clamp_min(0.0)
     positive_sum = positive_scores.sum()
-    newline_mask = ~patch_mask
-    role_stats["newline_saliency_mass_ratio"] = (
-        float(positive_scores[newline_mask].sum().item() / positive_sum.item())
-        if float(positive_sum.item()) > 0.0
-        else 0.0
+    for role, field_prefix in (
+        ("base", "base_token"),
+        ("local_patch", "local_patch_token"),
+        ("newline", "newline"),
+    ):
+        role_mask = torch.tensor([value == role for value in current_roles], dtype=torch.bool)
+        role_stats[f"{field_prefix}_saliency_mass_ratio"] = (
+            float(positive_scores[role_mask].sum().item() / positive_sum.item())
+            if float(positive_sum.item()) > 0.0
+            else 0.0
+        )
+
+    target_keep = layer_info.get(
+        "target_keep",
+        layer_info.get("num_visual_after", len(keep_roles)),
     )
+    if target_keep is not None:
+        target_keep = min(max(int(target_keep), 0), len(current_roles))
+        saliency_order = torch.argsort(scores, descending=True, stable=True)[:target_keep].tolist()
+        topk_roles = [current_roles[int(index)] for index in saliency_order]
+        for role, field_prefix in (
+            ("base", "base_token"),
+            ("local_patch", "local_patch_token"),
+            ("newline", "newline_token"),
+        ):
+            role_stats[f"topk_{field_prefix}_count"] = topk_roles.count(role)
     return role_stats
 
 
@@ -398,6 +400,17 @@ def append_layer_stats_fields(
         "entropy_calibration_budget_keep_fraction_high",
         "entropy_calibration_diversity_tail_gain",
         "entropy_calibration_diversity_tail_delta",
+        "visual_role_constraint_mode",
+        "visual_role_constraint_applied",
+        "visual_role_budget_keep_fraction",
+        "visual_role_budget_pressure",
+        "visual_role_local_floor_ratio",
+        "visual_role_local_floor_ratio_effective",
+        "visual_role_budget_keep_fraction_low",
+        "visual_role_budget_keep_fraction_high",
+        "topk_local_patch_count",
+        "local_patch_floor_count",
+        "selected_local_patch_count",
         "global_prune_step",
         "global_current_weight",
         "global_ema_decay",
@@ -1241,6 +1254,7 @@ def run_prune_inference(
                         save_tv_attn=save_attention,
                         capture_layers=capture_layers_set,
                         capture_visual_hidden_layers={rep_diag_layer} if rep_diag_enabled else None,
+                        visual_layout=visual_layout,
                     )
                     t1 = time.time()
                     total_time += (t1 - t0)

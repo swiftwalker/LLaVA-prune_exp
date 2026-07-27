@@ -136,6 +136,28 @@ class SparseVLMSCNDTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "budget bounds"):
             invalid_budget_bounds._get_scnd_params()
 
+        role_constraint = self._strategy(
+            visual_role_constraint={"mode": "budget_adaptive_local_floor", "local_floor_ratio": 0.9}
+        )
+        self.assertEqual(
+            role_constraint._get_scnd_params()["visual_role_constraint_mode"],
+            "budget_adaptive_local_floor",
+        )
+        invalid_role_mode = self._strategy(visual_role_constraint={"mode": "bogus"})
+        with self.assertRaisesRegex(ValueError, "visual_role_constraint.mode"):
+            invalid_role_mode._get_scnd_params()
+        invalid_role_ratio = self._strategy(
+            visual_role_constraint={"mode": "local_floor", "local_floor_ratio": 1.1}
+        )
+        with self.assertRaisesRegex(ValueError, "local_floor_ratio"):
+            invalid_role_ratio._get_scnd_params()
+        random_role_constraint = self._strategy(
+            c_selection_rule="random_feasible",
+            visual_role_constraint={"mode": "local_floor"},
+        )
+        with self.assertRaisesRegex(ValueError, "c_selection_rule=native"):
+            random_role_constraint._get_scnd_params()
+
         self._prepare(strategy, 4)
         attn = _full_attention(
             seq_len=7,
@@ -147,6 +169,117 @@ class SparseVLMSCNDTests(unittest.TestCase):
 
         self.assertEqual(keep.numel(), info["target_keep"])
         self.assertEqual(info["selection_backend_effective"], "python")
+
+    def test_budget_adaptive_visual_role_constraint_only_activates_under_pressure(self):
+        high = self._strategy()._visual_role_constraint_control(
+            "budget_adaptive_local_floor", 1.0, 0.5, 0.125, 0.5
+        )
+        ultra = self._strategy()._visual_role_constraint_control(
+            "budget_adaptive_local_floor", 1.0, 0.125, 0.125, 0.5
+        )
+        middle = self._strategy()._visual_role_constraint_control(
+            "budget_adaptive_local_floor", 0.9, 0.3125, 0.125, 0.5
+        )
+
+        self.assertEqual(high["budget_pressure"], 0.0)
+        self.assertEqual(high["local_floor_ratio_effective"], 0.0)
+        self.assertEqual(ultra["budget_pressure"], 1.0)
+        self.assertEqual(ultra["local_floor_ratio_effective"], 1.0)
+        self.assertAlmostEqual(middle["local_floor_ratio_effective"], 0.45)
+
+    def test_anyres_local_floor_preserves_saliency_topk_local_capacity(self):
+        strategy = self._strategy(
+            prune_ratio=0.5,
+            seed_ratio_min=0.5,
+            seed_ratio_max=0.5,
+            saliency_floor_min=0.0,
+            saliency_floor_max=0.0,
+            visual_role_constraint={"mode": "local_floor", "local_floor_ratio": 1.0},
+        )
+        self._prepare(strategy, 8)
+        strategy.sample_context["visual_layout"] = {
+            "base_token_count": 4,
+            "local_patch_token_count": 3,
+            "newline_token_count": 1,
+            "local_grid_width": 3,
+            "total_token_count": 8,
+        }
+        attn = _full_attention(
+            seq_len=11,
+            text_rows=[9, 10],
+            visual_cols=list(range(1, 9)),
+            values=[
+                [0.7, 0.6, 0.5, 0.4, 1.0, 0.95, 0.9, 0.1],
+                [0.7, 0.6, 0.5, 0.4, 1.0, 0.95, 0.9, 0.1],
+            ],
+        )
+        embeds = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [-1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.99],
+                [0.0, 0.0, 0.98],
+                [0.0, 0.0, -1.0],
+            ]
+        )
+
+        keep, info = strategy.compute_keep_mask(attn, 1, 8, 9, 0, current_visual_embeds=embeds)
+
+        self.assertEqual(keep.numel(), 4)
+        self.assertEqual(info["topk_local_patch_count"], 3)
+        self.assertEqual(info["local_patch_floor_count"], 3)
+        self.assertEqual(info["selected_local_patch_count"], 3)
+        self.assertEqual(info["selection_rule"], "saliency_constrained_native_divprune_anyres_local_floor")
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for GPU role-constraint parity")
+    def test_anyres_local_floor_gpu_matches_python_selection(self):
+        saliency = torch.tensor([0.7, 0.6, 0.5, 0.4, 1.0, 0.95, 0.9, 0.1])
+        embeds = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [-1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.99],
+                [0.0, 0.0, 0.98],
+                [0.0, 0.0, -1.0],
+            ]
+        )
+        role_ids = torch.tensor([0, 0, 0, 0, 1, 1, 1, 2])
+        distance = _scnd_distance_matrix(embeds, "cosine")
+        kwargs = {
+            "target_keep": 4,
+            "entropy_norm": 0.5,
+            "seed_ratio_min": 0.5,
+            "seed_ratio_max": 0.5,
+            "seed_pool_multiplier": 2.0,
+            "saliency_floor_min": 0.0,
+            "saliency_floor_max": 0.0,
+            "saliency_repair": True,
+            "local_floor_ratio": 1.0,
+        }
+        strategy = self._strategy()
+
+        expected = strategy._saliency_constrained_native_divprune_select(
+            saliency_score=saliency,
+            distance=distance,
+            visual_role_ids=role_ids,
+            **kwargs,
+        )
+        actual = strategy._saliency_constrained_native_divprune_select_gpu(
+            saliency_score=saliency.cuda(),
+            distance=distance.cuda(),
+            visual_role_ids=role_ids.cuda(),
+            **kwargs,
+        )
+
+        self.assertEqual(actual["keep_indices"].cpu().tolist(), expected["keep_indices"].tolist())
+        self.assertEqual(actual["local_patch_floor_count"], 3)
+        self.assertEqual(actual["selected_local_patch_count"], 3)
 
     def test_entropy_calibration_identity_and_quantile_control(self):
         identity = self._strategy(entropy_calibration={"mode": "identity"})

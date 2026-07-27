@@ -63,6 +63,15 @@ class PruneInferenceStatsTests(unittest.TestCase):
         self.assertEqual(stats["patch_only_saliency_token_count"], 10)
         self.assertAlmostEqual(stats["patch_only_saliency_entropy_norm"], 1.0, places=7)
         self.assertGreater(stats["newline_saliency_mass_ratio"], 0.9)
+        self.assertEqual(stats["topk_base_token_count"], 4)
+        self.assertEqual(stats["topk_local_patch_token_count"], 0)
+        self.assertEqual(stats["topk_newline_token_count"], 2)
+        self.assertAlmostEqual(
+            stats["base_token_saliency_mass_ratio"]
+            + stats["local_patch_token_saliency_mass_ratio"]
+            + stats["newline_saliency_mass_ratio"],
+            1.0,
+        )
 
     def test_append_layer_stats_fields_records_baseline_reference_keep_indices(self):
         sample_stats = {}

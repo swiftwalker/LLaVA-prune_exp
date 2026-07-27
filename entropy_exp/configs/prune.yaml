@@ -180,6 +180,11 @@ pruning:
       budget_keep_fraction_low: 0.125
       budget_keep_fraction_high: 0.5
       diversity_tail_gain: 1.0
+    visual_role_constraint:
+      mode: "none"                   # none | local_floor | budget_adaptive_local_floor
+      local_floor_ratio: 1.0          # fraction of saliency top-k local patches protected by C
+      budget_keep_fraction_low: 0.125
+      budget_keep_fraction_high: 0.5
     use_score_memory: false
     global_current_weight: 0.5
     global_ema_decay: 0.6
