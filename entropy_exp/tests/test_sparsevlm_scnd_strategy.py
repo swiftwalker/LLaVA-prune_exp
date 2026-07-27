@@ -182,6 +182,34 @@ class SparseVLMSCNDTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "c_selection_rule=native"):
             random_role_constraint._get_scnd_params()
 
+        herc = self._strategy(
+            evidence_reconciliation={
+                "mode": "herc_v1",
+                "apply_modes": ["C", "B", "S"],
+                "profile_lock": "first_c",
+                "continuity_reference": "first_c",
+            }
+        )
+        self.assertEqual(herc._get_scnd_params()["evidence_reconciliation_mode"], "herc_v1")
+        for invalid_evidence in (
+            {"mode": "bogus"},
+            {"mode": "herc_v1", "candidate_pool_multiplier": 0.5},
+            {"mode": "herc_v1", "max_swap_ratio": 1.1},
+        ):
+            with self.subTest(evidence=invalid_evidence):
+                with self.assertRaises(ValueError):
+                    self._strategy(evidence_reconciliation=invalid_evidence)._get_scnd_params()
+        with self.assertRaisesRegex(ValueError, "requires a C layer"):
+            self._strategy(
+                layer_modes=["B"],
+                evidence_reconciliation={"mode": "herc_v1"},
+            )._get_scnd_params()
+        with self.assertRaisesRegex(ValueError, "c_selection_rule=native"):
+            self._strategy(
+                c_selection_rule="random_feasible",
+                evidence_reconciliation={"mode": "herc_v1"},
+            )._get_scnd_params()
+
         self._prepare(strategy, 4)
         attn = _full_attention(
             seq_len=7,
@@ -193,6 +221,35 @@ class SparseVLMSCNDTests(unittest.TestCase):
 
         self.assertEqual(keep.numel(), info["target_keep"])
         self.assertEqual(info["selection_backend_effective"], "python")
+
+    def test_herc_high_profile_is_exact_bypass(self):
+        baseline = self._strategy(prune_ratio=0.5)
+        herc = self._strategy(
+            prune_ratio=0.5,
+            evidence_reconciliation={"mode": "herc_v1"},
+        )
+        attention = _full_attention(
+            seq_len=7,
+            text_rows=[5, 6],
+            visual_cols=[1, 2, 3, 4],
+            values=[[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
+        )
+        embeds = torch.eye(4, dtype=torch.float32)
+        for strategy in (baseline, herc):
+            self._prepare(strategy, 4)
+
+        baseline_keep, baseline_info = baseline.compute_keep_mask(
+            attention, 1, 4, 5, 0, current_visual_embeds=embeds
+        )
+        herc_keep, herc_info = herc.compute_keep_mask(
+            attention, 1, 4, 5, 0, current_visual_embeds=embeds
+        )
+
+        torch.testing.assert_close(herc_keep, baseline_keep, rtol=0, atol=0)
+        self.assertEqual(herc_info["selection_rule"], baseline_info["selection_rule"])
+        self.assertEqual(herc_info["layer_strategy_effective"], "sparsevlm_scnd")
+        self.assertTrue(herc_info["evidence_reconcile_bypassed"])
+        self.assertEqual(herc_info["evidence_reconcile_profile_pressure"], 0.0)
 
     def test_budget_adaptive_visual_role_constraint_only_activates_under_pressure(self):
         high = self._strategy()._visual_role_constraint_control(

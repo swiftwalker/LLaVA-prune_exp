@@ -73,14 +73,14 @@ def select_text_raters(
     return rater_indices, text_relevance_scores
 
 
-def compute_visual_scores_from_attention(
+def compute_rater_visual_scores_from_attention(
     attn_weights: torch.Tensor,
     rater_indices: torch.Tensor,
     text_positions: torch.Tensor,
     visual_positions: torch.Tensor,
 ) -> torch.Tensor:
     """
-    Compute per-visual-token scores from current-layer attention.
+    Compute per-rater visual-token scores from current-layer attention.
 
     Args:
         attn_weights: [B, H, L, L] or [H, L, L]
@@ -89,7 +89,7 @@ def compute_visual_scores_from_attention(
         visual_positions: [Lv_current] absolute decoder positions for current visual tokens
 
     Returns:
-        visual_scores: [Lv_current]
+        rater_visual_scores: [R, Lv_current]
     """
     if attn_weights.ndim == 4:
         if attn_weights.shape[0] != 1:
@@ -128,7 +128,22 @@ def compute_visual_scores_from_attention(
     attn_mean = attn.mean(dim=0)  # [L, L]
     selected_text_positions = text_positions.index_select(0, rater_indices)
     tv = attn_mean.index_select(0, selected_text_positions).index_select(1, visual_positions)  # [R, Lv]
-    return tv.mean(dim=0)
+    return tv
+
+
+def compute_visual_scores_from_attention(
+    attn_weights: torch.Tensor,
+    rater_indices: torch.Tensor,
+    text_positions: torch.Tensor,
+    visual_positions: torch.Tensor,
+) -> torch.Tensor:
+    """Compute the legacy mean-rater visual score without changing semantics."""
+    return compute_rater_visual_scores_from_attention(
+        attn_weights=attn_weights,
+        rater_indices=rater_indices,
+        text_positions=text_positions,
+        visual_positions=visual_positions,
+    ).mean(dim=0)
 
 
 def prune_visual_tokens(
@@ -229,7 +244,7 @@ class SparseVLMStrategy(PruneStrategy):
             raise ValueError("SparseVLMStrategy sample context is missing. Call prepare_sample() first.")
         return self.sample_context
 
-    def compute_importance(
+    def compute_rater_importance(
         self,
         attn_weights: Optional[torch.Tensor],
         v_token_start: int,
@@ -252,12 +267,30 @@ class SparseVLMStrategy(PruneStrategy):
         visual_positions = torch.arange(
             v_token_start, v_token_start + v_token_num, device=attn_weights.device, dtype=torch.long
         )
-        return compute_visual_scores_from_attention(
+        return compute_rater_visual_scores_from_attention(
             attn_weights=attn_weights,
             rater_indices=context["rater_indices"],
             text_positions=text_positions,
             visual_positions=visual_positions,
         )
+
+    def compute_importance(
+        self,
+        attn_weights: Optional[torch.Tensor],
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+        layer_idx: int,
+        device: Optional[torch.device] = None,
+    ) -> torch.Tensor:
+        return self.compute_rater_importance(
+            attn_weights=attn_weights,
+            v_token_start=v_token_start,
+            v_token_num=v_token_num,
+            text_token_start=text_token_start,
+            layer_idx=layer_idx,
+            device=device,
+        ).mean(dim=0)
 
     def compute_keep_mask(
         self,

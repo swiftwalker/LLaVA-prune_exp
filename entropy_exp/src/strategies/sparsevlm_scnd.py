@@ -21,7 +21,20 @@ from .scnd_entropy_calibration import (
     apply_entropy_calibration,
     load_calibration_artifact,
 )
-from .scnd_visual_roles import ROLE_LOCAL_PATCH, visual_token_role_ids
+from .scnd_herc import (
+    VALID_CONTINUITY_REFERENCES,
+    VALID_PROFILE_LOCKS,
+    VALID_RECONCILIATION_MODES,
+    normalize_rater_distributions,
+    profile_locked_pressure,
+    reconcile_evidence,
+    restrict_reference_distributions,
+)
+from .scnd_visual_roles import (
+    ROLE_LOCAL_PATCH,
+    visual_token_role_ids,
+    visual_token_structure_ids,
+)
 from .sparsevlm_adaptive_stratified import compute_target_keep_count
 from .sparsevlm_diverse_mmr import (
     SparseVLMDiverseMMRStrategy,
@@ -119,6 +132,104 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             raise ValueError(f"Layer {layer_idx} is missing from sparsevlm_scnd.layer_modes")
         return mode_map[int(layer_idx)]
 
+    def _get_evidence_reconciliation_params(self) -> Dict[str, object]:
+        cfg = self.config.get("evidence_reconciliation", {}) or {}
+        if not isinstance(cfg, dict):
+            raise ValueError("sparsevlm_scnd.evidence_reconciliation must be a mapping")
+        mode = str(cfg.get("mode", "none")).lower()
+        apply_modes = cfg.get("apply_modes", ["C", "B", "S"])
+        if isinstance(apply_modes, str):
+            apply_modes = [value.strip() for value in apply_modes.split(",") if value.strip()]
+        apply_modes = [str(value).upper() for value in apply_modes]
+        profile_lock = str(cfg.get("profile_lock", "first_c")).lower()
+        continuity_reference = str(cfg.get("continuity_reference", "first_c")).lower()
+        candidate_pool_multiplier = cfg.get("candidate_pool_multiplier")
+        max_swap_ratio = cfg.get("max_swap_ratio")
+
+        if mode not in VALID_RECONCILIATION_MODES:
+            raise ValueError(
+                "sparsevlm_scnd.evidence_reconciliation.mode only supports "
+                f"{sorted(VALID_RECONCILIATION_MODES)}, got {mode!r}"
+            )
+        invalid_modes = [value for value in apply_modes if value not in VALID_LAYER_MODES]
+        if invalid_modes:
+            raise ValueError(
+                "sparsevlm_scnd.evidence_reconciliation.apply_modes only supports "
+                f"{sorted(VALID_LAYER_MODES)}, got {invalid_modes}"
+            )
+        if profile_lock not in VALID_PROFILE_LOCKS:
+            raise ValueError(
+                "sparsevlm_scnd.evidence_reconciliation.profile_lock only supports "
+                f"{sorted(VALID_PROFILE_LOCKS)}, got {profile_lock!r}"
+            )
+        if continuity_reference not in VALID_CONTINUITY_REFERENCES:
+            raise ValueError(
+                "sparsevlm_scnd.evidence_reconciliation.continuity_reference only supports "
+                f"{sorted(VALID_CONTINUITY_REFERENCES)}, got {continuity_reference!r}"
+            )
+        if candidate_pool_multiplier is not None and float(candidate_pool_multiplier) < 1.0:
+            raise ValueError("evidence_reconciliation.candidate_pool_multiplier must be >= 1 or null")
+        if max_swap_ratio is not None and not 0.0 <= float(max_swap_ratio) <= 1.0:
+            raise ValueError("evidence_reconciliation.max_swap_ratio must be in [0, 1] or null")
+        if mode != "none":
+            configured_modes = list(self._layer_mode_map().values())
+            if "C" not in configured_modes:
+                raise ValueError("Active evidence reconciliation requires a C layer for profile locking")
+            if "C" not in apply_modes:
+                raise ValueError("Active evidence reconciliation requires C in apply_modes")
+            if str(self.config.get("c_selection_rule", "native")).lower() != "native":
+                raise ValueError("Active evidence reconciliation requires c_selection_rule=native")
+
+        return {
+            "mode": mode,
+            "apply_modes": tuple(apply_modes),
+            "profile_lock": profile_lock,
+            "continuity_reference": continuity_reference,
+            "candidate_pool_multiplier": (
+                None if candidate_pool_multiplier is None else float(candidate_pool_multiplier)
+            ),
+            "max_swap_ratio": None if max_swap_ratio is None else float(max_swap_ratio),
+        }
+
+    def _evidence_profile(self, params: Dict[str, object]) -> Dict[str, float | int]:
+        mode_map = self._layer_mode_map()
+        first_c_layer = next(layer for layer, mode in mode_map.items() if mode == "C")
+        ratio_map = self.config.get("prune_ratio_map") or {}
+        if int(first_c_layer) in ratio_map:
+            removal_ratio = float(ratio_map[int(first_c_layer)])
+        else:
+            removal_ratio = float(self.config.get("prune_ratio", 0.5))
+        nominal_keep_fraction = _clamp01(1.0 - removal_ratio)
+        keep_fraction_low = float(params["entropy_calibration_budget_keep_fraction_low"])
+        keep_fraction_high = float(params["entropy_calibration_budget_keep_fraction_high"])
+        return {
+            "first_c_layer": int(first_c_layer),
+            "keep_fraction": nominal_keep_fraction,
+            "pressure": profile_locked_pressure(
+                nominal_keep_fraction,
+                keep_fraction_low,
+                keep_fraction_high,
+            ),
+        }
+
+    @staticmethod
+    def _evidence_bypass_stats(
+        mode: str,
+        profile: Dict[str, float | int],
+    ) -> Dict[str, object]:
+        return {
+            "evidence_reconcile_mode": mode,
+            "evidence_reconcile_applied": False,
+            "evidence_reconcile_bypassed": True,
+            "evidence_reconcile_profile_pressure": float(profile["pressure"]),
+            "evidence_reconcile_profile_keep_fraction": float(profile["keep_fraction"]),
+            "evidence_reconcile_candidate_count": 0,
+            "evidence_reconcile_swap_budget": 0,
+            "evidence_reconcile_query_swap_count": 0,
+            "evidence_reconcile_context_swap_count": 0,
+            "evidence_reconcile_time_ms": 0.0,
+        }
+
     def _get_scnd_params(self) -> Dict[str, object]:
         seed_ratio_min = float(self.config.get("seed_ratio_min", 0.15))
         seed_ratio_max = float(self.config.get("seed_ratio_max", 0.55))
@@ -150,6 +261,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         role_min_local_saliency_mass_ratio = float(
             visual_role_cfg.get("min_local_saliency_mass_ratio", 0.70)
         )
+        evidence_params = self._get_evidence_reconciliation_params()
 
         if not 0.0 <= seed_ratio_min <= seed_ratio_max <= 1.0:
             raise ValueError(
@@ -250,6 +362,14 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "visual_role_budget_keep_fraction_high": role_budget_keep_fraction_high,
             "visual_role_max_visual_tokens_before": role_max_visual_tokens_before,
             "visual_role_min_local_saliency_mass_ratio": role_min_local_saliency_mass_ratio,
+            "evidence_reconciliation_mode": evidence_params["mode"],
+            "evidence_reconciliation_apply_modes": evidence_params["apply_modes"],
+            "evidence_reconciliation_profile_lock": evidence_params["profile_lock"],
+            "evidence_reconciliation_continuity_reference": evidence_params["continuity_reference"],
+            "evidence_reconciliation_candidate_pool_multiplier": evidence_params[
+                "candidate_pool_multiplier"
+            ],
+            "evidence_reconciliation_max_swap_ratio": evidence_params["max_swap_ratio"],
         }
 
     @staticmethod
@@ -1779,6 +1899,123 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "distance_cost_proxy": int(distance_cost_proxy),
         }
 
+    def _run_evidence_reconciliation(
+        self,
+        *,
+        attn_weights: torch.Tensor,
+        v_token_start: int,
+        v_token_num: int,
+        text_token_start: int,
+        layer_idx: int,
+        layer_mode: str,
+        params: Dict[str, object],
+        context: Dict[str, object],
+        current_patch_indices: torch.Tensor,
+        current_visual_embeds: torch.Tensor,
+        legacy_keep_indices: torch.Tensor,
+        scalar_score: torch.Tensor,
+        saliency_floor_eta: Optional[float],
+        local_floor_count: int,
+    ) -> Tuple[torch.Tensor, Dict[str, object]]:
+        reconcile_mode = str(params["evidence_reconciliation_mode"])
+        profile = self._evidence_profile(params)
+        context["evidence_reconcile_profile"] = dict(profile)
+        if float(profile["pressure"]) <= 0.0 or layer_mode not in params[
+            "evidence_reconciliation_apply_modes"
+        ]:
+            return legacy_keep_indices, self._evidence_bypass_stats(reconcile_mode, profile)
+        if current_visual_embeds is None:
+            raise ValueError("Active evidence reconciliation requires current_visual_embeds on every applied layer")
+        visual_layout = context.get("visual_layout")
+        if visual_layout is None:
+            raise ValueError("Active evidence reconciliation requires visual_layout sample metadata")
+
+        rater_scores = self.compute_rater_importance(
+            attn_weights=attn_weights,
+            v_token_start=v_token_start,
+            v_token_num=v_token_num,
+            text_token_start=text_token_start,
+            layer_idx=layer_idx,
+            device=current_visual_embeds.device,
+        )
+        current_distributions = normalize_rater_distributions(rater_scores)
+        reference_distributions: Optional[torch.Tensor]
+        if layer_mode == "C" and int(layer_idx) == int(profile["first_c_layer"]):
+            if saliency_floor_eta is None:
+                raise ValueError("C-layer evidence reconciliation requires the effective saliency floor eta")
+            initial_count = int(context["initial_v_token_num"])
+            reference_by_original = torch.zeros(
+                (int(current_distributions.shape[0]), initial_count),
+                device=current_distributions.device,
+                dtype=torch.float32,
+            )
+            reference_by_original.index_copy_(
+                1,
+                current_patch_indices.to(device=current_distributions.device, dtype=torch.long),
+                current_distributions,
+            )
+            context["evidence_c_reference"] = reference_by_original.detach()
+            context["evidence_c_saliency_floor_eta"] = float(saliency_floor_eta)
+            reference_distributions = None
+        else:
+            reference_by_original = context.get("evidence_c_reference")
+            if reference_by_original is None:
+                raise ValueError(
+                    "Evidence reconciliation reached a B/S layer before the first-C reference was captured"
+                )
+            reference_distributions = restrict_reference_distributions(
+                torch.as_tensor(reference_by_original, device=current_distributions.device),
+                current_patch_indices,
+            )
+            saliency_floor_eta = float(context["evidence_c_saliency_floor_eta"])
+
+        structure_ids = visual_token_structure_ids(
+            current_patch_indices,
+            visual_layout,
+            device=current_distributions.device,
+        )
+        candidate_pool_multiplier = params["evidence_reconciliation_candidate_pool_multiplier"]
+        if candidate_pool_multiplier is None:
+            candidate_pool_multiplier = params["seed_pool_multiplier"]
+        max_swap_ratio = params["evidence_reconciliation_max_swap_ratio"]
+        if max_swap_ratio is None:
+            max_swap_ratio = params["boundary_ratio"]
+
+        _sync_if_cuda(current_visual_embeds)
+        start = time.perf_counter()
+        result = reconcile_evidence(
+            mode=reconcile_mode,
+            legacy_keep_indices=legacy_keep_indices,
+            scalar_score=scalar_score,
+            current_distributions=current_distributions,
+            reference_distributions=reference_distributions,
+            current_visual_embeds=current_visual_embeds,
+            current_original_indices=current_patch_indices.to(
+                device=current_distributions.device,
+                dtype=torch.long,
+            ),
+            structure_ids=structure_ids,
+            tau=float(saliency_floor_eta),
+            profile_pressure=float(profile["pressure"]),
+            candidate_pool_multiplier=float(candidate_pool_multiplier),
+            max_swap_ratio=float(max_swap_ratio),
+            local_floor_count=int(local_floor_count),
+        )
+        _sync_if_cuda(current_visual_embeds)
+        stats = dict(result["stats"])
+        stats.update(
+            {
+                "evidence_reconcile_bypassed": False,
+                "evidence_reconcile_profile_keep_fraction": float(profile["keep_fraction"]),
+                "evidence_reconcile_time_ms": (time.perf_counter() - start) * 1000.0,
+            }
+        )
+        return torch.as_tensor(
+            result["keep_indices"],
+            device=legacy_keep_indices.device,
+            dtype=torch.long,
+        ), stats
+
     def compute_keep_mask(
         self,
         attn_weights: Optional[torch.Tensor],
@@ -1795,6 +2032,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         context = self._require_sample_context()
         current_patch_indices = self._require_current_patch_indices(context, v_token_num)
         mode = self._layer_mode(layer_idx)
+        evidence_params = self._get_evidence_reconciliation_params()
 
         if mode == "S":
             visual_scores = self.compute_importance(
@@ -1820,6 +2058,44 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                     "global_prune_step": int(context.get("score_prune_step", 0)),
                 }
             )
+            if str(evidence_params["mode"]) != "none":
+                if current_visual_embeds is None:
+                    raise ValueError("Active evidence reconciliation requires current_visual_embeds for S layers")
+                params = self._get_scnd_params()
+                keep_indices, evidence_stats = self._run_evidence_reconciliation(
+                    attn_weights=attn_weights,
+                    v_token_start=v_token_start,
+                    v_token_num=v_token_num,
+                    text_token_start=text_token_start,
+                    layer_idx=layer_idx,
+                    layer_mode=mode,
+                    params=params,
+                    context=context,
+                    current_patch_indices=current_patch_indices,
+                    current_visual_embeds=current_visual_embeds,
+                    legacy_keep_indices=keep_indices,
+                    scalar_score=visual_scores,
+                    saliency_floor_eta=None,
+                    local_floor_count=0,
+                )
+                pruned_mask = torch.ones(v_token_num, device=visual_scores.device, dtype=torch.bool)
+                pruned_mask[keep_indices] = False
+                pruned_indices = torch.nonzero(pruned_mask, as_tuple=False).flatten()
+                patch_info = self._patch_index_info(current_patch_indices, keep_indices, pruned_indices)
+                info.update(evidence_stats)
+                info.update(
+                    {
+                        "num_visual_after": int(keep_indices.numel()),
+                        "num_pruned": int(pruned_indices.numel()),
+                        "keep_indices": keep_indices.detach().cpu().numpy(),
+                        "pruned_indices": pruned_indices.detach().cpu().numpy(),
+                        "keep_patch_indices": patch_info["keep_patch_indices"].detach().cpu().numpy(),
+                        "pruned_patch_indices": patch_info["pruned_patch_indices"].detach().cpu().numpy(),
+                    }
+                )
+                if bool(evidence_stats.get("evidence_reconcile_applied", False)):
+                    info["layer_strategy_effective"] = "sparsevlm_scnd_herc"
+                    info["selection_rule"] = f"sparsevlm_topk_{evidence_params['mode']}"
             self._set_pending_decision(context, current_patch_indices, layer_idx)
             return keep_indices, info
 
@@ -2020,7 +2296,49 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         else:  # defensive; mode validation happens in _layer_mode.
             raise ValueError(f"Unsupported sparsevlm_scnd layer mode: {mode}")
 
+        evidence_stats: Dict[str, object] = {}
         keep_indices = selection["keep_indices"]
+        layer_strategy_effective = "sparsevlm_scnd"
+        if str(params["evidence_reconciliation_mode"]) != "none":
+            local_floor_count = int(selection.get("local_patch_floor_count", 0)) if mode == "C" else 0
+            keep_indices, evidence_stats = self._run_evidence_reconciliation(
+                attn_weights=attn_weights,
+                v_token_start=v_token_start,
+                v_token_num=v_token_num,
+                text_token_start=text_token_start,
+                layer_idx=layer_idx,
+                layer_mode=mode,
+                params=params,
+                context=context,
+                current_patch_indices=current_patch_indices,
+                current_visual_embeds=current_visual_embeds,
+                legacy_keep_indices=keep_indices,
+                scalar_score=mixed_score,
+                saliency_floor_eta=(
+                    float(selection["saliency_floor_eta"])
+                    if mode == "C" and "saliency_floor_eta" in selection
+                    else None
+                ),
+                local_floor_count=local_floor_count,
+            )
+            selection["keep_indices"] = keep_indices
+            selection_time_ms += float(evidence_stats.get("evidence_reconcile_time_ms", 0.0))
+            if mode == "C" and "saliency_mass_selected" in selection:
+                selection["saliency_mass_selected"] = float(
+                    mixed_score.to(dtype=torch.float32)
+                    .clamp_min(0.0)
+                    .index_select(0, keep_indices)
+                    .sum()
+                    .item()
+                )
+            if mode == "C" and current_visual_role_ids is not None:
+                selection["selected_local_patch_count"] = int(
+                    (current_visual_role_ids.index_select(0, keep_indices) == ROLE_LOCAL_PATCH).sum().item()
+                )
+            if bool(evidence_stats.get("evidence_reconcile_applied", False)):
+                layer_strategy_effective = "sparsevlm_scnd_herc"
+                selection_rule = f"{selection_rule}_herc_v1"
+
         if int(keep_indices.numel()) != int(target_keep):
             raise AssertionError(
                 "sparsevlm_scnd selection produced the wrong keep count, "
@@ -2053,7 +2371,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "strategy_keep_high": int(keep_indices.numel()),
             "strategy_keep_low": 0,
             "layer_mode": mode,
-            "layer_strategy_effective": "sparsevlm_scnd",
+            "layer_strategy_effective": layer_strategy_effective,
             "selection_rule": selection_rule,
             "distance_metric": params["distance_metric"],
             "saliency_entropy": entropy_raw,
@@ -2125,5 +2443,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 info[key] = value.detach().cpu().numpy()
             else:
                 info[key] = value
+
+        info.update(evidence_stats)
 
         return keep_indices, info

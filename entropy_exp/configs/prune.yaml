@@ -187,6 +187,13 @@ pruning:
       budget_keep_fraction_high: 0.5
       max_visual_tokens_before: 2200
       min_local_saliency_mass_ratio: 0.70
+    evidence_reconciliation:
+      mode: "none"                   # none | audit_only | herc_v1
+      apply_modes: ["C", "B", "S"]
+      profile_lock: "first_c"
+      continuity_reference: "first_c"
+      candidate_pool_multiplier: null # null reuses seed_pool_multiplier
+      max_swap_ratio: null            # null reuses boundary_ratio
     use_score_memory: false
     global_current_weight: 0.5
     global_ema_decay: 0.6

@@ -33,6 +33,11 @@ class PruneInferenceStatsTests(unittest.TestCase):
                 "visual_role_layout_gate_passed": True,
                 "visual_role_saliency_gate_passed": True,
                 "visual_role_gate_passed": True,
+                "evidence_reconcile_mode": "herc_v1",
+                "evidence_reconcile_applied": True,
+                "evidence_reconcile_profile_pressure": 1.0,
+                "evidence_query_coverage_before": 0.4,
+                "evidence_query_coverage_after_context": 0.8,
             },
             save_importance=False,
             save_indices=False,
@@ -44,7 +49,33 @@ class PruneInferenceStatsTests(unittest.TestCase):
         self.assertEqual(sample_stats["layer_2_visual_role_num_visual_tokens_before"], 2184)
         self.assertEqual(sample_stats["layer_2_visual_role_local_saliency_mass_ratio"], 0.73)
         self.assertTrue(sample_stats["layer_2_visual_role_gate_passed"])
+        self.assertEqual(sample_stats["layer_2_evidence_reconcile_mode"], "herc_v1")
+        self.assertEqual(sample_stats["layer_2_evidence_query_coverage_after_context"], 0.8)
         self.assertNotIn("layer_2_keep_indices", sample_stats)
+
+    def test_evidence_reconciliation_indices_are_serialized(self):
+        sample_stats = {}
+        append_layer_stats_fields(
+            sample_stats,
+            2,
+            {
+                "prune_ratio": 0.9,
+                "num_visual_before": 8,
+                "num_visual_after": 2,
+                "num_pruned": 6,
+                "evidence_reconcile_in_indices": torch.tensor([6]),
+                "evidence_reconcile_out_indices": torch.tensor([1]),
+                "evidence_reconcile_in_patch_indices": torch.tensor([106]),
+                "evidence_reconcile_out_patch_indices": torch.tensor([101]),
+                "evidence_reconcile_candidate_indices": torch.tensor([0, 1, 6, 7]),
+            },
+            save_importance=False,
+            save_indices=True,
+        )
+
+        self.assertEqual(sample_stats["layer_2_evidence_reconcile_in_indices"], [6])
+        self.assertEqual(sample_stats["layer_2_evidence_reconcile_out_patch_indices"], [101])
+        self.assertEqual(sample_stats["layer_2_evidence_reconcile_candidate_indices"], [0, 1, 6, 7])
 
     def test_anyres_role_stats_and_patch_only_entropy(self):
         layout = {
