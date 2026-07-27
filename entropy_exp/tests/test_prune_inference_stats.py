@@ -26,6 +26,13 @@ class PruneInferenceStatsTests(unittest.TestCase):
                 "saliency_entropy_norm_control": 0.44,
                 "entropy_calibration_mode": "quantile_affine",
                 "entropy_calibration_applied": True,
+                "visual_role_num_visual_tokens_before": 2184,
+                "visual_role_local_saliency_mass_ratio": 0.73,
+                "visual_role_max_visual_tokens_before": 2200,
+                "visual_role_min_local_saliency_mass_ratio": 0.70,
+                "visual_role_layout_gate_passed": True,
+                "visual_role_saliency_gate_passed": True,
+                "visual_role_gate_passed": True,
             },
             save_importance=False,
             save_indices=False,
@@ -34,6 +41,9 @@ class PruneInferenceStatsTests(unittest.TestCase):
         self.assertEqual(sample_stats["layer_2_saliency_entropy_norm"], 0.72)
         self.assertEqual(sample_stats["layer_2_saliency_entropy_norm_control"], 0.44)
         self.assertTrue(sample_stats["layer_2_entropy_calibration_applied"])
+        self.assertEqual(sample_stats["layer_2_visual_role_num_visual_tokens_before"], 2184)
+        self.assertEqual(sample_stats["layer_2_visual_role_local_saliency_mass_ratio"], 0.73)
+        self.assertTrue(sample_stats["layer_2_visual_role_gate_passed"])
         self.assertNotIn("layer_2_keep_indices", sample_stats)
 
     def test_anyres_role_stats_and_patch_only_entropy(self):
