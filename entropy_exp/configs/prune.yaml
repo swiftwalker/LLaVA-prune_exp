@@ -192,6 +192,7 @@ pruning:
       apply_modes: ["C", "B", "S"]
       profile_lock: "first_c"
       continuity_reference: "first_c"
+      stages: ["query", "context"] # ablation: ["query"] skips context reconciliation
       candidate_pool_multiplier: null # null reuses seed_pool_multiplier
       max_swap_ratio: null            # null reuses boundary_ratio
     use_score_memory: false

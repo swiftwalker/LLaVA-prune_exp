@@ -419,6 +419,7 @@ def append_layer_stats_fields(
         "local_patch_floor_count",
         "selected_local_patch_count",
         "evidence_reconcile_mode",
+        "evidence_reconcile_stages",
         "evidence_reconcile_applied",
         "evidence_reconcile_bypassed",
         "evidence_reconcile_profile_pressure",

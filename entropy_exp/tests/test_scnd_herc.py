@@ -123,6 +123,35 @@ class SCNDHERCUnitTests(unittest.TestCase):
         self.assertEqual(result["stats"]["evidence_reconcile_query_swap_count"], 0)
         self.assertEqual(result["stats"]["evidence_reconcile_context_swap_count"], 0)
 
+    def test_query_only_stage_does_not_run_context_reconciliation(self):
+        distributions = normalize_rater_distributions(
+            torch.tensor(
+                [
+                    [0.49, 0.49, 0.01, 0.01],
+                    [0.01, 0.01, 0.49, 0.49],
+                ]
+            )
+        )
+        result = reconcile_evidence(
+            mode="herc_v2",
+            legacy_keep_indices=torch.tensor([0, 1]),
+            scalar_score=torch.ones(4),
+            current_distributions=distributions,
+            reference_distributions=None,
+            current_visual_embeds=torch.eye(4),
+            current_original_indices=torch.arange(4),
+            structure_ids=_square_structure(4),
+            tau=0.65,
+            profile_pressure=1.0,
+            candidate_pool_multiplier=2.0,
+            max_swap_ratio=0.5,
+            stages=("query",),
+        )
+
+        self.assertEqual(result["stats"]["evidence_reconcile_stages"], "query")
+        self.assertEqual(result["stats"]["evidence_reconcile_query_swap_count"], 1)
+        self.assertEqual(result["stats"]["evidence_reconcile_context_swap_count"], 0)
+
     def test_vectorized_facility_pair_coverage_matches_brute_force(self):
         torch.manual_seed(11)
         embeds = torch.randn(7, 5)

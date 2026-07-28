@@ -192,6 +192,14 @@ class SparseVLMSCNDTests(unittest.TestCase):
         )
         self.assertEqual(herc._get_scnd_params()["evidence_reconciliation_mode"], "herc_v1")
         self.assertEqual(
+            herc._get_scnd_params()["evidence_reconciliation_stages"],
+            ("query", "context"),
+        )
+        query_only = self._strategy(
+            evidence_reconciliation={"mode": "herc_v2", "stages": ["query"]}
+        )._get_scnd_params()
+        self.assertEqual(query_only["evidence_reconciliation_stages"], ("query",))
+        self.assertEqual(
             self._strategy(evidence_reconciliation={"mode": "herc_v2"})
             ._get_scnd_params()["evidence_reconciliation_mode"],
             "herc_v2",
@@ -200,6 +208,8 @@ class SparseVLMSCNDTests(unittest.TestCase):
             {"mode": "bogus"},
             {"mode": "herc_v1", "candidate_pool_multiplier": 0.5},
             {"mode": "herc_v1", "max_swap_ratio": 1.1},
+            {"mode": "herc_v2", "stages": ["bogus"]},
+            {"mode": "herc_v2", "stages": []},
         ):
             with self.subTest(evidence=invalid_evidence):
                 with self.assertRaises(ValueError):

@@ -25,6 +25,7 @@ from .scnd_herc import (
     VALID_CONTINUITY_REFERENCES,
     VALID_PROFILE_LOCKS,
     VALID_RECONCILIATION_MODES,
+    VALID_RECONCILIATION_STAGES,
     normalize_rater_distributions,
     profile_locked_pressure,
     reconcile_evidence,
@@ -145,6 +146,10 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         continuity_reference = str(cfg.get("continuity_reference", "first_c")).lower()
         candidate_pool_multiplier = cfg.get("candidate_pool_multiplier")
         max_swap_ratio = cfg.get("max_swap_ratio")
+        raw_stages = cfg.get("stages", ["query", "context"])
+        if isinstance(raw_stages, str):
+            raw_stages = [value.strip() for value in raw_stages.split(",") if value.strip()]
+        requested_stages = {str(value).lower() for value in raw_stages}
 
         if mode not in VALID_RECONCILIATION_MODES:
             raise ValueError(
@@ -171,6 +176,14 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             raise ValueError("evidence_reconciliation.candidate_pool_multiplier must be >= 1 or null")
         if max_swap_ratio is not None and not 0.0 <= float(max_swap_ratio) <= 1.0:
             raise ValueError("evidence_reconciliation.max_swap_ratio must be in [0, 1] or null")
+        invalid_stages = sorted(requested_stages - VALID_RECONCILIATION_STAGES)
+        if invalid_stages:
+            raise ValueError(
+                "sparsevlm_scnd.evidence_reconciliation.stages only supports "
+                f"{sorted(VALID_RECONCILIATION_STAGES)}, got {invalid_stages}"
+            )
+        if mode in {"herc_v1", "herc_v2"} and not requested_stages:
+            raise ValueError("Active HERC requires at least one evidence_reconciliation stage")
         if mode != "none":
             configured_modes = list(self._layer_mode_map().values())
             if "C" not in configured_modes:
@@ -189,6 +202,9 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 None if candidate_pool_multiplier is None else float(candidate_pool_multiplier)
             ),
             "max_swap_ratio": None if max_swap_ratio is None else float(max_swap_ratio),
+            "stages": tuple(
+                stage for stage in ("query", "context") if stage in requested_stages
+            ),
         }
 
     def _evidence_profile(self, params: Dict[str, object]) -> Dict[str, float | int]:
@@ -216,9 +232,11 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
     def _evidence_bypass_stats(
         mode: str,
         profile: Dict[str, float | int],
+        stages: Tuple[str, ...] = ("query", "context"),
     ) -> Dict[str, object]:
         return {
             "evidence_reconcile_mode": mode,
+            "evidence_reconcile_stages": ",".join(stages),
             "evidence_reconcile_applied": False,
             "evidence_reconcile_bypassed": True,
             "evidence_reconcile_profile_pressure": float(profile["pressure"]),
@@ -370,6 +388,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 "candidate_pool_multiplier"
             ],
             "evidence_reconciliation_max_swap_ratio": evidence_params["max_swap_ratio"],
+            "evidence_reconciliation_stages": evidence_params["stages"],
         }
 
     @staticmethod
@@ -1923,7 +1942,11 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         if float(profile["pressure"]) <= 0.0 or layer_mode not in params[
             "evidence_reconciliation_apply_modes"
         ]:
-            return legacy_keep_indices, self._evidence_bypass_stats(reconcile_mode, profile)
+            return legacy_keep_indices, self._evidence_bypass_stats(
+                reconcile_mode,
+                profile,
+                tuple(params["evidence_reconciliation_stages"]),
+            )
         if current_visual_embeds is None:
             raise ValueError("Active evidence reconciliation requires current_visual_embeds on every applied layer")
         visual_layout = context.get("visual_layout")
@@ -2000,6 +2023,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             candidate_pool_multiplier=float(candidate_pool_multiplier),
             max_swap_ratio=float(max_swap_ratio),
             local_floor_count=int(local_floor_count),
+            stages=tuple(params["evidence_reconciliation_stages"]),
         )
         _sync_if_cuda(current_visual_embeds)
         stats = dict(result["stats"])

@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 
 VALID_RECONCILIATION_MODES = {"none", "audit_only", "herc_v1", "herc_v2"}
+VALID_RECONCILIATION_STAGES = {"query", "context"}
 VALID_PROFILE_LOCKS = {"first_c"}
 VALID_CONTINUITY_REFERENCES = {"first_c"}
 VALID_HIERARCHY_AGGREGATIONS = {"harmonic", "mass_weighted"}
@@ -651,10 +652,19 @@ def reconcile_evidence(
     candidate_pool_multiplier: float,
     max_swap_ratio: float,
     local_floor_count: int = 0,
+    stages: Tuple[str, ...] = ("query", "context"),
 ) -> Dict[str, object]:
     """Audit or reconcile a legacy SCND proposal through budget-neutral swaps."""
     if mode not in VALID_RECONCILIATION_MODES - {"none"}:
         raise ValueError(f"Unsupported active evidence reconciliation mode: {mode!r}")
+    normalized_stages = tuple(str(stage).lower() for stage in stages)
+    invalid_stages = sorted(set(normalized_stages) - VALID_RECONCILIATION_STAGES)
+    if invalid_stages:
+        raise ValueError(f"Unsupported evidence reconciliation stages: {invalid_stages}")
+    if mode in {"herc_v1", "herc_v2"} and not normalized_stages:
+        raise ValueError("Active HERC requires at least one reconciliation stage")
+    query_stage_enabled = "query" in normalized_stages
+    context_stage_enabled = "context" in normalized_stages
     hierarchy_aggregation = _hierarchy_aggregation_for_mode(mode)
     selected = torch.sort(legacy_keep_indices.to(dtype=torch.long)).values
     keep_count = int(selected.numel())
@@ -728,7 +738,7 @@ def reconcile_evidence(
     query_after_query = query_before
 
     if mode in {"herc_v1", "herc_v2"} and swap_budget > 0:
-        for _ in range(swap_budget):
+        for _ in range(swap_budget if query_stage_enabled else 0):
             selected_mask = torch.zeros(
                 int(scalar_score.numel()), device=scalar_score.device, dtype=torch.bool
             )
@@ -794,7 +804,7 @@ def reconcile_evidence(
         query_floor_reference = query_after_query["reference_coverage"].clone()
         remaining_budget = swap_budget - len(query_swap_in)
 
-        for _ in range(remaining_budget):
+        for _ in range(remaining_budget if context_stage_enabled else 0):
             selected_mask = torch.zeros(
                 int(scalar_score.numel()), device=scalar_score.device, dtype=torch.bool
             )
@@ -914,6 +924,7 @@ def reconcile_evidence(
 
     stats: Dict[str, object] = {
         "evidence_reconcile_mode": mode,
+        "evidence_reconcile_stages": ",".join(normalized_stages),
         "evidence_reconcile_applied": bool(
             mode in {"herc_v1", "herc_v2"} and profile_pressure > 0.0
         ),
