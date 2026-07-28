@@ -465,6 +465,37 @@ def append_layer_stats_fields(
         "evidence_scalar_mass_after",
         "evidence_rater_count",
         "evidence_rater_js_disagreement",
+        "evidence_c_reference_survival_mass_mean",
+        "evidence_c_reference_survival_mass_min",
+        "evidence_c_reference_survival_mass_max",
+        "cf_mode",
+        "cf_applied",
+        "cf_bypassed",
+        "cf_bypass_reason",
+        "cf_profile_pressure",
+        "cf_query_scope",
+        "cf_query_count",
+        "cf_candidate_names",
+        "cf_admissible_candidates",
+        "cf_routed_candidate",
+        "cf_selected_candidate",
+        "cf_switched_from_legacy",
+        "cf_error_sum_legacy",
+        "cf_error_max_legacy",
+        "cf_error_sum_sparsevlm",
+        "cf_error_max_sparsevlm",
+        "cf_error_sum_maxmin",
+        "cf_error_max_maxmin",
+        "cf_error_sum_margin",
+        "cf_error_max_margin",
+        "cf_visual_effect_norm_sum",
+        "cf_visual_effect_norm_max",
+        "cf_jaccard_selected_vs_legacy",
+        "cf_kv_projection_time_ms",
+        "cf_candidate_build_time_ms",
+        "cf_candidate_eval_time_ms",
+        "cf_total_time_ms",
+        "cf_peak_memory_bytes",
         "global_prune_step",
         "global_current_weight",
         "global_ema_decay",
@@ -623,6 +654,12 @@ def append_layer_stats_fields(
         "evidence_reconcile_in_patch_indices",
         "evidence_reconcile_out_patch_indices",
         "evidence_reconcile_candidate_indices",
+        "evidence_c_reference_survival_mass_per_rater",
+        "cf_legacy_keep_patch_indices",
+        "cf_selected_keep_patch_indices",
+        "cf_candidate_legacy_scnd_keep_patch_indices",
+        "cf_candidate_sparsevlm_topk_keep_patch_indices",
+        "cf_candidate_native_maxmin_keep_patch_indices",
     ):
         _set_optional_layer_field(sample_stats, f"layer_{layer_idx}_{key}", layer_info.get(key))
 
@@ -938,6 +975,40 @@ def validate_loaded_model_runtime(
     return runtime_metadata
 
 
+def _benchmark_config(config: dict) -> dict[str, Any]:
+    value = config.get("benchmark", {})
+    return value if isinstance(value, dict) else {}
+
+
+def _benchmark_cuda_device(target_device: str) -> Optional[torch.device]:
+    if not torch.cuda.is_available() or not str(target_device).startswith("cuda"):
+        return None
+    return torch.device(target_device)
+
+
+def _sync_benchmark_cuda(target_device: str) -> None:
+    device = _benchmark_cuda_device(target_device)
+    if device is not None:
+        torch.cuda.synchronize(device)
+
+
+def _reset_benchmark_peak_memory(target_device: str) -> None:
+    device = _benchmark_cuda_device(target_device)
+    if device is not None:
+        torch.cuda.reset_peak_memory_stats(device)
+
+
+def _benchmark_memory_gb(target_device: str) -> tuple[Optional[float], Optional[float]]:
+    device = _benchmark_cuda_device(target_device)
+    if device is None:
+        return None, None
+    gib = float(1024**3)
+    return (
+        float(torch.cuda.max_memory_allocated(device)) / gib,
+        float(torch.cuda.memory_allocated(device)) / gib,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main inference loop with pruning
 # ---------------------------------------------------------------------------
@@ -963,6 +1034,10 @@ def run_prune_inference(
     prune_cfg = config["pruning"]
     ds_cfg = config["datasets"][dataset_name]
     output_cfg = config["output"]
+    benchmark_cfg = _benchmark_config(config)
+    benchmark_enabled = bool(benchmark_cfg.get("enabled", False))
+    benchmark_profile_timing = bool(benchmark_cfg.get("profile_timing", benchmark_enabled))
+    benchmark_warmup_samples = max(0, int(benchmark_cfg.get("warmup_samples", 0)))
 
     if run_mode not in {"prune", "baseline"}:
         raise ValueError(f"Unknown run_mode: {run_mode}")
@@ -981,6 +1056,8 @@ def run_prune_inference(
         model_path,
         model_config_metadata=model_config_metadata,
     )
+    if benchmark_profile_timing:
+        effective_prune_cfg["profile_timing"] = True
     strategy_extra = effective_prune_cfg.get(strategy_name, {})
     strategy_config = {
         **effective_prune_cfg,
@@ -1067,6 +1144,11 @@ def run_prune_inference(
             "dataset": dataset_name,
             "strategy": strategy_branch,
             "max_samples": max_samples,
+            "benchmark": {
+                "enabled": benchmark_enabled,
+                "profile_timing": benchmark_profile_timing,
+                "warmup_samples": benchmark_warmup_samples,
+            },
             "timestamp": timestamp,
             "run_name": run_name,
             "run_rel_dir": build_run_rel_dir(base_dir, strategy_branch, dataset_name, run_name),
@@ -1220,8 +1302,16 @@ def run_prune_inference(
             v_token_start = None
             sample_v_token_num = 0
             text_token_start = None
+            sample_is_warmup = benchmark_profile_timing and sample_idx < benchmark_warmup_samples
+            sample_wall_time = None
+            peak_memory_gb = None
+            allocated_memory_gb = None
 
             try:
+                if benchmark_profile_timing:
+                    _sync_benchmark_cuda(target_device)
+                    _reset_benchmark_peak_memory(target_device)
+                    sample_wall_start = time.perf_counter()
                 input_ids_cuda = input_ids.to(device=target_device, non_blocking=True)
                 if has_image:
                     # --- prepare multimodal embeddings ---
@@ -1298,7 +1388,7 @@ def run_prune_inference(
                     text_special_token_mask = build_text_special_token_mask(tokenizer, text_token_ids)
 
                     # --- generate with pruning ---
-                    t0 = time.time()
+                    t0 = time.perf_counter()
                     generated_ids, prune_info = pruner.pruned_generate(
                         inputs_embeds=inputs_embeds,
                         attention_mask=attention_mask,
@@ -1315,12 +1405,12 @@ def run_prune_inference(
                         capture_visual_hidden_layers={rep_diag_layer} if rep_diag_enabled else None,
                         visual_layout=visual_layout,
                     )
-                    t1 = time.time()
+                    t1 = time.perf_counter()
                     total_time += (t1 - t0)
 
                     answer_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
                 else:
-                    t0 = time.time()
+                    t0 = time.perf_counter()
                     output_ids = model.generate(
                         inputs=input_ids_cuda,
                         do_sample=True if infer_cfg["temperature"] > 0 else False,
@@ -1330,7 +1420,7 @@ def run_prune_inference(
                         max_new_tokens=max_new_tokens,
                         use_cache=True,
                     )
-                    t1 = time.time()
+                    t1 = time.perf_counter()
                     total_time += (t1 - t0)
 
                     prompt_length = int(input_ids_cuda.shape[1])
@@ -1348,6 +1438,10 @@ def run_prune_inference(
                         "prune_stage": "text_only_no_prune",
                         "layers": {},
                     }
+                if benchmark_profile_timing:
+                    _sync_benchmark_cuda(target_device)
+                    sample_wall_time = time.perf_counter() - sample_wall_start
+                    peak_memory_gb, allocated_memory_gb = _benchmark_memory_gb(target_device)
                 break
             except torch.cuda.OutOfMemoryError:
                 retry_count += 1
@@ -1405,6 +1499,32 @@ def run_prune_inference(
             "prefill_time": prune_info["prefill_time"],
             "decode_time": prune_info["decode_time"],
             "total_time": prune_info["total_time"],
+            "prefill_time_ms": prune_info.get(
+                "prefill_time_ms",
+                None if prune_info["prefill_time"] is None else float(prune_info["prefill_time"]) * 1000.0,
+            ),
+            "decode_time_ms": prune_info.get(
+                "decode_time_ms",
+                None if prune_info["decode_time"] is None else float(prune_info["decode_time"]) * 1000.0,
+            ),
+            "total_time_ms": prune_info.get(
+                "total_time_ms",
+                None if prune_info["total_time"] is None else float(prune_info["total_time"]) * 1000.0,
+            ),
+            "end_to_end_time_ms": (
+                None if sample_wall_time is None else float(sample_wall_time) * 1000.0
+            ),
+            "decode_tokens_per_second": (
+                None
+                if prune_info["decode_time"] is None or float(prune_info["decode_time"]) <= 0.0
+                else float(prune_info["num_generated_tokens"]) / float(prune_info["decode_time"])
+            ),
+            "benchmark_enabled": benchmark_enabled,
+            "benchmark_profile_timing": benchmark_profile_timing,
+            "benchmark_is_warmup": sample_is_warmup,
+            "benchmark_warmup_samples": benchmark_warmup_samples,
+            "peak_memory_gb": peak_memory_gb,
+            "allocated_memory_gb": allocated_memory_gb,
         }
         if visual_layout is not None:
             sample_stats.update(

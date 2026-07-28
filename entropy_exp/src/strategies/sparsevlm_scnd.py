@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -20,6 +20,13 @@ from .scnd_entropy_calibration import (
     VALID_CALIBRATION_MODES,
     apply_entropy_calibration,
     load_calibration_artifact,
+)
+from .scnd_counterfactual import (
+    NextLayerRoutingContext,
+    build_next_layer_preview,
+    compute_visual_effect_errors,
+    global_maxmin_candidate_exact,
+    select_candidate_deterministically,
 )
 from .scnd_herc import (
     VALID_CONTINUITY_REFERENCES,
@@ -43,13 +50,29 @@ from .sparsevlm_diverse_mmr import (
     _saliency_mass_ratio,
     _selected_mean_pairwise_distance,
 )
-from .sparsevlm_score_memory import compute_entropy_stats, deterministic_descending_indices, rank_normalize_scores
+from .sparsevlm_score_memory import (
+    compute_entropy_stats,
+    deterministic_descending_indices,
+    deterministic_topk_indices,
+    rank_normalize_scores,
+)
 
 
 VALID_LAYER_MODES = {"C", "B", "S"}
 VALID_SELECTION_BACKENDS = {"auto", "gpu", "python"}
 VALID_C_SELECTION_RULES = {"native", "random_feasible"}
 VALID_DISTANCE_METRICS = {"cosine", "euclidean", "dot"}
+VALID_COUNTERFACTUAL_MODES = {"none", "audit_only", "route", "force_candidate"}
+VALID_COUNTERFACTUAL_CANDIDATES = {
+    "legacy_scnd",
+    "sparsevlm_topk",
+    "native_maxmin",
+}
+COUNTERFACTUAL_CANDIDATE_ORDER = (
+    "legacy_scnd",
+    "sparsevlm_topk",
+    "native_maxmin",
+)
 VALID_VISUAL_ROLE_CONSTRAINT_MODES = {
     "none",
     "local_floor",
@@ -207,6 +230,83 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             ),
         }
 
+    def _get_counterfactual_params(self) -> Dict[str, object]:
+        cfg = self.config.get("next_layer_counterfactual", {}) or {}
+        if not isinstance(cfg, dict):
+            raise ValueError("sparsevlm_scnd.next_layer_counterfactual must be a mapping")
+        mode = str(cfg.get("mode", "none")).lower()
+        apply_modes = cfg.get("apply_modes", ["C"])
+        if isinstance(apply_modes, str):
+            apply_modes = [value.strip() for value in apply_modes.split(",") if value.strip()]
+        apply_modes = tuple(str(value).upper() for value in apply_modes)
+        profile_lock = str(cfg.get("profile_lock", "first_c")).lower()
+        query_scope = str(cfg.get("query_scope", "all_non_special_text")).lower()
+        candidate_sets = cfg.get("candidate_sets", list(COUNTERFACTUAL_CANDIDATE_ORDER))
+        if isinstance(candidate_sets, str):
+            candidate_sets = [value.strip() for value in candidate_sets.split(",") if value.strip()]
+        candidate_sets = tuple(str(value).lower() for value in candidate_sets)
+        require_pareto = bool(cfg.get("require_pareto_dominance", True))
+        forced_candidate = cfg.get("forced_candidate")
+        forced_candidate = None if forced_candidate is None else str(forced_candidate).lower()
+
+        if mode not in VALID_COUNTERFACTUAL_MODES:
+            raise ValueError(
+                "sparsevlm_scnd.next_layer_counterfactual.mode only supports "
+                f"{sorted(VALID_COUNTERFACTUAL_MODES)}, got {mode!r}"
+            )
+        if apply_modes != ("C",):
+            raise ValueError("NLCR v1 requires next_layer_counterfactual.apply_modes=[\"C\"]")
+        if profile_lock != "first_c":
+            raise ValueError("NLCR v1 requires next_layer_counterfactual.profile_lock=first_c")
+        if query_scope != "all_non_special_text":
+            raise ValueError(
+                "NLCR v1 only supports next_layer_counterfactual.query_scope=all_non_special_text"
+            )
+        invalid_candidates = sorted(set(candidate_sets) - VALID_COUNTERFACTUAL_CANDIDATES)
+        if invalid_candidates:
+            raise ValueError(
+                "next_layer_counterfactual.candidate_sets only supports "
+                f"{sorted(VALID_COUNTERFACTUAL_CANDIDATES)}, got {invalid_candidates}"
+            )
+        if len(candidate_sets) != len(set(candidate_sets)):
+            raise ValueError("next_layer_counterfactual.candidate_sets must not contain duplicates")
+        if "legacy_scnd" not in candidate_sets:
+            raise ValueError("next_layer_counterfactual.candidate_sets must include legacy_scnd")
+        if mode == "route" and not require_pareto:
+            raise ValueError("NLCR route mode requires require_pareto_dominance=true")
+        if mode == "force_candidate":
+            if forced_candidate not in {"sparsevlm_topk", "native_maxmin"}:
+                raise ValueError(
+                    "force_candidate mode requires forced_candidate=sparsevlm_topk or native_maxmin"
+                )
+            if forced_candidate not in candidate_sets:
+                raise ValueError("forced_candidate must be present in candidate_sets")
+        elif forced_candidate is not None:
+            raise ValueError("forced_candidate is only valid when mode=force_candidate")
+
+        if mode != "none":
+            if str(self.config.get("c_selection_rule", "native")).lower() != "native":
+                raise ValueError("Active NLCR requires c_selection_rule=native")
+            if str(self.config.get("distance_metric", "cosine")).lower() != "cosine":
+                raise ValueError("Active NLCR requires distance_metric=cosine")
+            evidence_mode = str(
+                (self.config.get("evidence_reconciliation", {}) or {}).get("mode", "none")
+            ).lower()
+            if evidence_mode != "none":
+                raise ValueError("Active NLCR cannot be combined with active evidence_reconciliation")
+            if "C" not in self._layer_mode_map().values():
+                raise ValueError("Active NLCR requires a C layer")
+
+        return {
+            "mode": mode,
+            "apply_modes": apply_modes,
+            "profile_lock": profile_lock,
+            "query_scope": query_scope,
+            "candidate_sets": candidate_sets,
+            "require_pareto_dominance": require_pareto,
+            "forced_candidate": forced_candidate,
+        }
+
     def _evidence_profile(self, params: Dict[str, object]) -> Dict[str, float | int]:
         mode_map = self._layer_mode_map()
         first_c_layer = next(layer for layer, mode in mode_map.items() if mode == "C")
@@ -292,6 +392,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             visual_role_cfg.get("min_local_saliency_mass_ratio", 0.70)
         )
         evidence_params = self._get_evidence_reconciliation_params()
+        counterfactual_params = self._get_counterfactual_params()
 
         if not 0.0 <= seed_ratio_min <= seed_ratio_max <= 1.0:
             raise ValueError(
@@ -401,6 +502,15 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             ],
             "evidence_reconciliation_max_swap_ratio": evidence_params["max_swap_ratio"],
             "evidence_reconciliation_stages": evidence_params["stages"],
+            "counterfactual_mode": counterfactual_params["mode"],
+            "counterfactual_apply_modes": counterfactual_params["apply_modes"],
+            "counterfactual_profile_lock": counterfactual_params["profile_lock"],
+            "counterfactual_query_scope": counterfactual_params["query_scope"],
+            "counterfactual_candidate_sets": counterfactual_params["candidate_sets"],
+            "counterfactual_require_pareto_dominance": counterfactual_params[
+                "require_pareto_dominance"
+            ],
+            "counterfactual_forced_candidate": counterfactual_params["forced_candidate"],
         }
 
     @staticmethod
@@ -2046,11 +2156,397 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 "evidence_reconcile_time_ms": (time.perf_counter() - start) * 1000.0,
             }
         )
+        reference_by_original = context.get("evidence_c_reference")
+        if reference_by_original is not None:
+            final_keep = torch.as_tensor(
+                result["keep_indices"],
+                device=current_patch_indices.device,
+                dtype=torch.long,
+            )
+            selected_original = current_patch_indices.index_select(0, final_keep).to(
+                device=current_distributions.device,
+                dtype=torch.long,
+            )
+            survival_mass = torch.as_tensor(
+                reference_by_original,
+                device=current_distributions.device,
+                dtype=torch.float32,
+            ).index_select(1, selected_original).sum(dim=1)
+            stats.update(
+                {
+                    "evidence_c_reference_survival_mass_mean": float(survival_mass.mean().item()),
+                    "evidence_c_reference_survival_mass_min": float(survival_mass.min().item()),
+                    "evidence_c_reference_survival_mass_max": float(survival_mass.max().item()),
+                    "evidence_c_reference_survival_mass_per_rater": survival_mass.detach()
+                    .cpu()
+                    .numpy(),
+                }
+            )
         return torch.as_tensor(
             result["keep_indices"],
             device=legacy_keep_indices.device,
             dtype=torch.long,
         ), stats
+
+    @staticmethod
+    def _counterfactual_bypass_stats(
+        *,
+        mode: str,
+        profile: Dict[str, float | int],
+        query_scope: str,
+        reason: str,
+    ) -> Dict[str, object]:
+        return {
+            "cf_mode": mode,
+            "cf_applied": False,
+            "cf_bypassed": True,
+            "cf_bypass_reason": reason,
+            "cf_profile_pressure": float(profile["pressure"]),
+            "cf_query_scope": query_scope,
+            "cf_query_count": 0,
+            "cf_candidate_names": "",
+            "cf_selected_candidate": "legacy_scnd",
+            "cf_switched_from_legacy": False,
+            "cf_kv_projection_time_ms": 0.0,
+            "cf_candidate_eval_time_ms": 0.0,
+            "cf_candidate_build_time_ms": 0.0,
+            "cf_total_time_ms": 0.0,
+            "cf_peak_memory_bytes": 0,
+        }
+
+    def _build_counterfactual_candidates(
+        self,
+        pending: Dict[str, Any],
+    ) -> Dict[str, torch.Tensor]:
+        legacy = torch.as_tensor(
+            pending["legacy_keep_indices"],
+            device=pending["visual_scores"].device,
+            dtype=torch.long,
+        ).flatten().sort().values
+        keep_count = int(legacy.numel())
+        visual_scores = pending["visual_scores"]
+        requested = tuple(pending["params"]["counterfactual_candidate_sets"])
+        candidates: Dict[str, torch.Tensor] = {"legacy_scnd": legacy}
+        if "sparsevlm_topk" in requested:
+            candidates["sparsevlm_topk"] = deterministic_topk_indices(
+                visual_scores,
+                keep_count,
+            )
+        if "native_maxmin" in requested:
+            distance = pending["distance"]
+            selected_order = global_maxmin_candidate_exact(
+                distance=distance,
+                saliency_score=visual_scores,
+                keep_count=keep_count,
+            )
+            candidates["native_maxmin"] = selected_order.sort().values
+
+        for name, candidate in candidates.items():
+            if int(candidate.numel()) != keep_count:
+                raise AssertionError(
+                    f"Counterfactual candidate {name} has {candidate.numel()} tokens; expected {keep_count}"
+                )
+            if int(torch.unique(candidate).numel()) != keep_count:
+                raise AssertionError(f"Counterfactual candidate {name} contains duplicate indices")
+        return candidates
+
+    @staticmethod
+    def _counterfactual_jaccard(first: torch.Tensor, second: torch.Tensor) -> float:
+        first_set = set(int(value) for value in first.detach().cpu().tolist())
+        second_set = set(int(value) for value in second.detach().cpu().tolist())
+        union = first_set | second_set
+        return 1.0 if not union else len(first_set & second_set) / len(union)
+
+    def _finalize_counterfactual_selection(
+        self,
+        *,
+        pending: Dict[str, Any],
+        layer_info: Dict[str, Any],
+        candidates: Dict[str, torch.Tensor],
+        selected_name: str,
+        routing_stats: Dict[str, Any],
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        keep_indices = candidates[selected_name].sort().values
+        num_visual = int(pending["visual_scores"].numel())
+        pruned_mask = torch.ones(
+            num_visual,
+            device=keep_indices.device,
+            dtype=torch.bool,
+        )
+        pruned_mask[keep_indices] = False
+        pruned_indices = torch.nonzero(pruned_mask, as_tuple=False).flatten()
+        current_patch_indices = pending["current_patch_indices"]
+        keep_patch_indices = current_patch_indices.index_select(0, keep_indices)
+        pruned_patch_indices = current_patch_indices.index_select(0, pruned_indices)
+        visual_scores = pending["visual_scores"]
+        mixed_score = pending["mixed_score"]
+        legacy_keep = candidates["legacy_scnd"]
+
+        canonical = {
+            "keep_indices": keep_indices.detach().cpu().numpy(),
+            "pruned_indices": pruned_indices.detach().cpu().numpy(),
+            "keep_patch_indices": keep_patch_indices.detach().cpu().numpy(),
+            "pruned_patch_indices": pruned_patch_indices.detach().cpu().numpy(),
+            "num_visual_after": int(keep_indices.numel()),
+            "num_pruned": int(pruned_indices.numel()),
+            "mean_selected_pairwise_distance": _selected_mean_pairwise_distance(
+                pending["distance"],
+                keep_indices,
+            ),
+            "retained_saliency_mass_ratio": _saliency_mass_ratio(visual_scores, keep_indices),
+            "saliency_mass_selected": float(
+                mixed_score.to(dtype=torch.float32)
+                .clamp_min(0.0)
+                .index_select(0, keep_indices)
+                .sum()
+                .item()
+            ),
+            "cf_jaccard_selected_vs_legacy": self._counterfactual_jaccard(
+                keep_indices,
+                legacy_keep,
+            ),
+            "cf_legacy_keep_patch_indices": current_patch_indices.index_select(
+                0,
+                legacy_keep,
+            ).detach().cpu().numpy(),
+            "cf_selected_keep_patch_indices": keep_patch_indices.detach().cpu().numpy(),
+        }
+        for candidate_name, candidate in candidates.items():
+            canonical[f"cf_candidate_{candidate_name}_keep_patch_indices"] = (
+                current_patch_indices.index_select(0, candidate).detach().cpu().numpy()
+            )
+
+        role_ids = pending.get("visual_role_ids")
+        if role_ids is not None:
+            canonical["selected_local_patch_count"] = int(
+                (role_ids.index_select(0, keep_indices) == ROLE_LOCAL_PATCH).sum().item()
+            )
+        if selected_name != "legacy_scnd":
+            canonical["selection_rule"] = f"next_layer_counterfactual_{selected_name}"
+            canonical["layer_strategy_effective"] = "sparsevlm_scnd_nlcr"
+        else:
+            canonical["selection_rule"] = layer_info["selection_rule"]
+            canonical["layer_strategy_effective"] = layer_info["layer_strategy_effective"]
+
+        canonical.update(routing_stats)
+        return keep_indices, canonical
+
+    def wants_post_selection_routing(self, layer_idx: int, layer_info: Dict[str, Any]) -> bool:
+        del layer_info
+        context = self.sample_context
+        if context is None:
+            return False
+        pending = context.get("counterfactual_pending")
+        return bool(pending is not None and int(pending["layer_idx"]) == int(layer_idx))
+
+    def route_keep_indices(
+        self,
+        *,
+        legacy_keep_indices: torch.Tensor,
+        layer_idx: int,
+        layer_info: Dict[str, Any],
+        routing_context: NextLayerRoutingContext,
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        context = self._require_sample_context()
+        pending = context.get("counterfactual_pending")
+        if pending is None or int(pending["layer_idx"]) != int(layer_idx):
+            raise RuntimeError(f"Missing NLCR pending state for layer {layer_idx}")
+        try:
+            if not torch.equal(
+                torch.as_tensor(legacy_keep_indices, device=pending["visual_scores"].device).sort().values,
+                torch.as_tensor(pending["legacy_keep_indices"]).sort().values,
+            ):
+                raise AssertionError("NLCR legacy keep indices changed before routing")
+
+            _sync_if_cuda(pending["visual_scores"])
+            total_start = time.perf_counter()
+            start_allocated = (
+                torch.cuda.memory_allocated(pending["visual_scores"].device)
+                if pending["visual_scores"].is_cuda
+                else 0
+            )
+            candidate_build_start = time.perf_counter()
+            candidates = self._build_counterfactual_candidates(pending)
+            _sync_if_cuda(pending["visual_scores"])
+            candidate_build_time_ms = (time.perf_counter() - candidate_build_start) * 1000.0
+            params = pending["params"]
+            mode = str(params["counterfactual_mode"])
+            candidate_order = tuple(
+                name
+                for name in COUNTERFACTUAL_CANDIDATE_ORDER
+                if name in candidates
+            )
+
+            if mode == "force_candidate":
+                selected_name = str(params["counterfactual_forced_candidate"])
+                routing_stats: Dict[str, Any] = {
+                    "cf_mode": mode,
+                    "cf_applied": True,
+                    "cf_bypassed": False,
+                    "cf_bypass_reason": "",
+                    "cf_profile_pressure": float(pending["profile"]["pressure"]),
+                    "cf_query_scope": str(params["counterfactual_query_scope"]),
+                    "cf_query_count": 0,
+                    "cf_candidate_names": ",".join(candidate_order),
+                    "cf_admissible_candidates": selected_name,
+                    "cf_selected_candidate": selected_name,
+                    "cf_switched_from_legacy": selected_name != "legacy_scnd",
+                    "cf_kv_projection_time_ms": 0.0,
+                    "cf_candidate_eval_time_ms": 0.0,
+                    "cf_candidate_build_time_ms": candidate_build_time_ms,
+                }
+            else:
+                try:
+                    preview = build_next_layer_preview(routing_context)
+                except NotImplementedError as exc:
+                    bypass = self._counterfactual_bypass_stats(
+                        mode=mode,
+                        profile=pending["profile"],
+                        query_scope=str(params["counterfactual_query_scope"]),
+                        reason=f"unsupported_decoder_architecture:{exc}",
+                    )
+                    return legacy_keep_indices, bypass
+                if preview is None:
+                    bypass = self._counterfactual_bypass_stats(
+                        mode=mode,
+                        profile=pending["profile"],
+                        query_scope=str(params["counterfactual_query_scope"]),
+                        reason="no_non_special_text_queries",
+                    )
+                    return legacy_keep_indices, bypass
+
+                _sync_if_cuda(pending["visual_scores"])
+                eval_start = time.perf_counter()
+                empty = torch.empty(
+                    0,
+                    device=pending["visual_scores"].device,
+                    dtype=torch.long,
+                )
+                full = torch.arange(
+                    int(pending["visual_scores"].numel()),
+                    device=pending["visual_scores"].device,
+                    dtype=torch.long,
+                )
+                phi_empty = preview.evaluate(empty)
+                phi_full = preview.evaluate(full)
+                errors: Dict[str, Dict[str, float | bool]] = {}
+                for candidate_name in candidate_order:
+                    phi_candidate = preview.evaluate(candidates[candidate_name])
+                    errors[candidate_name] = compute_visual_effect_errors(
+                        phi_keep=phi_candidate,
+                        phi_empty=phi_empty,
+                        phi_full=phi_full,
+                    )
+                _sync_if_cuda(pending["visual_scores"])
+                candidate_eval_time_ms = (time.perf_counter() - eval_start) * 1000.0
+
+                reference_stats = errors["legacy_scnd"]
+                if bool(reference_stats["degenerate_reference"]):
+                    bypass = self._counterfactual_bypass_stats(
+                        mode=mode,
+                        profile=pending["profile"],
+                        query_scope=str(params["counterfactual_query_scope"]),
+                        reason="degenerate_visual_reference",
+                    )
+                    bypass["cf_query_count"] = preview.query_count
+                    bypass["cf_kv_projection_time_ms"] = preview.projection_time_ms
+                    bypass["cf_candidate_eval_time_ms"] = candidate_eval_time_ms
+                    return legacy_keep_indices, bypass
+
+                routed_name, admissible = select_candidate_deterministically(
+                    errors,
+                    candidate_order,
+                )
+                selected_name = routed_name if mode == "route" else "legacy_scnd"
+                routing_stats = {
+                    "cf_mode": mode,
+                    "cf_applied": True,
+                    "cf_bypassed": False,
+                    "cf_bypass_reason": "",
+                    "cf_profile_pressure": float(pending["profile"]["pressure"]),
+                    "cf_query_scope": str(params["counterfactual_query_scope"]),
+                    "cf_query_count": preview.query_count,
+                    "cf_candidate_names": ",".join(candidate_order),
+                    "cf_admissible_candidates": ",".join(admissible),
+                    "cf_routed_candidate": routed_name,
+                    "cf_selected_candidate": selected_name,
+                    "cf_switched_from_legacy": selected_name != "legacy_scnd",
+                    "cf_kv_projection_time_ms": preview.projection_time_ms,
+                    "cf_candidate_eval_time_ms": candidate_eval_time_ms,
+                    "cf_candidate_build_time_ms": candidate_build_time_ms,
+                    "cf_visual_effect_norm_sum": float(reference_stats["visual_effect_norm_sum"]),
+                    "cf_visual_effect_norm_max": float(reference_stats["visual_effect_norm_max"]),
+                }
+                error_field_names = {
+                    "legacy_scnd": "legacy",
+                    "sparsevlm_topk": "sparsevlm",
+                    "native_maxmin": "maxmin",
+                }
+                for candidate_name, values in errors.items():
+                    suffix = error_field_names[candidate_name]
+                    routing_stats[f"cf_error_sum_{suffix}"] = float(values["error_sum"])
+                    routing_stats[f"cf_error_max_{suffix}"] = float(values["error_max"])
+                selected_errors = errors[selected_name]
+                routing_stats["cf_error_sum_margin"] = float(
+                    errors["legacy_scnd"]["error_sum"] - selected_errors["error_sum"]
+                )
+                routing_stats["cf_error_max_margin"] = float(
+                    errors["legacy_scnd"]["error_max"] - selected_errors["error_max"]
+                )
+
+            if mode == "audit_only":
+                current_patch_indices = pending["current_patch_indices"]
+                legacy_keep = candidates["legacy_scnd"]
+                audit_stats: Dict[str, Any] = {
+                    **routing_stats,
+                    "cf_jaccard_selected_vs_legacy": 1.0,
+                    "cf_legacy_keep_patch_indices": current_patch_indices.index_select(
+                        0,
+                        legacy_keep,
+                    ).detach().cpu().numpy(),
+                    "cf_selected_keep_patch_indices": current_patch_indices.index_select(
+                        0,
+                        legacy_keep,
+                    ).detach().cpu().numpy(),
+                }
+                for candidate_name, candidate in candidates.items():
+                    audit_stats[f"cf_candidate_{candidate_name}_keep_patch_indices"] = (
+                        current_patch_indices.index_select(0, candidate).detach().cpu().numpy()
+                    )
+                _sync_if_cuda(pending["visual_scores"])
+                audit_stats["cf_total_time_ms"] = (time.perf_counter() - total_start) * 1000.0
+                audit_stats["cf_peak_memory_bytes"] = (
+                    max(
+                        int(torch.cuda.max_memory_allocated(pending["visual_scores"].device))
+                        - int(start_allocated),
+                        0,
+                    )
+                    if pending["visual_scores"].is_cuda
+                    else 0
+                )
+                return legacy_keep_indices, audit_stats
+
+            keep_indices, final_stats = self._finalize_counterfactual_selection(
+                pending=pending,
+                layer_info=layer_info,
+                candidates=candidates,
+                selected_name=selected_name,
+                routing_stats=routing_stats,
+            )
+            _sync_if_cuda(pending["visual_scores"])
+            final_stats["cf_total_time_ms"] = (time.perf_counter() - total_start) * 1000.0
+            final_stats["cf_peak_memory_bytes"] = (
+                max(
+                    int(torch.cuda.max_memory_allocated(pending["visual_scores"].device))
+                    - int(start_allocated),
+                    0,
+                )
+                if pending["visual_scores"].is_cuda
+                else 0
+            )
+            return keep_indices, final_stats
+        finally:
+            context["counterfactual_pending"] = None
 
     def compute_keep_mask(
         self,
@@ -2066,6 +2562,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             raise ValueError("SparseVLMSCNDStrategy requires attention weights")
 
         context = self._require_sample_context()
+        context.setdefault("counterfactual_pending", None)
         current_patch_indices = self._require_current_patch_indices(context, v_token_num)
         mode = self._layer_mode(layer_idx)
         evidence_params = self._get_evidence_reconciliation_params()
@@ -2144,6 +2641,20 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             )
 
         params = self._get_scnd_params()
+        counterfactual_mode = str(params["counterfactual_mode"])
+        counterfactual_profile: Optional[Dict[str, float | int]] = None
+        counterfactual_bypass_stats: Dict[str, object] = {}
+        if mode == "C" and counterfactual_mode != "none":
+            candidate_profile = self._evidence_profile(params)
+            if int(layer_idx) == int(candidate_profile["first_c_layer"]):
+                counterfactual_profile = candidate_profile
+                if float(candidate_profile["pressure"]) <= 0.0:
+                    counterfactual_bypass_stats = self._counterfactual_bypass_stats(
+                        mode=counterfactual_mode,
+                        profile=candidate_profile,
+                        query_scope=str(params["counterfactual_query_scope"]),
+                        reason="high_budget_profile",
+                    )
         requested_backend = str(params["selection_backend"])
         if requested_backend == "python":
             selection_backend_effective = "python"
@@ -2387,6 +2898,28 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
         patch_info = self._patch_index_info(current_patch_indices, keep_indices, pruned_indices)
         self._set_pending_decision(context, current_patch_indices, layer_idx)
 
+        if (
+            mode == "C"
+            and counterfactual_mode != "none"
+            and counterfactual_profile is not None
+            and float(counterfactual_profile["pressure"]) > 0.0
+        ):
+            assert distance is not None
+            context["counterfactual_pending"] = {
+                "layer_idx": int(layer_idx),
+                "legacy_keep_indices": keep_indices.detach(),
+                "visual_scores": visual_scores.detach(),
+                "current_rank_score": current_rank_score.detach(),
+                "mixed_score": mixed_score.detach(),
+                "distance": distance.detach(),
+                "current_patch_indices": current_patch_indices.detach(),
+                "visual_role_ids": (
+                    None if current_visual_role_ids is None else current_visual_role_ids.detach()
+                ),
+                "params": params,
+                "profile": counterfactual_profile,
+            }
+
         info = {
             "prune_ratio": prune_ratio,
             "num_visual_before": v_token_num,
@@ -2481,5 +3014,6 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 info[key] = value
 
         info.update(evidence_stats)
+        info.update(counterfactual_bypass_stats)
 
         return keep_indices, info

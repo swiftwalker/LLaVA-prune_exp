@@ -49,6 +49,23 @@ class PruneStrategy(ABC):
         """Update any sample-local state after a physical pruning step."""
         del keep_indices, layer_idx
 
+    def wants_post_selection_routing(self, layer_idx: int, layer_info: Dict[str, Any]) -> bool:
+        """Whether the pruner should expose read-only next-layer state for routing."""
+        del layer_idx, layer_info
+        return False
+
+    def route_keep_indices(
+        self,
+        *,
+        legacy_keep_indices: torch.Tensor,
+        layer_idx: int,
+        layer_info: Dict[str, Any],
+        routing_context: Any,
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        """Optionally replace a complete selected set before physical pruning."""
+        del layer_idx, layer_info, routing_context
+        return legacy_keep_indices, {}
+
     @abstractmethod
     def compute_importance(
         self,

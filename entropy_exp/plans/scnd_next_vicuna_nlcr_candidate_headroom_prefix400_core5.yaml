@@ -1,0 +1,81 @@
+version: 1
+label: "scnd-next-vicuna-nlcr-candidate-headroom-prefix400-core5"
+pool_size: 4
+
+gpu:
+  min_free_gib: 18
+  selection: "max_free"
+  sample_seconds: 2
+  poll_interval_seconds: 10
+
+retry:
+  budget_ratio: 0.4
+  rounding: "ceil"
+
+tmux:
+  session_name: "sched_scnd_next_vicuna_nlcr_headroom_prefix400"
+  log_dir: "entropy_exp/outputs/logs/tmux"
+
+environment:
+  conda_sh: "/opt/miniconda3/etc/profile.d/conda.sh"
+  conda_env: "/data_ssd/liuyu/.conda/envs/llava-next"
+  extra_env:
+    - "PYTHON_BIN=/data_ssd/liuyu/.conda/envs/llava-next/bin/python"
+    - "PREFERRED_LLAVA_ENV_NAME=llava-next"
+    - "HF_HUB_OFFLINE=1"
+    - "TRANSFORMERS_OFFLINE=1"
+    - "TOKENIZERS_PARALLELISM=false"
+
+defaults:
+  max_samples: 400
+  extra_sets:
+    - "model.path=entropy_exp/models/llava-v1.6-vicuna-7b"
+    - "model.name=llava-v1.6-vicuna-7b"
+    - "model.attn_implementation=eager"
+    - "model.disable_mmap=false"
+    - "inference.conv_mode=vicuna_v1"
+    - "inference.seed=42"
+    - "pruning.layer_selection=fixed"
+    - "pruning.prune_layers=[2,6,16]"
+    - "pruning.prune_ratio=[0.8854166666666666,0.5454545454545454,0.43333333333333335]"
+    - "pruning.v_token_num=auto"
+    - "pruning.sparsevlm_scnd.layer_modes=[\"C\",\"B\",\"S\"]"
+    - "pruning.sparsevlm_scnd.selection_backend=gpu"
+    - "pruning.sparsevlm_scnd.c_selection_rule=native"
+    - "pruning.sparsevlm_scnd.entropy_calibration.mode=budget_adaptive_quantile"
+    - "pruning.sparsevlm_scnd.entropy_calibration.artifact_path=entropy_exp/outputs/scnd_next_vicuna_entropy_recalibration/calibration/scnd_next_vicuna_l2_q05_q95.json"
+    - "pruning.sparsevlm_scnd.entropy_calibration.budget_keep_fraction_low=0.125"
+    - "pruning.sparsevlm_scnd.entropy_calibration.budget_keep_fraction_high=0.5"
+    - "pruning.sparsevlm_scnd.entropy_calibration.diversity_tail_gain=1.0"
+    - "pruning.sparsevlm_scnd.visual_role_constraint.mode=budget_adaptive_saliency_gated_local_floor"
+    - "pruning.sparsevlm_scnd.visual_role_constraint.local_floor_ratio=1.0"
+    - "pruning.sparsevlm_scnd.visual_role_constraint.budget_keep_fraction_low=0.125"
+    - "pruning.sparsevlm_scnd.visual_role_constraint.budget_keep_fraction_high=0.5"
+    - "pruning.sparsevlm_scnd.visual_role_constraint.max_visual_tokens_before=2200"
+    - "pruning.sparsevlm_scnd.visual_role_constraint.min_local_saliency_mass_ratio=0.70"
+    - "pruning.sparsevlm_scnd.evidence_reconciliation.mode=none"
+    - "pruning.sparsevlm_scnd.next_layer_counterfactual.candidate_sets=[\"legacy_scnd\",\"sparsevlm_topk\",\"native_maxmin\"]"
+    - "pruning.sparsevlm_scnd.next_layer_counterfactual.require_pareto_dominance=true"
+    - "pruning.sparsevlm_scnd.seed=42"
+    - "pruning.sparsevlm_scnd.use_score_memory=false"
+    - "capture.save_attention=false"
+    - "capture.save_importance_scores=false"
+    - "capture.save_keep_indices=true"
+    - "output.base_dir=entropy_exp/outputs/scnd_next_vicuna_nlcr_candidate_headroom_prefix400_core5"
+
+experiments:
+  - {name: "gqa_audit", dataset: "gqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=audit_only", "output.run_tag_suffix=next_vicuna_nlcr_audit_prefix400"]}
+  - {name: "gqa_force_topk", dataset: "gqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=sparsevlm_topk", "output.run_tag_suffix=next_vicuna_nlcr_force_topk_prefix400"]}
+  - {name: "gqa_force_maxmin", dataset: "gqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=native_maxmin", "output.run_tag_suffix=next_vicuna_nlcr_force_maxmin_prefix400"]}
+  - {name: "textvqa_audit", dataset: "textvqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=audit_only", "output.run_tag_suffix=next_vicuna_nlcr_audit_prefix400"]}
+  - {name: "textvqa_force_topk", dataset: "textvqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=sparsevlm_topk", "output.run_tag_suffix=next_vicuna_nlcr_force_topk_prefix400"]}
+  - {name: "textvqa_force_maxmin", dataset: "textvqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=native_maxmin", "output.run_tag_suffix=next_vicuna_nlcr_force_maxmin_prefix400"]}
+  - {name: "pope_audit", dataset: "pope", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=audit_only", "output.run_tag_suffix=next_vicuna_nlcr_audit_prefix400"]}
+  - {name: "pope_force_topk", dataset: "pope", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=sparsevlm_topk", "output.run_tag_suffix=next_vicuna_nlcr_force_topk_prefix400"]}
+  - {name: "pope_force_maxmin", dataset: "pope", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=native_maxmin", "output.run_tag_suffix=next_vicuna_nlcr_force_maxmin_prefix400"]}
+  - {name: "mme_audit", dataset: "mme", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=audit_only", "output.run_tag_suffix=next_vicuna_nlcr_audit_prefix400"]}
+  - {name: "mme_force_topk", dataset: "mme", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=sparsevlm_topk", "output.run_tag_suffix=next_vicuna_nlcr_force_topk_prefix400"]}
+  - {name: "mme_force_maxmin", dataset: "mme", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=native_maxmin", "output.run_tag_suffix=next_vicuna_nlcr_force_maxmin_prefix400"]}
+  - {name: "scienceqa_audit", dataset: "scienceqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=audit_only", "output.run_tag_suffix=next_vicuna_nlcr_audit_prefix400"]}
+  - {name: "scienceqa_force_topk", dataset: "scienceqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=sparsevlm_topk", "output.run_tag_suffix=next_vicuna_nlcr_force_topk_prefix400"]}
+  - {name: "scienceqa_force_maxmin", dataset: "scienceqa", strategies: ["sparsevlm_scnd"], extra_sets: ["pruning.sparsevlm_scnd.next_layer_counterfactual.mode=force_candidate", "pruning.sparsevlm_scnd.next_layer_counterfactual.forced_candidate=native_maxmin", "output.run_tag_suffix=next_vicuna_nlcr_force_maxmin_prefix400"]}

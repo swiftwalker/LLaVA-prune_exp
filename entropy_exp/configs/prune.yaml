@@ -34,6 +34,11 @@ inference:
   conv_mode: "vicuna_v1"
   seed: 42
 
+benchmark:
+  enabled: false
+  profile_timing: false             # CUDA synchronize around prefill/decode when enabled
+  warmup_samples: 0                 # rows remain in outputs but are flagged in stats
+
 pruning:
   strategy: "attn_score"            # attn_score | pre_attn_score | masking_attn_score | tail_masking_attn_score | entropy | random | sparsevlm | sparsevlm_adaptive_stratified | sparsevlm_entropy_alpha | sparsevlm_entropy_alpha_global | sparsevlm_boost | sparsevlm_boost_hybrid | sparsevlm_compensated | sparsevlm_diverse_mmr | sparsevlm_adaptive_diverse_mmr | sparsevlm_scnd | sparsevlm_fast_scnd | sparsevlm_budget_candidate_scnd
   # --- layer & ratio (paired lists of equal length) ---
@@ -195,6 +200,14 @@ pruning:
       stages: ["query", "context"]   # ablations may enable either stage independently
       candidate_pool_multiplier: null # null reuses seed_pool_multiplier
       max_swap_ratio: null            # null reuses boundary_ratio
+    next_layer_counterfactual:
+      mode: "none"                   # none | audit_only | route | force_candidate
+      apply_modes: ["C"]
+      profile_lock: "first_c"
+      query_scope: "all_non_special_text"
+      candidate_sets: ["legacy_scnd", "sparsevlm_topk", "native_maxmin"]
+      require_pareto_dominance: true
+      forced_candidate: null          # sparsevlm_topk | native_maxmin; force_candidate only
     use_score_memory: false
     global_current_weight: 0.5
     global_ema_decay: 0.6

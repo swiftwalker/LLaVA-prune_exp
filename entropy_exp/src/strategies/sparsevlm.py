@@ -233,6 +233,14 @@ class SparseVLMStrategy(PruneStrategy):
             "rater_indices": rater_indices.detach(),
             "text_relevance_scores": text_relevance_scores.detach(),
             "text_length": int(H_q.shape[0]),
+            "text_token_ids": (
+                None if text_token_ids is None else text_token_ids.detach()
+            ),
+            "text_special_token_mask": (
+                None
+                if text_special_token_mask is None
+                else text_special_token_mask.detach().to(dtype=torch.bool)
+            ),
         }
         return {
             "rater_indices": rater_indices.detach().cpu().numpy(),
