@@ -188,7 +188,7 @@ pruning:
       max_visual_tokens_before: 2200
       min_local_saliency_mass_ratio: 0.70
     evidence_reconciliation:
-      mode: "none"                   # none | audit_only | herc_v1
+      mode: "none"                   # none | audit_only | herc_v1 | herc_v2
       apply_modes: ["C", "B", "S"]
       profile_lock: "first_c"
       continuity_reference: "first_c"

@@ -36,6 +36,7 @@ class PruneInferenceStatsTests(unittest.TestCase):
                 "evidence_reconcile_mode": "herc_v1",
                 "evidence_reconcile_applied": True,
                 "evidence_reconcile_profile_pressure": 1.0,
+                "evidence_hierarchy_aggregation": "mass_weighted",
                 "evidence_query_coverage_before": 0.4,
                 "evidence_query_coverage_after_context": 0.8,
             },
@@ -50,6 +51,7 @@ class PruneInferenceStatsTests(unittest.TestCase):
         self.assertEqual(sample_stats["layer_2_visual_role_local_saliency_mass_ratio"], 0.73)
         self.assertTrue(sample_stats["layer_2_visual_role_gate_passed"])
         self.assertEqual(sample_stats["layer_2_evidence_reconcile_mode"], "herc_v1")
+        self.assertEqual(sample_stats["layer_2_evidence_hierarchy_aggregation"], "mass_weighted")
         self.assertEqual(sample_stats["layer_2_evidence_query_coverage_after_context"], 0.8)
         self.assertNotIn("layer_2_keep_indices", sample_stats)
 

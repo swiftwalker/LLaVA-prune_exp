@@ -11,6 +11,11 @@ sys.path.insert(0, SRC_DIR)
 from strategies.scnd_herc import (  # noqa: E402
     _facility_pair_coverage,
     _facility_state,
+    _hierarchy_level_state,
+    _hierarchy_templates,
+    _level_pair_coverage,
+    _weighted_harmonic_coverage,
+    _weighted_mass_coverage,
     normalize_rater_distributions,
     reconcile_evidence,
     restrict_reference_distributions,
@@ -149,6 +154,81 @@ class SCNDHERCUnitTests(unittest.TestCase):
 
         torch.testing.assert_close(pair_coverage, expected, rtol=1e-6, atol=1e-6)
 
+    def test_mass_weighted_coverage_respects_low_evidence_group_weight(self):
+        values = torch.tensor([1.0, 0.0])
+        weights = torch.tensor([0.99, 0.01])
+
+        harmonic = _weighted_harmonic_coverage(values, weights)
+        mass_weighted = _weighted_mass_coverage(values, weights)
+
+        self.assertLess(float(harmonic.item()), 1e-5)
+        self.assertAlmostEqual(float(mass_weighted.item()), 0.99, places=6)
+
+    def test_mass_weighted_hierarchy_pair_coverage_matches_brute_force(self):
+        structure = visual_token_structure_ids(
+            torch.arange(8),
+            {
+                "layout_kind": "anyres_flat",
+                "base_token_count": 4,
+                "local_patch_token_count": 4,
+                "newline_token_count": 0,
+                "local_grid_width": 0,
+                "total_token_count": 8,
+            },
+        )
+        saliency = torch.tensor([0.9, 0.7, 0.5, 0.3, 0.8, 0.6, 0.4, 0.2])
+        selected = torch.tensor([0, 1, 4, 5])
+        incoming = torch.tensor([2, 3, 6, 7])
+        template = _hierarchy_templates(structure, saliency, 4, 0.65)["row"]
+        state = _hierarchy_level_state(template, saliency, selected, "mass_weighted")
+
+        actual = _level_pair_coverage(state, saliency, incoming, selected)
+        expected = torch.empty_like(actual)
+        for incoming_column, incoming_index in enumerate(incoming.tolist()):
+            for outgoing_column, outgoing_index in enumerate(selected.tolist()):
+                swapped = torch.tensor(
+                    [index for index in selected.tolist() if index != outgoing_index]
+                    + [incoming_index]
+                )
+                expected[incoming_column, outgoing_column] = _hierarchy_level_state(
+                    template,
+                    saliency,
+                    swapped,
+                    "mass_weighted",
+                )["coverage"]
+
+        torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-6)
+
+    def test_herc_v2_budget_does_not_saturate_on_low_mass_missing_rows(self):
+        distributions = torch.full((2, 64), 1.0 / 64.0)
+        common = {
+            "legacy_keep_indices": torch.arange(16),
+            "scalar_score": torch.ones(64),
+            "current_distributions": distributions,
+            "reference_distributions": None,
+            "current_visual_embeds": torch.eye(64),
+            "current_original_indices": torch.arange(64),
+            "structure_ids": _square_structure(64),
+            "tau": 0.65,
+            "profile_pressure": 1.0,
+            "candidate_pool_multiplier": 2.0,
+            "max_swap_ratio": 0.5,
+        }
+
+        v1 = reconcile_evidence(mode="herc_v1", **common)
+        v2 = reconcile_evidence(mode="herc_v2", **common)
+
+        self.assertEqual(v1["stats"]["evidence_hierarchy_aggregation"], "harmonic")
+        self.assertEqual(v2["stats"]["evidence_hierarchy_aggregation"], "mass_weighted")
+        self.assertLess(
+            v2["stats"]["evidence_reconcile_deficit"],
+            v1["stats"]["evidence_reconcile_deficit"],
+        )
+        self.assertLess(
+            v2["stats"]["evidence_reconcile_swap_budget"],
+            v1["stats"]["evidence_reconcile_swap_budget"],
+        )
+
     def test_context_reconciliation_repairs_view_collapse(self):
         structure = visual_token_structure_ids(
             torch.arange(8),
@@ -282,6 +362,64 @@ class SCNDHERCUnitTests(unittest.TestCase):
         self.assertFalse(bool(structure["patch_mask"][[8, 13]].any().item()))
         self.assertEqual(structure["macrocell_ids"][[4, 5, 6, 7]].tolist(), [1, 1, 2, 2])
         self.assertEqual(structure["row_ids"][[4, 9]].tolist(), [2, 3])
+
+    def test_anyres_flat_structure_ids_preserve_original_indices_after_prune(self):
+        structure = visual_token_structure_ids(
+            torch.tensor([0, 3, 4, 7, 8, 11]),
+            {
+                "layout_kind": "anyres_flat",
+                "base_token_count": 4,
+                "local_patch_token_count": 8,
+                "newline_token_count": 0,
+                "local_grid_width": 0,
+                "total_token_count": 12,
+            },
+        )
+
+        self.assertEqual(structure["view_ids"].tolist(), [0, 0, 1, 1, 1, 1])
+        self.assertEqual(structure["macrocell_ids"].tolist(), [0, 0, 1, 1, 2, 2])
+        self.assertEqual(structure["row_ids"].tolist(), [0, 1, 2, 3, 4, 5])
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for HERC parity")
+    def test_herc_v2_cpu_gpu_parity(self):
+        torch.manual_seed(23)
+        structure = _square_structure(16)
+        kwargs = {
+            "mode": "herc_v2",
+            "legacy_keep_indices": torch.tensor([0, 1, 4, 5, 8, 9]),
+            "scalar_score": torch.linspace(1.0, 0.1, 16),
+            "current_distributions": normalize_rater_distributions(torch.rand(3, 16)),
+            "reference_distributions": normalize_rater_distributions(torch.rand(3, 16)),
+            "current_visual_embeds": torch.randn(16, 8),
+            "current_original_indices": torch.arange(16),
+            "structure_ids": structure,
+            "tau": 0.65,
+            "profile_pressure": 1.0,
+            "candidate_pool_multiplier": 2.0,
+            "max_swap_ratio": 0.25,
+        }
+        cpu = reconcile_evidence(**kwargs)
+        gpu_kwargs = {
+            key: (
+                {nested_key: value.cuda() for nested_key, value in item.items()}
+                if key == "structure_ids"
+                else item.cuda()
+                if isinstance(item, torch.Tensor)
+                else item
+            )
+            for key, item in kwargs.items()
+        }
+        gpu = reconcile_evidence(**gpu_kwargs)
+
+        torch.testing.assert_close(cpu["keep_indices"], gpu["keep_indices"].cpu(), rtol=0, atol=0)
+        self.assertEqual(
+            cpu["stats"]["evidence_reconcile_query_swap_count"],
+            gpu["stats"]["evidence_reconcile_query_swap_count"],
+        )
+        self.assertEqual(
+            cpu["stats"]["evidence_reconcile_context_swap_count"],
+            gpu["stats"]["evidence_reconcile_context_swap_count"],
+        )
 
 
 if __name__ == "__main__":

@@ -429,6 +429,7 @@ def append_layer_stats_fields(
         "evidence_reconcile_context_swap_count",
         "evidence_reconcile_deficit",
         "evidence_reconcile_time_ms",
+        "evidence_hierarchy_aggregation",
         "evidence_query_coverage_before",
         "evidence_query_coverage_after_query",
         "evidence_query_coverage_after_context",

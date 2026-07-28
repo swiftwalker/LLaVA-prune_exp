@@ -9,9 +9,10 @@ import torch
 import torch.nn.functional as F
 
 
-VALID_RECONCILIATION_MODES = {"none", "audit_only", "herc_v1"}
+VALID_RECONCILIATION_MODES = {"none", "audit_only", "herc_v1", "herc_v2"}
 VALID_PROFILE_LOCKS = {"first_c"}
 VALID_CONTINUITY_REFERENCES = {"first_c"}
+VALID_HIERARCHY_AGGREGATIONS = {"harmonic", "mass_weighted"}
 
 _EPS = 1e-8
 
@@ -95,6 +96,17 @@ def _weighted_harmonic_coverage(values: torch.Tensor, weights: torch.Tensor) -> 
     weights_f = weights.to(device=values.device, dtype=torch.float32)
     weights_f = weights_f / weights_f.sum().clamp_min(_EPS)
     return (1.0 / (weights_f / values_f).sum()).clamp(min=0.0, max=1.0)
+
+
+def _weighted_mass_coverage(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    values_f = values.to(dtype=torch.float32).clamp(min=0.0, max=1.0)
+    weights_f = weights.to(device=values.device, dtype=torch.float32)
+    weights_f = weights_f / weights_f.sum().clamp_min(_EPS)
+    return (weights_f * values_f).sum().clamp(min=0.0, max=1.0)
+
+
+def _hierarchy_aggregation_for_mode(mode: str) -> str:
+    return "mass_weighted" if mode == "herc_v2" else "harmonic"
 
 
 def _query_components(
@@ -231,6 +243,7 @@ def _hierarchy_level_state(
     template: Dict[str, torch.Tensor],
     saliency: torch.Tensor,
     selected: torch.Tensor,
+    aggregation: str,
 ) -> Dict[str, torch.Tensor | float]:
     if bool(template["empty"].item()):
         return {"empty": template["empty"], "coverage": 1.0}
@@ -245,12 +258,18 @@ def _hierarchy_level_state(
     if bool(selected_valid.any().item()):
         mass.scatter_add_(0, selected_groups[selected_valid], selected_values[selected_valid])
     coverage_by_group = torch.clamp(mass / target.clamp_min(_EPS), max=1.0)
-    coverage = _weighted_harmonic_coverage(coverage_by_group, weights)
+    if aggregation == "harmonic":
+        coverage = _weighted_harmonic_coverage(coverage_by_group, weights)
+    elif aggregation == "mass_weighted":
+        coverage = _weighted_mass_coverage(coverage_by_group, weights)
+    else:
+        raise ValueError(f"Unsupported hierarchy aggregation: {aggregation!r}")
     return {
         **template,
         "token_group": token_group,
         "mass": mass,
         "coverage": coverage,
+        "aggregation": aggregation,
     }
 
 
@@ -280,12 +299,13 @@ def _hierarchy_states(
     selected: torch.Tensor,
     keep_count: int,
     tau: float,
+    aggregation: str,
     templates: Optional[Dict[str, Dict[str, torch.Tensor]]] = None,
 ) -> Dict[str, Dict[str, torch.Tensor | float]]:
     if templates is None:
         templates = _hierarchy_templates(structure_ids, saliency, keep_count, tau)
     return {
-        key: _hierarchy_level_state(template, saliency, selected)
+        key: _hierarchy_level_state(template, saliency, selected, aggregation)
         for key, template in templates.items()
     }
 
@@ -315,17 +335,40 @@ def _level_pair_coverage(
     mass = torch.as_tensor(state["mass"], device=saliency.device, dtype=torch.float32)
     target = torch.as_tensor(state["target"], device=saliency.device, dtype=torch.float32)
     weights = torch.as_tensor(state["weights"], device=saliency.device, dtype=torch.float32)
+    aggregation = str(state["aggregation"])
 
-    def term(group: torch.Tensor, new_mass: torch.Tensor) -> torch.Tensor:
+    def harmonic_term(group: torch.Tensor, new_mass: torch.Tensor) -> torch.Tensor:
         valid = group >= 0
         safe_group = group.clamp_min(0)
-        coverage = torch.clamp(new_mass / target.index_select(0, safe_group).clamp_min(_EPS), max=1.0)
+        coverage = torch.clamp(
+            new_mass / target.index_select(0, safe_group).clamp_min(_EPS),
+            min=0.0,
+            max=1.0,
+        )
         values = weights.index_select(0, safe_group) / coverage.clamp_min(_EPS)
         return torch.where(valid, values, torch.zeros_like(values))
 
-    base_coverage = torch.clamp(mass / target.clamp_min(_EPS), max=1.0)
-    base_terms = weights / base_coverage.clamp_min(_EPS)
-    base_denom = base_terms.sum()
+    def mass_term(group: torch.Tensor, new_mass: torch.Tensor) -> torch.Tensor:
+        valid = group >= 0
+        safe_group = group.clamp_min(0)
+        coverage = torch.clamp(
+            new_mass / target.index_select(0, safe_group).clamp_min(_EPS),
+            min=0.0,
+            max=1.0,
+        )
+        values = weights.index_select(0, safe_group) * coverage
+        return torch.where(valid, values, torch.zeros_like(values))
+
+    base_coverage = torch.clamp(mass / target.clamp_min(_EPS), min=0.0, max=1.0)
+    if aggregation == "harmonic":
+        term = harmonic_term
+        base_terms = weights / base_coverage.clamp_min(_EPS)
+    elif aggregation == "mass_weighted":
+        term = mass_term
+        base_terms = weights * base_coverage
+    else:
+        raise ValueError(f"Unsupported hierarchy aggregation: {aggregation!r}")
+    base_total = base_terms.sum()
     incoming_group = token_group.index_select(0, incoming)
     outgoing_group = token_group.index_select(0, outgoing)
     incoming_mass = saliency.index_select(0, incoming)
@@ -355,11 +398,22 @@ def _level_pair_coverage(
         )
         pair_target = target.index_select(0, safe_pair_group.flatten()).view_as(same_group)
         pair_weight = weights.index_select(0, safe_pair_group.flatten()).view_as(same_group)
-        exact_term = pair_weight / torch.clamp(exact_mass / pair_target.clamp_min(_EPS), max=1.0).clamp_min(_EPS)
+        exact_coverage = torch.clamp(
+            exact_mass / pair_target.clamp_min(_EPS),
+            min=0.0,
+            max=1.0,
+        )
+        if aggregation == "harmonic":
+            exact_term = pair_weight / exact_coverage.clamp_min(_EPS)
+        else:
+            exact_term = pair_weight * exact_coverage
         base_pair_term = base_terms.index_select(0, safe_pair_group.flatten()).view_as(same_group)
         pair_delta = torch.where(same_group, exact_term - base_pair_term, pair_delta)
 
-    return (1.0 / (base_denom + pair_delta).clamp_min(_EPS)).clamp(min=0.0, max=1.0)
+    pair_total = base_total + pair_delta
+    if aggregation == "harmonic":
+        return (1.0 / pair_total.clamp_min(_EPS)).clamp(min=0.0, max=1.0)
+    return pair_total.clamp(min=0.0, max=1.0)
 
 
 def _facility_template(
@@ -601,6 +655,7 @@ def reconcile_evidence(
     """Audit or reconcile a legacy SCND proposal through budget-neutral swaps."""
     if mode not in VALID_RECONCILIATION_MODES - {"none"}:
         raise ValueError(f"Unsupported active evidence reconciliation mode: {mode!r}")
+    hierarchy_aggregation = _hierarchy_aggregation_for_mode(mode)
     selected = torch.sort(legacy_keep_indices.to(dtype=torch.long)).values
     keep_count = int(selected.numel())
     if keep_count <= 0:
@@ -641,6 +696,7 @@ def reconcile_evidence(
         selected,
         keep_count,
         tau,
+        hierarchy_aggregation,
         templates=hierarchy_templates,
     )
     hierarchy_before_aggregate = _hierarchy_aggregate(hierarchy_before)
@@ -671,7 +727,7 @@ def reconcile_evidence(
     context_swap_out: List[int] = []
     query_after_query = query_before
 
-    if mode == "herc_v1" and swap_budget > 0:
+    if mode in {"herc_v1", "herc_v2"} and swap_budget > 0:
         for _ in range(swap_budget):
             selected_mask = torch.zeros(
                 int(scalar_score.numel()), device=scalar_score.device, dtype=torch.bool
@@ -781,6 +837,7 @@ def reconcile_evidence(
                 selected,
                 keep_count,
                 tau,
+                hierarchy_aggregation,
                 templates=hierarchy_templates,
             )
             hierarchy_pairs = torch.ones(
@@ -843,6 +900,7 @@ def reconcile_evidence(
         selected,
         keep_count,
         tau,
+        hierarchy_aggregation,
         templates=hierarchy_templates,
     )
     facility_after = _facility_state_from_template(
@@ -856,7 +914,10 @@ def reconcile_evidence(
 
     stats: Dict[str, object] = {
         "evidence_reconcile_mode": mode,
-        "evidence_reconcile_applied": bool(mode == "herc_v1" and profile_pressure > 0.0),
+        "evidence_reconcile_applied": bool(
+            mode in {"herc_v1", "herc_v2"} and profile_pressure > 0.0
+        ),
+        "evidence_hierarchy_aggregation": hierarchy_aggregation,
         "evidence_reconcile_profile_pressure": float(profile_pressure),
         "evidence_reconcile_candidate_count": int(candidate_pool.numel()),
         "evidence_reconcile_swap_budget": int(swap_budget),

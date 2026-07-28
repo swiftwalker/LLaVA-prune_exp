@@ -191,6 +191,11 @@ class SparseVLMSCNDTests(unittest.TestCase):
             }
         )
         self.assertEqual(herc._get_scnd_params()["evidence_reconciliation_mode"], "herc_v1")
+        self.assertEqual(
+            self._strategy(evidence_reconciliation={"mode": "herc_v2"})
+            ._get_scnd_params()["evidence_reconciliation_mode"],
+            "herc_v2",
+        )
         for invalid_evidence in (
             {"mode": "bogus"},
             {"mode": "herc_v1", "candidate_pool_multiplier": 0.5},

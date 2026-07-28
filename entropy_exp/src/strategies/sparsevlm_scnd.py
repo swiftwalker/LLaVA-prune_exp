@@ -2337,7 +2337,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 )
             if bool(evidence_stats.get("evidence_reconcile_applied", False)):
                 layer_strategy_effective = "sparsevlm_scnd_herc"
-                selection_rule = f"{selection_rule}_herc_v1"
+                selection_rule = f"{selection_rule}_{params['evidence_reconciliation_mode']}"
 
         if int(keep_indices.numel()) != int(target_keep):
             raise AssertionError(
