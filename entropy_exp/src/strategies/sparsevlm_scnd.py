@@ -182,7 +182,7 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
                 "sparsevlm_scnd.evidence_reconciliation.stages only supports "
                 f"{sorted(VALID_RECONCILIATION_STAGES)}, got {invalid_stages}"
             )
-        if mode in {"herc_v1", "herc_v2"} and not requested_stages:
+        if mode in {"herc_v1", "herc_v2", "herc_v3"} and not requested_stages:
             raise ValueError("Active HERC requires at least one evidence_reconciliation stage")
         if mode != "none":
             configured_modes = list(self._layer_mode_map().values())
@@ -245,6 +245,18 @@ class SparseVLMSCNDStrategy(SparseVLMDiverseMMRStrategy):
             "evidence_reconcile_swap_budget": 0,
             "evidence_reconcile_query_swap_count": 0,
             "evidence_reconcile_context_swap_count": 0,
+            "evidence_reconcile_query_budget": 0,
+            "evidence_reconcile_context_budget": 0,
+            "evidence_reconcile_max_total_swaps": 0,
+            "evidence_query_deficit": 0.0,
+            "evidence_hierarchy_deficit": 0.0,
+            "evidence_representative_deficit": 0.0,
+            "evidence_context_co_deficit": 0.0,
+            "evidence_anchor_count_before": 0,
+            "evidence_anchor_count_after_query": 0,
+            "evidence_anchor_fraction_before": 0.0,
+            "evidence_anchor_fraction_after_query": 0.0,
+            "evidence_pareto_safe": mode == "herc_v3",
             "evidence_reconcile_time_ms": 0.0,
         }
 

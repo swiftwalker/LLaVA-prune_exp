@@ -188,11 +188,11 @@ pruning:
       max_visual_tokens_before: 2200
       min_local_saliency_mass_ratio: 0.70
     evidence_reconciliation:
-      mode: "none"                   # none | audit_only | herc_v1 | herc_v2
+      mode: "none"                   # none | audit_only | herc_v1 | herc_v2 | herc_v3
       apply_modes: ["C", "B", "S"]
       profile_lock: "first_c"
       continuity_reference: "first_c"
-      stages: ["query", "context"] # ablation: ["query"] skips context reconciliation
+      stages: ["query", "context"]   # ablations may enable either stage independently
       candidate_pool_multiplier: null # null reuses seed_pool_multiplier
       max_swap_ratio: null            # null reuses boundary_ratio
     use_score_memory: false

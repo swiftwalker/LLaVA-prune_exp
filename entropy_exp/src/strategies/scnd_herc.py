@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 
 
-VALID_RECONCILIATION_MODES = {"none", "audit_only", "herc_v1", "herc_v2"}
+VALID_RECONCILIATION_MODES = {"none", "audit_only", "herc_v1", "herc_v2", "herc_v3"}
 VALID_RECONCILIATION_STAGES = {"query", "context"}
 VALID_PROFILE_LOCKS = {"first_c"}
 VALID_CONTINUITY_REFERENCES = {"first_c"}
@@ -107,7 +107,46 @@ def _weighted_mass_coverage(values: torch.Tensor, weights: torch.Tensor) -> torc
 
 
 def _hierarchy_aggregation_for_mode(mode: str) -> str:
-    return "mass_weighted" if mode == "herc_v2" else "harmonic"
+    return "mass_weighted" if mode in {"herc_v2", "herc_v3"} else "harmonic"
+
+
+def protected_evidence_anchor_mask(
+    selected: torch.Tensor,
+    current_distributions: torch.Tensor,
+    reference_distributions: Optional[torch.Tensor],
+    scalar_score: torch.Tensor,
+    mass_fraction: float,
+) -> torch.Tensor:
+    """Protect the smallest selected-token prefixes carrying trusted evidence mass."""
+    if not 0.0 <= float(mass_fraction) <= 1.0:
+        raise ValueError(f"mass_fraction must be in [0, 1], got {mass_fraction}")
+    selected = selected.to(device=scalar_score.device, dtype=torch.long).flatten()
+    protected = torch.zeros_like(scalar_score, dtype=torch.bool)
+    if int(selected.numel()) == 0 or float(mass_fraction) <= 0.0:
+        return protected
+
+    channels = [scalar_score.to(dtype=torch.float32).clamp_min(0.0)]
+    channels.extend(row for row in current_distributions.to(dtype=torch.float32))
+    if reference_distributions is not None:
+        channels.extend(row for row in reference_distributions.to(dtype=torch.float32))
+
+    for channel in channels:
+        selected_mass = channel.index_select(0, selected).clamp_min(0.0)
+        total = selected_mass.sum()
+        if float(total.item()) <= _EPS:
+            continue
+        order = _stable_descending(selected_mass)
+        ordered_mass = selected_mass.index_select(0, order)
+        target = total * float(mass_fraction)
+        prefix_count = int(
+            torch.searchsorted(
+                ordered_mass.cumsum(dim=0),
+                target,
+                right=False,
+            ).item()
+        ) + 1
+        protected[selected.index_select(0, order[:prefix_count])] = True
+    return protected
 
 
 def _query_components(
@@ -637,6 +676,355 @@ def _select_best_pair(
     return int(chosen[0].item()), int(chosen[1].item())
 
 
+def _hierarchy_pair_coverages(
+    hierarchy_states: Dict[str, Dict[str, torch.Tensor | float]],
+    saliency: torch.Tensor,
+    incoming: torch.Tensor,
+    outgoing: torch.Tensor,
+) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    by_level = {
+        key: _level_pair_coverage(state, saliency, incoming, outgoing)
+        for key, state in hierarchy_states.items()
+    }
+    aggregate = torch.ones_like(next(iter(by_level.values())), dtype=torch.float32)
+    for coverage in by_level.values():
+        aggregate = aggregate * coverage.clamp_min(_EPS)
+    aggregate = aggregate.pow(1.0 / float(len(by_level)))
+    return by_level, aggregate
+
+
+def _replace_selected_token(
+    selected: torch.Tensor,
+    incoming_index: int,
+    outgoing_index: int,
+) -> torch.Tensor:
+    return torch.sort(
+        torch.cat(
+            (
+                selected[selected != outgoing_index],
+                torch.tensor([incoming_index], device=selected.device, dtype=torch.long),
+            )
+        )
+    ).values
+
+
+def _reconcile_evidence_v3(
+    *,
+    selected: torch.Tensor,
+    scalar_positive: torch.Tensor,
+    current_distributions: torch.Tensor,
+    reference_distributions: Optional[torch.Tensor],
+    scalar_saliency: torch.Tensor,
+    candidate_pool: torch.Tensor,
+    structure_ids: Dict[str, torch.Tensor],
+    hierarchy_templates: Dict[str, Dict[str, torch.Tensor]],
+    facility_template: Dict[str, torch.Tensor],
+    current_original_indices: torch.Tensor,
+    tau: float,
+    profile_pressure: float,
+    max_swap_ratio: float,
+    local_floor_count: int,
+    query_stage_enabled: bool,
+    context_stage_enabled: bool,
+) -> Dict[str, object]:
+    """Conservative HERC: anchor-protected, Pareto-safe, co-deficit swaps."""
+    keep_count = int(selected.numel())
+    max_total_swaps = min(
+        keep_count,
+        max(0, int(math.ceil(float(profile_pressure) * float(max_swap_ratio) * keep_count))),
+    )
+    query_before = _query_components(
+        current_distributions, reference_distributions, selected, tau
+    )
+    hierarchy_before = _hierarchy_states(
+        structure_ids,
+        scalar_saliency,
+        selected,
+        keep_count,
+        tau,
+        "mass_weighted",
+        templates=hierarchy_templates,
+    )
+    facility_before = _facility_state_from_template(facility_template, selected)
+    query_deficit = 1.0 - float(query_before["aggregate"].clamp(0.0, 1.0).item())
+    query_budget = (
+        min(
+            max_total_swaps,
+            max(
+                0,
+                int(
+                    math.ceil(
+                        float(profile_pressure)
+                        * float(max_swap_ratio)
+                        * keep_count
+                        * query_deficit
+                    )
+                ),
+            ),
+        )
+        if query_stage_enabled
+        else 0
+    )
+    anchor_mask = protected_evidence_anchor_mask(
+        selected,
+        current_distributions,
+        reference_distributions,
+        scalar_positive,
+        tau,
+    )
+    anchor_count_before = int(anchor_mask.index_select(0, selected).sum().item())
+    query_swap_in: List[int] = []
+    query_swap_out: List[int] = []
+
+    for _ in range(query_budget):
+        selected_mask = torch.zeros_like(scalar_positive, dtype=torch.bool)
+        selected_mask[selected] = True
+        incoming = candidate_pool[~selected_mask.index_select(0, candidate_pool)]
+        outgoing = selected[~anchor_mask.index_select(0, selected)]
+        if int(incoming.numel()) == 0 or int(outgoing.numel()) == 0:
+            break
+
+        query_state = _query_components(
+            current_distributions, reference_distributions, selected, tau
+        )
+        query_pairs = _query_pair_components(
+            current_distributions,
+            reference_distributions,
+            selected,
+            incoming,
+            outgoing,
+            tau,
+        )
+        scalar_mass = scalar_positive.index_select(0, selected).sum()
+        feasible, resulting_mass = _pair_feasibility(
+            scalar_positive,
+            scalar_mass,
+            float(scalar_mass.item()),
+            structure_ids,
+            selected,
+            incoming,
+            outgoing,
+            local_floor_count,
+        )
+        feasible = feasible & (
+            query_pairs["current_coverage"]
+            >= query_state["current_coverage"][:, None, None] - 1e-7
+        ).all(dim=0)
+        feasible = feasible & (
+            query_pairs["reference_coverage"]
+            >= query_state["reference_coverage"][:, None, None] - 1e-7
+        ).all(dim=0)
+
+        hierarchy_states = _hierarchy_states(
+            structure_ids,
+            scalar_saliency,
+            selected,
+            keep_count,
+            tau,
+            "mass_weighted",
+            templates=hierarchy_templates,
+        )
+        hierarchy_by_level, _ = _hierarchy_pair_coverages(
+            hierarchy_states, scalar_saliency, incoming, outgoing
+        )
+        for key, pair_coverage in hierarchy_by_level.items():
+            current_coverage = torch.as_tensor(
+                hierarchy_states[key]["coverage"],
+                device=pair_coverage.device,
+                dtype=torch.float32,
+            )
+            feasible = feasible & (pair_coverage >= current_coverage - 1e-7)
+
+        facility_state = _facility_state_from_template(facility_template, selected)
+        facility_pairs = _facility_pair_coverage(
+            facility_state, selected, incoming, outgoing
+        )
+        feasible = feasible & (
+            facility_pairs >= facility_state["coverage"] - 1e-7
+        )
+        gain = query_pairs["aggregate"] - query_state["aggregate"]
+        chosen = _select_best_pair(
+            gain,
+            feasible,
+            resulting_mass,
+            incoming,
+            outgoing,
+            current_original_indices,
+        )
+        if chosen is None:
+            break
+        incoming_index = int(incoming[chosen[0]].item())
+        outgoing_index = int(outgoing[chosen[1]].item())
+        selected = _replace_selected_token(selected, incoming_index, outgoing_index)
+        query_swap_in.append(incoming_index)
+        query_swap_out.append(outgoing_index)
+        anchor_mask = anchor_mask | protected_evidence_anchor_mask(
+            selected,
+            current_distributions,
+            reference_distributions,
+            scalar_positive,
+            tau,
+        )
+
+    query_after_query = _query_components(
+        current_distributions, reference_distributions, selected, tau
+    )
+    anchor_count_after_query = int(anchor_mask.index_select(0, selected).sum().item())
+    hierarchy_after_query = _hierarchy_states(
+        structure_ids,
+        scalar_saliency,
+        selected,
+        keep_count,
+        tau,
+        "mass_weighted",
+        templates=hierarchy_templates,
+    )
+    hierarchy_after_query_aggregate = _hierarchy_aggregate(hierarchy_after_query)
+    facility_after_query = _facility_state_from_template(facility_template, selected)
+    hierarchy_deficit = 1.0 - float(
+        hierarchy_after_query_aggregate.clamp(0.0, 1.0).item()
+    )
+    representative_deficit = 1.0 - float(
+        facility_after_query["coverage"].clamp(0.0, 1.0).item()
+    )
+    context_deficit = math.sqrt(max(0.0, hierarchy_deficit * representative_deficit))
+    remaining_cap = max(0, max_total_swaps - len(query_swap_in))
+    context_budget = (
+        min(
+            remaining_cap,
+            max(
+                0,
+                int(
+                    math.ceil(
+                        float(profile_pressure)
+                        * float(max_swap_ratio)
+                        * keep_count
+                        * context_deficit
+                    )
+                ),
+            ),
+        )
+        if context_stage_enabled
+        else 0
+    )
+    context_swap_in: List[int] = []
+    context_swap_out: List[int] = []
+
+    for _ in range(context_budget):
+        selected_mask = torch.zeros_like(scalar_positive, dtype=torch.bool)
+        selected_mask[selected] = True
+        incoming = candidate_pool[~selected_mask.index_select(0, candidate_pool)]
+        outgoing = selected[~anchor_mask.index_select(0, selected)]
+        if int(incoming.numel()) == 0 or int(outgoing.numel()) == 0:
+            break
+
+        query_state = _query_components(
+            current_distributions, reference_distributions, selected, tau
+        )
+        query_pairs = _query_pair_components(
+            current_distributions,
+            reference_distributions,
+            selected,
+            incoming,
+            outgoing,
+            tau,
+        )
+        scalar_mass = scalar_positive.index_select(0, selected).sum()
+        feasible, resulting_mass = _pair_feasibility(
+            scalar_positive,
+            scalar_mass,
+            float(scalar_mass.item()),
+            structure_ids,
+            selected,
+            incoming,
+            outgoing,
+            local_floor_count,
+        )
+        feasible = feasible & (
+            query_pairs["current_coverage"]
+            >= query_state["current_coverage"][:, None, None] - 1e-7
+        ).all(dim=0)
+        feasible = feasible & (
+            query_pairs["reference_coverage"]
+            >= query_state["reference_coverage"][:, None, None] - 1e-7
+        ).all(dim=0)
+
+        hierarchy_states = _hierarchy_states(
+            structure_ids,
+            scalar_saliency,
+            selected,
+            keep_count,
+            tau,
+            "mass_weighted",
+            templates=hierarchy_templates,
+        )
+        hierarchy_by_level, hierarchy_pairs = _hierarchy_pair_coverages(
+            hierarchy_states, scalar_saliency, incoming, outgoing
+        )
+        for key, pair_coverage in hierarchy_by_level.items():
+            current_coverage = torch.as_tensor(
+                hierarchy_states[key]["coverage"],
+                device=pair_coverage.device,
+                dtype=torch.float32,
+            )
+            feasible = feasible & (pair_coverage >= current_coverage - 1e-7)
+
+        facility_state = _facility_state_from_template(facility_template, selected)
+        facility_pairs = _facility_pair_coverage(
+            facility_state, selected, incoming, outgoing
+        )
+        feasible = feasible & (
+            facility_pairs >= facility_state["coverage"] - 1e-7
+        )
+        current_hierarchy = _hierarchy_aggregate(hierarchy_states)
+        current_objective = torch.log(current_hierarchy.clamp_min(_EPS)) + torch.log(
+            facility_state["coverage"].clamp_min(_EPS)
+        )
+        pair_objective = torch.log(hierarchy_pairs.clamp_min(_EPS)) + torch.log(
+            facility_pairs.clamp_min(_EPS)
+        )
+        chosen = _select_best_pair(
+            pair_objective - current_objective,
+            feasible,
+            resulting_mass,
+            incoming,
+            outgoing,
+            current_original_indices,
+        )
+        if chosen is None:
+            break
+        incoming_index = int(incoming[chosen[0]].item())
+        outgoing_index = int(outgoing[chosen[1]].item())
+        selected = _replace_selected_token(selected, incoming_index, outgoing_index)
+        context_swap_in.append(incoming_index)
+        context_swap_out.append(outgoing_index)
+        anchor_mask = anchor_mask | protected_evidence_anchor_mask(
+            selected,
+            current_distributions,
+            reference_distributions,
+            scalar_positive,
+            tau,
+        )
+
+    return {
+        "selected": selected,
+        "query_swap_in": query_swap_in,
+        "query_swap_out": query_swap_out,
+        "context_swap_in": context_swap_in,
+        "context_swap_out": context_swap_out,
+        "query_after_query": query_after_query,
+        "query_budget": query_budget,
+        "context_budget": context_budget,
+        "query_deficit": query_deficit,
+        "hierarchy_deficit": hierarchy_deficit,
+        "representative_deficit": representative_deficit,
+        "context_deficit": context_deficit,
+        "anchor_count_before": anchor_count_before,
+        "anchor_count_after_query": anchor_count_after_query,
+        "max_total_swaps": max_total_swaps,
+    }
+
+
 def reconcile_evidence(
     *,
     mode: str,
@@ -661,7 +1049,7 @@ def reconcile_evidence(
     invalid_stages = sorted(set(normalized_stages) - VALID_RECONCILIATION_STAGES)
     if invalid_stages:
         raise ValueError(f"Unsupported evidence reconciliation stages: {invalid_stages}")
-    if mode in {"herc_v1", "herc_v2"} and not normalized_stages:
+    if mode in {"herc_v1", "herc_v2", "herc_v3"} and not normalized_stages:
         raise ValueError("Active HERC requires at least one reconciliation stage")
     query_stage_enabled = "query" in normalized_stages
     context_stage_enabled = "context" in normalized_stages
@@ -736,8 +1124,46 @@ def reconcile_evidence(
     context_swap_in: List[int] = []
     context_swap_out: List[int] = []
     query_after_query = query_before
+    v3_details: Dict[str, object] = {
+        "query_budget": 0,
+        "context_budget": 0,
+        "query_deficit": 1.0 - float(query_before["aggregate"].item()),
+        "hierarchy_deficit": 1.0 - float(hierarchy_before_aggregate.item()),
+        "representative_deficit": 1.0 - float(facility_before["coverage"].item()),
+        "context_deficit": 0.0,
+        "anchor_count_before": 0,
+        "anchor_count_after_query": 0,
+        "max_total_swaps": swap_budget,
+    }
 
-    if mode in {"herc_v1", "herc_v2"} and swap_budget > 0:
+    if mode == "herc_v3" and profile_pressure > 0.0:
+        v3_result = _reconcile_evidence_v3(
+            selected=selected,
+            scalar_positive=scalar_positive,
+            current_distributions=current_distributions,
+            reference_distributions=reference_distributions,
+            scalar_saliency=scalar_saliency,
+            candidate_pool=candidate_pool,
+            structure_ids=structure_ids,
+            hierarchy_templates=hierarchy_templates,
+            facility_template=facility_template,
+            current_original_indices=current_original_indices,
+            tau=tau,
+            profile_pressure=profile_pressure,
+            max_swap_ratio=max_swap_ratio,
+            local_floor_count=local_floor_count,
+            query_stage_enabled=query_stage_enabled,
+            context_stage_enabled=context_stage_enabled,
+        )
+        selected = torch.as_tensor(v3_result["selected"], device=selected.device, dtype=torch.long)
+        query_swap_in = list(v3_result["query_swap_in"])
+        query_swap_out = list(v3_result["query_swap_out"])
+        context_swap_in = list(v3_result["context_swap_in"])
+        context_swap_out = list(v3_result["context_swap_out"])
+        query_after_query = dict(v3_result["query_after_query"])
+        v3_details = dict(v3_result)
+        swap_budget = int(v3_details["query_budget"]) + int(v3_details["context_budget"])
+    elif mode in {"herc_v1", "herc_v2"} and swap_budget > 0:
         for _ in range(swap_budget if query_stage_enabled else 0):
             selected_mask = torch.zeros(
                 int(scalar_score.numel()), device=scalar_score.device, dtype=torch.bool
@@ -926,7 +1352,7 @@ def reconcile_evidence(
         "evidence_reconcile_mode": mode,
         "evidence_reconcile_stages": ",".join(normalized_stages),
         "evidence_reconcile_applied": bool(
-            mode in {"herc_v1", "herc_v2"} and profile_pressure > 0.0
+            mode in {"herc_v1", "herc_v2", "herc_v3"} and profile_pressure > 0.0
         ),
         "evidence_hierarchy_aggregation": hierarchy_aggregation,
         "evidence_reconcile_profile_pressure": float(profile_pressure),
@@ -935,11 +1361,37 @@ def reconcile_evidence(
         "evidence_reconcile_query_swap_count": len(query_swap_in),
         "evidence_reconcile_context_swap_count": len(context_swap_in),
         "evidence_reconcile_deficit": float(deficit),
+        "evidence_reconcile_query_budget": int(v3_details["query_budget"]),
+        "evidence_reconcile_context_budget": int(v3_details["context_budget"]),
+        "evidence_reconcile_max_total_swaps": int(v3_details["max_total_swaps"]),
+        "evidence_query_deficit": float(v3_details["query_deficit"]),
+        "evidence_hierarchy_deficit": float(v3_details["hierarchy_deficit"]),
+        "evidence_representative_deficit": float(v3_details["representative_deficit"]),
+        "evidence_context_co_deficit": float(v3_details["context_deficit"]),
+        "evidence_anchor_count_before": int(v3_details["anchor_count_before"]),
+        "evidence_anchor_count_after_query": int(v3_details["anchor_count_after_query"]),
+        "evidence_anchor_fraction_before": float(v3_details["anchor_count_before"])
+        / float(keep_count),
+        "evidence_anchor_fraction_after_query": float(v3_details["anchor_count_after_query"])
+        / float(keep_count),
+        "evidence_pareto_safe": mode == "herc_v3",
         "evidence_query_coverage_before": float(query_before["aggregate"].item()),
         "evidence_query_coverage_after_query": float(query_after_query["aggregate"].item()),
         "evidence_query_coverage_after_context": float(query_after["aggregate"].item()),
         "evidence_query_current_coverage_after": float(query_after["current_aggregate"].item()),
         "evidence_query_c_reference_coverage_after": float(query_after["reference_aggregate"].item()),
+        "evidence_query_current_min_coverage_before": float(
+            query_before["current_coverage"].min().item()
+        ),
+        "evidence_query_current_min_coverage_after": float(
+            query_after["current_coverage"].min().item()
+        ),
+        "evidence_query_reference_min_coverage_before": float(
+            query_before["reference_coverage"].min().item()
+        ),
+        "evidence_query_reference_min_coverage_after": float(
+            query_after["reference_coverage"].min().item()
+        ),
         "evidence_view_coverage_before": float(hierarchy_before["view"]["coverage"]),
         "evidence_view_coverage_after": float(hierarchy_after["view"]["coverage"]),
         "evidence_macrocell_coverage_before": float(hierarchy_before["macrocell"]["coverage"]),

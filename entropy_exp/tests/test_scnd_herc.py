@@ -14,9 +14,11 @@ from strategies.scnd_herc import (  # noqa: E402
     _hierarchy_level_state,
     _hierarchy_templates,
     _level_pair_coverage,
+    _query_components,
     _weighted_harmonic_coverage,
     _weighted_mass_coverage,
     normalize_rater_distributions,
+    protected_evidence_anchor_mask,
     reconcile_evidence,
     restrict_reference_distributions,
 )
@@ -48,6 +50,25 @@ def _square_structure(num_tokens):
 
 
 class SCNDHERCUnitTests(unittest.TestCase):
+    def test_v3_anchor_mask_protects_minimal_mass_prefix_per_channel(self):
+        current = torch.tensor(
+            [
+                [0.60, 0.10, 0.20, 0.10, 0.0],
+                [0.10, 0.10, 0.70, 0.10, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+        reference = torch.tensor([[0.05, 0.05, 0.10, 0.80, 0.0]], dtype=torch.float32)
+        protected = protected_evidence_anchor_mask(
+            selected=torch.tensor([0, 1, 2, 3]),
+            current_distributions=current,
+            reference_distributions=reference,
+            scalar_score=torch.zeros(5),
+            mass_fraction=0.60,
+        )
+
+        self.assertEqual(torch.nonzero(protected, as_tuple=False).flatten().tolist(), [0, 2, 3])
+
     def test_per_rater_scores_average_to_legacy_score(self):
         attention = torch.zeros((1, 2, 7, 7), dtype=torch.float32)
         attention[0, 0, 5, 1:5] = torch.tensor([0.8, 0.1, 0.05, 0.05])
@@ -151,6 +172,164 @@ class SCNDHERCUnitTests(unittest.TestCase):
         self.assertEqual(result["stats"]["evidence_reconcile_stages"], "query")
         self.assertEqual(result["stats"]["evidence_reconcile_query_swap_count"], 1)
         self.assertEqual(result["stats"]["evidence_reconcile_context_swap_count"], 0)
+
+    def test_herc_v3_query_swap_is_anchor_protected_and_pareto_safe(self):
+        distributions = torch.tensor(
+            [
+                [0.40, 0.10, 0.30, 0.15, 0.05, 0.00, 0.00, 0.00, 0.00],
+                [0.40, 0.05, 0.10, 0.40, 0.05, 0.00, 0.00, 0.00, 0.00],
+            ],
+            dtype=torch.float32,
+        )
+        result = reconcile_evidence(
+            mode="herc_v3",
+            legacy_keep_indices=torch.tensor([0, 1, 2]),
+            scalar_score=torch.zeros(9),
+            current_distributions=distributions,
+            reference_distributions=None,
+            current_visual_embeds=torch.ones(9, 4),
+            current_original_indices=torch.arange(9),
+            structure_ids=_square_structure(9),
+            tau=0.70,
+            profile_pressure=1.0,
+            candidate_pool_multiplier=2.0,
+            max_swap_ratio=0.50,
+            stages=("query",),
+        )
+
+        stats = result["stats"]
+        self.assertEqual(result["keep_indices"].tolist(), [0, 2, 3])
+        self.assertEqual(stats["evidence_reconcile_query_swap_count"], 1)
+        self.assertEqual(stats["evidence_reconcile_context_swap_count"], 0)
+        self.assertTrue(stats["evidence_pareto_safe"])
+        self.assertGreaterEqual(
+            stats["evidence_query_coverage_after_query"] + 1e-7,
+            stats["evidence_query_coverage_before"],
+        )
+        self.assertGreaterEqual(
+            stats["evidence_scalar_mass_after"] + 1e-7,
+            stats["evidence_scalar_mass_before"],
+        )
+
+    def test_herc_v3_context_uses_co_deficit_budget_and_preserves_all_guards(self):
+        structure = visual_token_structure_ids(
+            torch.arange(8),
+            {
+                "layout_kind": "anyres_flat",
+                "base_token_count": 4,
+                "local_patch_token_count": 4,
+                "newline_token_count": 0,
+                "local_grid_width": 0,
+                "total_token_count": 8,
+            },
+        )
+        result = reconcile_evidence(
+            mode="herc_v3",
+            legacy_keep_indices=torch.tensor([0, 1, 2, 3]),
+            scalar_score=torch.zeros(8),
+            current_distributions=torch.full((2, 8), 1.0 / 8.0),
+            reference_distributions=None,
+            current_visual_embeds=torch.eye(8),
+            current_original_indices=torch.arange(8),
+            structure_ids=structure,
+            tau=0.50,
+            profile_pressure=1.0,
+            candidate_pool_multiplier=2.0,
+            max_swap_ratio=0.50,
+            stages=("context",),
+        )
+
+        stats = result["stats"]
+        self.assertEqual(stats["evidence_reconcile_query_swap_count"], 0)
+        self.assertEqual(stats["evidence_reconcile_context_budget"], 1)
+        self.assertEqual(stats["evidence_reconcile_context_swap_count"], 1)
+        self.assertGreater(stats["evidence_context_co_deficit"], 0.0)
+        self.assertGreaterEqual(
+            stats["evidence_query_coverage_after_context"] + 1e-7,
+            stats["evidence_query_coverage_before"],
+        )
+        for name in ("view", "macrocell", "row", "representative"):
+            self.assertGreaterEqual(
+                stats[f"evidence_{name}_coverage_after"] + 1e-7,
+                stats[f"evidence_{name}_coverage_before"],
+            )
+        self.assertGreaterEqual(
+            stats["evidence_scalar_mass_after"] + 1e-7,
+            stats["evidence_scalar_mass_before"],
+        )
+
+    def test_herc_v3_random_cases_preserve_legacy_trust_region(self):
+        for seed in range(10):
+            with self.subTest(seed=seed):
+                generator = torch.Generator().manual_seed(seed)
+                current = normalize_rater_distributions(torch.rand(3, 16, generator=generator))
+                reference = normalize_rater_distributions(torch.rand(3, 16, generator=generator))
+                scalar = torch.rand(16, generator=generator)
+                embeds = torch.randn(16, 8, generator=generator)
+                legacy = torch.tensor([0, 1, 4, 5, 8, 9])
+                anchors = protected_evidence_anchor_mask(
+                    legacy,
+                    current,
+                    reference,
+                    scalar,
+                    0.65,
+                )
+                before_query = _query_components(current, reference, legacy, 0.65)
+
+                result = reconcile_evidence(
+                    mode="herc_v3",
+                    legacy_keep_indices=legacy,
+                    scalar_score=scalar,
+                    current_distributions=current,
+                    reference_distributions=reference,
+                    current_visual_embeds=embeds,
+                    current_original_indices=torch.arange(16),
+                    structure_ids=_square_structure(16),
+                    tau=0.65,
+                    profile_pressure=1.0,
+                    candidate_pool_multiplier=2.0,
+                    max_swap_ratio=0.25,
+                )
+                keep = result["keep_indices"]
+                stats = result["stats"]
+                after_query = _query_components(current, reference, keep, 0.65)
+
+                self.assertEqual(int(keep.numel()), int(legacy.numel()))
+                self.assertTrue(
+                    set(torch.nonzero(anchors, as_tuple=False).flatten().tolist()).issubset(
+                        set(keep.tolist())
+                    )
+                )
+                self.assertTrue(
+                    bool(
+                        (
+                            after_query["current_coverage"]
+                            >= before_query["current_coverage"] - 1e-7
+                        ).all().item()
+                    )
+                )
+                self.assertTrue(
+                    bool(
+                        (
+                            after_query["reference_coverage"]
+                            >= before_query["reference_coverage"] - 1e-7
+                        ).all().item()
+                    )
+                )
+                for name in ("view", "macrocell", "row", "representative"):
+                    self.assertGreaterEqual(
+                        stats[f"evidence_{name}_coverage_after"] + 1e-7,
+                        stats[f"evidence_{name}_coverage_before"],
+                    )
+                self.assertGreaterEqual(
+                    stats["evidence_scalar_mass_after"] + 1e-7,
+                    stats["evidence_scalar_mass_before"],
+                )
+                actual_swaps = (
+                    stats["evidence_reconcile_query_swap_count"]
+                    + stats["evidence_reconcile_context_swap_count"]
+                )
+                self.assertLessEqual(actual_swaps, stats["evidence_reconcile_max_total_swaps"])
 
     def test_vectorized_facility_pair_coverage_matches_brute_force(self):
         torch.manual_seed(11)

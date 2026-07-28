@@ -204,12 +204,18 @@ class SparseVLMSCNDTests(unittest.TestCase):
             ._get_scnd_params()["evidence_reconciliation_mode"],
             "herc_v2",
         )
+        self.assertEqual(
+            self._strategy(evidence_reconciliation={"mode": "herc_v3"})
+            ._get_scnd_params()["evidence_reconciliation_mode"],
+            "herc_v3",
+        )
         for invalid_evidence in (
             {"mode": "bogus"},
             {"mode": "herc_v1", "candidate_pool_multiplier": 0.5},
             {"mode": "herc_v1", "max_swap_ratio": 1.1},
             {"mode": "herc_v2", "stages": ["bogus"]},
             {"mode": "herc_v2", "stages": []},
+            {"mode": "herc_v3", "stages": []},
         ):
             with self.subTest(evidence=invalid_evidence):
                 with self.assertRaises(ValueError):
@@ -243,6 +249,10 @@ class SparseVLMSCNDTests(unittest.TestCase):
             prune_ratio=0.5,
             evidence_reconciliation={"mode": "herc_v1"},
         )
+        herc_v3 = self._strategy(
+            prune_ratio=0.5,
+            evidence_reconciliation={"mode": "herc_v3"},
+        )
         attention = _full_attention(
             seq_len=7,
             text_rows=[5, 6],
@@ -250,7 +260,7 @@ class SparseVLMSCNDTests(unittest.TestCase):
             values=[[0.9, 0.8, 0.7, 0.1], [0.9, 0.8, 0.7, 0.1]],
         )
         embeds = torch.eye(4, dtype=torch.float32)
-        for strategy in (baseline, herc):
+        for strategy in (baseline, herc, herc_v3):
             self._prepare(strategy, 4)
 
         baseline_keep, baseline_info = baseline.compute_keep_mask(
@@ -265,6 +275,13 @@ class SparseVLMSCNDTests(unittest.TestCase):
         self.assertEqual(herc_info["layer_strategy_effective"], "sparsevlm_scnd")
         self.assertTrue(herc_info["evidence_reconcile_bypassed"])
         self.assertEqual(herc_info["evidence_reconcile_profile_pressure"], 0.0)
+        herc_v3_keep, herc_v3_info = herc_v3.compute_keep_mask(
+            attention, 1, 4, 5, 0, current_visual_embeds=embeds
+        )
+        torch.testing.assert_close(herc_v3_keep, baseline_keep, rtol=0, atol=0)
+        self.assertEqual(herc_v3_info["selection_rule"], baseline_info["selection_rule"])
+        self.assertTrue(herc_v3_info["evidence_reconcile_bypassed"])
+        self.assertTrue(herc_v3_info["evidence_pareto_safe"])
 
     def test_budget_adaptive_visual_role_constraint_only_activates_under_pressure(self):
         high = self._strategy()._visual_role_constraint_control(
